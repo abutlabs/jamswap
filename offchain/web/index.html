@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Marmalade — order-book DEX on JAM</title>
+<style>
+  :root { --pink:#E6007A; --bg:#0e0e12; --panel:#17171d; --line:#2a2a33; --green:#21d07a; --red:#ff5470; --dim:#8a8a99; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:#e8e8ef; font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
+  .mono { font-family:ui-monospace,"Roboto Mono",monospace; }
+  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; }
+  header h1 { margin:0; font-size:18px; letter-spacing:.04em; }
+  header h1 b { color:var(--pink); }
+  header .sub { color:var(--dim); font-size:12px; }
+  .tabs { display:flex; gap:8px; padding:14px 24px 0; }
+  .tab { padding:7px 16px; border:1px solid var(--line); border-radius:8px 8px 0 0; cursor:pointer; color:var(--dim); }
+  .tab.active { color:#fff; border-color:var(--pink); background:var(--panel); }
+  main { display:grid; grid-template-columns: 1.2fr 1fr 1fr; gap:16px; padding:16px 24px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .panel h2 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--dim); }
+  .price { font-size:30px; font-weight:600; } .price small { font-size:13px; color:var(--dim); font-weight:400; }
+  table { width:100%; border-collapse:collapse; } td,th { padding:3px 6px; text-align:right; }
+  th { color:var(--dim); font-weight:500; font-size:11px; text-transform:uppercase; }
+  tr.ask td { color:var(--red); } tr.bid td { color:var(--green); }
+  label { display:block; color:var(--dim); font-size:12px; margin:8px 0 3px; }
+  input, select { width:100%; background:#0e0e12; border:1px solid var(--line); color:#fff; padding:8px; border-radius:8px; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  button { background:var(--pink); color:#fff; border:0; padding:10px; border-radius:8px; cursor:pointer; font-weight:600; width:100%; margin-top:12px; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:#e8e8ef; }
+  .seg { display:flex; gap:8px; } .seg button { margin:0; }
+  .seg button.off { background:transparent; border:1px solid var(--line); color:var(--dim); }
+  .bal { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding:6px 0; }
+  .note { color:var(--dim); font-size:11px; margin-top:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><b>MARMALADE</b> · order-book DEX on JAM</h1>
+  <span class="sub">frequent batch auction · uniform price · MEV-resistant · trustless matching in Refine</span>
+</header>
+
+<div class="tabs" id="tabs"></div>
+
+<main>
+  <section class="panel">
+    <h2>Order book — <span id="mkt"></span></h2>
+    <div class="price mono"><span id="price">—</span> <small>last clearing price · vol <span id="vol">0</span> · pending <span id="pend">0</span></small></div>
+    <table style="margin-top:12px"><thead><tr><th>price</th><th>qty</th><th>side</th></tr></thead><tbody id="book"></tbody></table>
+    <button id="run">Run auction round →</button>
+    <div class="note">A round clears all resting + pending orders at one uniform price.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Place order</h2>
+    <label>Account</label><input id="acct" class="mono" value="1" />
+    <div class="seg"><button id="sbuy">Buy</button><button id="ssell" class="off">Sell</button></div>
+    <div class="row"><div><label>Price</label><input id="price_in" class="mono" value="100" /></div>
+                     <div><label>Qty</label><input id="qty_in" class="mono" value="10" /></div></div>
+    <button id="place" class="ghost">Add to batch</button>
+    <div class="note">Orders join the next auction; everyone clears at the uniform price.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Balances &amp; faucet</h2>
+    <label>Account</label><input id="bacct" class="mono" value="1" />
+    <div id="bals"></div>
+    <label style="margin-top:14px">Faucet (demo funding)</label>
+    <div class="row">
+      <select id="fasset"><option value="0">USD</option><option value="1">TOKA</option><option value="2">TOKB</option></select>
+      <input id="famt" class="mono" value="100000" />
+    </div>
+    <button id="fund" class="ghost">Fund account</button>
+  </section>
+</main>
+
+<script>
+const ASSETS = {0:"USD",1:"TOKA",2:"TOKB"};
+const MARKETS = [
+  {id:1, name:"TOKA/USD", base:1, quote:0},
+  {id:2, name:"TOKB/USD", base:2, quote:0},
+];
+let cur = MARKETS[0], side = "buy";
+const $ = id => document.getElementById(id);
+const api = (p, body) => fetch(p, body ? {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)} : {}).then(r=>r.json());
+
+function renderTabs(){ $("tabs").innerHTML=""; MARKETS.forEach(m=>{
+  const t=document.createElement("div"); t.className="tab"+(m.id===cur.id?" active":""); t.textContent=m.name;
+  t.onclick=()=>{cur=m; renderTabs(); refresh();}; $("tabs").appendChild(t); }); $("mkt").textContent=cur.name; }
+
+async function refresh(){
+  const s = await api(`/api/state?market=${cur.id}`);
+  $("price").textContent = s.price || "—"; $("vol").textContent = s.volume||0; $("pend").textContent = s.pending||0;
+  const asks = s.book.filter(o=>o.side==="sell").sort((a,b)=>b.price-a.price);
+  const bids = s.book.filter(o=>o.side==="buy").sort((a,b)=>b.price-a.price);
+  $("book").innerHTML = asks.map(o=>`<tr class="ask"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>ask</td></tr>`).join("")
+    + `<tr><td colspan=3 style="border-top:1px solid var(--line)"></td></tr>`
+    + bids.map(o=>`<tr class="bid"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>bid</td></tr>`).join("");
+  refreshBals();
+}
+async function refreshBals(){
+  const a = $("bacct").value; let html="";
+  for (const id of [0,1,2]){ const b = await api(`/api/balance?account=${a}&asset=${id}`); html += `<div class="bal"><span>${ASSETS[id]}</span><span class="mono">${b.balance}</span></div>`; }
+  $("bals").innerHTML = html;
+}
+$("sbuy").onclick=()=>{side="buy"; $("sbuy").className=""; $("ssell").className="off";};
+$("ssell").onclick=()=>{side="sell"; $("ssell").className=""; $("sbuy").className="off";};
+$("place").onclick=async()=>{ await api("/api/order",{market:cur.id,base:cur.base,quote:cur.quote,account:+$("acct").value,side,price:+$("price_in").value,qty:+$("qty_in").value}); refresh(); };
+$("run").onclick=async()=>{ await api("/api/round",{market:cur.id,base:cur.base,quote:cur.quote}); refresh(); };
+$("fund").onclick=async()=>{ await api("/api/deposit",{account:+$("bacct").value,asset:+$("fasset").value,amount:+$("famt").value}); refreshBals(); };
+$("bacct").oninput=refreshBals;
+
+renderTabs(); refresh(); setInterval(refresh, 4000);
+</script>
+</body>
+</html>

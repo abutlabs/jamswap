@@ -47,26 +47,39 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   markets clear **independently** (one work-package per market per round = JAM's
   per-core parallelism) into per-market books, sharing one global balance ledger.
   Demo runs two pairs (TOKA/USD @100, TOKB/USD @50) with a trader's USD shared.
+- ✅ **Off-chain builder + trading UI** ([`offchain/`](offchain/)) — a stdlib API
+  that runs the round lifecycle (collect orders → read the book → assemble + submit
+  the batch) and a single-page exchange UI (order book, place order, run round,
+  balances, faucet) at `:8080`.
 - ◻️ Then: round sequencing via historical-lookup, real custody via `on_transfer`
-  (deposit/withdraw + reconciliation), threshold-encryption upgrade, off-chain
-  infra (relay/builder/indexer/API), trading UI.
+  (deposit/withdraw + reconciliation), threshold-encryption upgrade, indexer +
+  WebSocket feeds, wallet/signing in the UI, a W3F grant application.
 
 CI (`.github/workflows/ci.yml`) runs the matching-engine property tests
 (conservation, determinism, settlement Σ-deltas == 0) on every push — the
 "never regress" gate from PLAN.md §5.
 
-## Run the demo (one command)
+## Run it (one command)
 
-Watch a sealed-order batch auction clear in JAM's Refine — built from source:
+Built from source for your architecture:
 
 ```sh
-docker compose up --build
+docker compose up --build          # -> trading UI at http://localhost:8080
 ```
 
-Brings up a lasair-node and runs [`sim/demo.py`](sim/demo.py): deploy → fund
-traders → **sealed** commit/reveal round → uniform-price clearing → settlement →
-resting order book → MEV-resistance (an uncommitted order is rejected). Full
-architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Brings up a lasair-node, deploys the Marmalade service, and serves the **trading
+UI** + off-chain builder ([`offchain/`](offchain/)): place limit orders, run an
+auction round, and watch the uniform-price clearing, the resting order book, and
+your balances update — across multiple markets sharing one ledger.
+
+The narrated CLI scenario (sealed commit/reveal round → clearing → settlement →
+resting book → cancel → MEV-resistance) is also available:
+
+```sh
+docker compose --profile demo run --rm demo   # see sim/demo.py
+```
+
+Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## The matching engine
 

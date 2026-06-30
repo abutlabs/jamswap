@@ -1,12 +1,11 @@
-# Watch the Marmalade DEX clear a sealed-order batch auction in JAM's Refine —
-# one command, built from source for your architecture:
+# Run the Marmalade DEX end-to-end — one command, built from source for your arch:
 #
-#   docker compose up --build
+#   docker compose up --build           # -> trading UI at http://localhost:8080
+#   docker compose --profile demo run --rm demo   # the narrated CLI scenario
 #
-# Brings up a lasair-node (the JAM node + operator RPC, built from ../lasair) and
-# runs the narrated trading demo (sim/demo.py): deploy -> fund traders -> sealed
-# commit/reveal round -> uniform-price clearing -> settlement -> resting book ->
-# MEV-resistance. See docs/ARCHITECTURE.md.
+# Brings up a lasair-node (the JAM node, from ../lasair), deploys the Marmalade
+# service, and serves the off-chain builder + trading UI. Place orders, run an
+# auction round, watch the uniform-price clearing + balances. See docs/ARCHITECTURE.md.
 
 services:
   lasair-node:
@@ -17,10 +16,41 @@ services:
     ports:
       - "19900:19900"
     restart: unless-stopped
-    # healthcheck (GET /v1/healthz) is baked into the image
 
-  demo:
+  deploy:
     image: python:3-slim
+    depends_on:
+      lasair-node:
+        condition: service_healthy
+    environment:
+      LASAIR_RPC: http://lasair-node:19900
+      JAM: /work/marmalade-service.jam
+    volumes:
+      - ./service/marmalade-service.jam:/work/marmalade-service.jam:ro
+      - ./offchain/deploy.py:/work/deploy.py:ro
+    command: ["python3", "/work/deploy.py"]
+    restart: "no"
+
+  dex:                              # off-chain builder API + trading UI
+    image: python:3-slim
+    depends_on:
+      deploy:
+        condition: service_completed_successfully
+    environment:
+      LASAIR_RPC: http://lasair-node:19900
+      SERVICE_ID: "1729"
+      PORT: "8080"
+    volumes:
+      - ./offchain:/app:ro
+    working_dir: /app
+    command: ["python3", "server.py"]
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  demo:                             # the narrated CLI scenario (opt-in profile)
+    image: python:3-slim
+    profiles: ["demo"]
     depends_on:
       lasair-node:
         condition: service_healthy
