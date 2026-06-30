@@ -122,6 +122,21 @@ pub fn clear(orders: &[Order]) -> Clearing {
     Clearing { price: p, volume: v, fills }
 }
 
+/// The orders (with reduced quantity) that remain after clearing — partially- or
+/// un-filled limit orders that rest in the book and participate in future rounds.
+/// This is what turns isolated batch auctions into a continuous order book.
+pub fn resting(orders: &[Order], c: &Clearing) -> Vec<Order> {
+    let mut out = Vec::new();
+    for o in orders {
+        let filled: u64 = c.fills.iter().filter(|f| f.id == o.id).map(|f| f.qty as u64).sum();
+        let rem = o.qty as u64 - filled; // filled <= qty by construction
+        if rem > 0 {
+            out.push(Order { qty: rem as u32, ..*o });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,6 +158,20 @@ mod tests {
         let c = clear(&[buy(1, 90, 10), sell(2, 100, 10)]);
         assert_eq!(c.volume, 0);
         assert!(c.fills.is_empty());
+    }
+
+    #[test]
+    fn unfilled_and_partial_orders_rest() {
+        // demand 5 @100, supply 10 @100 -> V=5; the sell partially fills (5 of 10),
+        // a non-crossing buy @90 doesn't fill at all -> both rest with remaining qty.
+        let book = [buy(1, 100, 5), sell(2, 100, 10), buy(3, 90, 7)];
+        let c = clear(&book);
+        assert_eq!(c.volume, 5);
+        let r = resting(&book, &c);
+        // buy#1 fully filled (not resting); sell#2 rests 5; buy#3 rests 7
+        assert!(r.iter().find(|o| o.id == 1).is_none());
+        assert_eq!(r.iter().find(|o| o.id == 2).unwrap().qty, 5);
+        assert_eq!(r.iter().find(|o| o.id == 3).unwrap().qty, 7);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use jam_pvm_common::accumulate::{accumulate_items, get_storage, set_storage};
 use jam_pvm_common::jam_types::*;
 use jam_pvm_common::{declare_service, Service};
 
-use match_engine::{clear, wire, Side};
+use match_engine::{clear, resting, wire, Side};
 
 declare_service!(Marmalade);
 struct Marmalade;
@@ -62,9 +62,15 @@ impl Service for Marmalade {
             TAG_MATCH => {
                 let orders = wire::decode_orders(&data[1..]);
                 let c = clear(&orders);
-                let mut out = Vec::with_capacity(1);
+                // [TAG][settle_len:u32][settlement][resting book] — the book is the
+                // partially/un-filled orders that carry into the next round.
+                let settle = wire::encode_settlement(c.price, &orders, &c);
+                let book = wire::encode_orders(&resting(&orders, &c));
+                let mut out = Vec::with_capacity(5 + settle.len() + book.len());
                 out.push(TAG_MATCH);
-                out.extend_from_slice(&wire::encode_settlement(c.price, &orders, &c));
+                out.extend_from_slice(&(settle.len() as u32).to_le_bytes());
+                out.extend_from_slice(&settle);
+                out.extend_from_slice(&book);
                 out.into()
             }
             TAG_DEPOSIT => {
@@ -99,8 +105,17 @@ impl Service for Marmalade {
                     let amount = le_u64(&out[6..14]);
                     set_bal(asset, account, get_bal(asset, account).saturating_add(amount));
                 }
-                TAG_MATCH => {
-                    if let Some((price, entries)) = wire::decode_settlement(&out[1..]) {
+                TAG_MATCH if out.len() >= 5 => {
+                    let settle_len =
+                        u32::from_le_bytes([out[1], out[2], out[3], out[4]]) as usize;
+                    if out.len() < 5 + settle_len {
+                        continue;
+                    }
+                    let settle = &out[5..5 + settle_len];
+                    let book = &out[5 + settle_len..];
+                    // persist the resting order book (read by the next round's builder)
+                    set_storage(b"book", book).ok();
+                    if let Some((price, entries)) = wire::decode_settlement(settle) {
                         let p = price as u64;
                         let mut volume = 0u64;
                         for e in &entries {

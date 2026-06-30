@@ -30,9 +30,14 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   batch debits/credits each trader's base/quote at the uniform price; deposits fund
   accounts. Verified e2e on lasair (deposit → auction → settled balances, value
   conserved). Orders carry an `account`; the service is tagged (match vs deposit).
-- ◻️ Then: resting limit orders + round sequencing, real custody via `on_transfer`
-  (deposit/withdraw), encrypted orders (MEV-resistance), multi-market parallelism,
-  off-chain infra, trading UI.
+- ✅ **Resting limit orders** — partially/un-filled orders persist in an on-chain
+  book and fill in a later round when a crossing order arrives (verified e2e: a
+  lone buy rests, then a later sell crosses it and settles). A true continuous
+  CLOB, not isolated auctions.
+- ◻️ Then: cancel/modify + round sequencing via historical-lookup, real custody via
+  `on_transfer` (deposit/withdraw + reconciliation), **encrypted orders
+  (MEV-resistance — the headline ZK feature)**, multi-market parallelism, off-chain
+  infra, trading UI.
 
 ## The matching engine
 
