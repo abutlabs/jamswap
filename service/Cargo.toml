@@ -9,6 +9,7 @@ description = "Marmalade JAM service: FBA matching in refine, settlement in accu
 jam-pvm-common = { version = "0.1.26", default-features = false, features = ["service"] }
 polkavm-derive = "0.29"
 match-engine = { path = "../crates/match-engine" }
+blake2 = { version = "0.10", default-features = false }
 
 [profile.release]
 panic = "abort"

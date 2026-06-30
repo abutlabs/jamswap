@@ -34,10 +34,16 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   book and fill in a later round when a crossing order arrives (verified e2e: a
   lone buy rests, then a later sell crosses it and settles). A true continuous
   CLOB, not isolated auctions.
+- ✅ **Sealed orders (MEV-resistance, Phase 4 MVP)** — commit–reveal: in the commit
+  round only `H(order ‖ nonce)` is on-chain (orders hidden); in the reveal round
+  `refine` admits only orders whose hash matches a recorded commitment. Combined
+  with the batch auction (no latency race), nobody can front-run within a round.
+  Verified e2e: hidden commit → reveal+match settles; an uncommitted order is
+  rejected. *Honest asterisk:* adds a reveal round + a non-reveal griefing vector;
+  threshold/time-lock encryption (no reveal round) is the stronger upgrade.
 - ◻️ Then: cancel/modify + round sequencing via historical-lookup, real custody via
-  `on_transfer` (deposit/withdraw + reconciliation), **encrypted orders
-  (MEV-resistance — the headline ZK feature)**, multi-market parallelism, off-chain
-  infra, trading UI.
+  `on_transfer` (deposit/withdraw + reconciliation), threshold-encryption upgrade,
+  multi-market parallelism, off-chain infra, trading UI.
 
 ## The matching engine
 
