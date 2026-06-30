@@ -13,7 +13,11 @@ import json, os, struct, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
-SID = int(os.environ.get("SERVICE_ID", "1729"))
+# Service id: an explicit SERVICE_ID wins; otherwise we DEPLOY the blob ($JAM) at
+# startup and use whatever id the node assigns. Deploying here (rather than trusting a
+# hardcoded id) is what keeps the UI pointed at THIS service — node service ids are
+# assigned sequentially, so a node reused across runs drifts 1729 -> 1730 -> ...
+SID = int(os.environ["SERVICE_ID"]) if os.environ.get("SERVICE_ID") else None
 PORT = int(os.environ.get("PORT", "8080"))
 WEB = os.path.join(os.path.dirname(__file__), "web")
 
@@ -126,7 +130,25 @@ class H(BaseHTTPRequestHandler):
         else:
             self._send(404, json.dumps({"error": "no route"}).encode())
 
+def wait_for_node():
+    for _ in range(60):
+        try:
+            if "ok" in str(node("/v1/healthz")): return
+        except Exception: pass
+        time.sleep(1)
+
+def deploy_jam():
+    jam = open(os.environ["JAM"], "rb").read()
+    r = node("/v1/service", {"jam_hex": jam.hex()})
+    return int(r["service_id"])
+
 if __name__ == "__main__":
+    if SID is None and os.environ.get("JAM"):
+        wait_for_node()
+        SID = deploy_jam()                      # use the id THIS deploy was assigned
+        print(f"deployed jamswap-service -> service id {SID}")
+    elif SID is None:
+        SID = 1729                              # last-resort default (first deploy on a fresh node)
     print(f"jamswap off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
     try: ensure_markets(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)

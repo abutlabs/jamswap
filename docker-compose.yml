@@ -18,31 +18,22 @@ services:
       - "19900:19900"
     restart: unless-stopped
 
-  deploy:
+  dex:                              # off-chain builder API + trading UI
     image: python:3-slim
     depends_on:
       lasair-node:
         condition: service_healthy
+    # The UI server DEPLOYS the service itself on startup and uses the id the node
+    # assigns — so it always points at the right service even if the node is reused
+    # across runs (sequential ids would otherwise drift 1729 -> 1730 -> ...).
     environment:
       LASAIR_RPC: http://lasair-node:19900
       JAM: /work/jamswap-service.jam
-    volumes:
-      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
-      - ./offchain/deploy.py:/work/deploy.py:ro
-    command: ["python3", "/work/deploy.py"]
-    restart: "no"
-
-  dex:                              # off-chain builder API + trading UI
-    image: python:3-slim
-    depends_on:
-      deploy:
-        condition: service_completed_successfully
-    environment:
-      LASAIR_RPC: http://lasair-node:19900
-      SERVICE_ID: "1729"
       PORT: "8080"
+      PYTHONUNBUFFERED: "1"           # so the "deployed -> service id N" line shows in `docker compose logs`
     volumes:
       - ./offchain:/app:ro
+      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
     working_dir: /app
     command: ["python3", "server.py"]
     ports:
