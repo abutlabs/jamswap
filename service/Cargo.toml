@@ -1,0 +1,16 @@
+[package]
+name = "marmalade-service"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Marmalade JAM service: FBA matching in refine, settlement in accumulate"
+
+[dependencies]
+jam-pvm-common = { version = "0.1.26", default-features = false, features = ["service"] }
+polkavm-derive = "0.29"
+match-engine = { path = "../crates/match-engine" }
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = 'z'

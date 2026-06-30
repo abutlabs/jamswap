@@ -21,6 +21,8 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+pub mod wire;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Side {
     Buy,
