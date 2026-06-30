@@ -86,18 +86,19 @@ const api = (p, body) => fetch(p, body ? {method:"POST",headers:{"content-type":
 
 function renderTabs(){ $("tabs").innerHTML=""; MARKETS.forEach(m=>{
   const t=document.createElement("div"); t.className="tab"+(m.id===cur.id?" active":""); t.textContent=m.name;
-  t.onclick=()=>{cur=m; renderTabs(); refresh();}; $("tabs").appendChild(t); }); $("mkt").textContent=cur.name; }
+  t.onclick=()=>{cur=m; renderTabs(); subscribe(); refresh();}; $("tabs").appendChild(t); }); $("mkt").textContent=cur.name; }
 
-async function refresh(){
-  const s = await api(`/api/state?market=${cur.id}`);
+function renderState(s){
   $("price").textContent = s.price || "—"; $("vol").textContent = s.volume||0; $("pend").textContent = s.pending||0;
   const asks = s.book.filter(o=>o.side==="sell").sort((a,b)=>b.price-a.price);
   const bids = s.book.filter(o=>o.side==="buy").sort((a,b)=>b.price-a.price);
   $("book").innerHTML = asks.map(o=>`<tr class="ask"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>ask</td></tr>`).join("")
     + `<tr><td colspan=3 style="border-top:1px solid var(--line)"></td></tr>`
     + bids.map(o=>`<tr class="bid"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>bid</td></tr>`).join("");
-  refreshBals();
 }
+async function refresh(){ renderState(await api(`/api/state?market=${cur.id}`)); refreshBals(); }
+let es = null;
+function subscribe(){ if (es) es.close(); es = new EventSource(`/api/stream?market=${cur.id}`); es.onmessage = e => { try { renderState(JSON.parse(e.data)); } catch {} }; }
 async function refreshBals(){
   const a = $("bacct").value; let html="";
   for (const id of [0,1,2]){ const b = await api(`/api/balance?account=${a}&asset=${id}`); html += `<div class="bal"><span>${ASSETS[id]}</span><span class="mono">${b.balance}</span></div>`; }
@@ -111,7 +112,7 @@ $("fund").onclick=async()=>{ await api("/api/deposit",{account:+$("bacct").value
 $("wd").onclick=async()=>{ await api("/api/withdraw",{account:+$("bacct").value,asset:+$("fasset").value,amount:+$("famt").value}); refreshBals(); };
 $("bacct").oninput=refreshBals;
 
-renderTabs(); refresh(); setInterval(refresh, 4000);
+renderTabs(); subscribe(); refresh(); setInterval(refreshBals, 5000);  // book/price live via SSE; balances on a slow tick
 </script>
 </body>
 </html>

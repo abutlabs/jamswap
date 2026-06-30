@@ -9,7 +9,7 @@ balance/state reads. Stdlib only (http.server, urllib, struct).
 
   LASAIR_RPC=http://localhost:19900 PORT=8080 python3 offchain/server.py
 """
-import json, os, struct, urllib.request
+import json, os, struct, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
@@ -92,6 +92,19 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         path = self.path.split("?")[0]
         q = dict(p.split("=") for p in self.path.split("?")[1].split("&")) if "?" in self.path else {}
+        if path == "/api/stream":            # live order-book feed (Server-Sent Events)
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.end_headers()
+            try:
+                while True:
+                    body = json.dumps(api_state(q)).encode()
+                    self.wfile.write(b"data: " + body + b"\n\n")
+                    self.wfile.flush()
+                    time.sleep(1.5)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                return
         if path in ROUTES_GET:
             try: self._send(200, json.dumps(ROUTES_GET[path](q)).encode())
             except Exception as e: self._send(500, json.dumps({"error": str(e)}).encode())
