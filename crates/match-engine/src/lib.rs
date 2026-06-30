@@ -30,8 +30,11 @@ pub enum Side {
 }
 
 /// A limit order on an integer tick grid. `qty` is in integer base units.
+/// `account` identifies the trader (settlement metadata — the matching algorithm
+/// ignores it; the service uses it to settle each fill's balances).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Order {
+    pub account: u32,
     pub id: u32,
     pub side: Side,
     pub price: u32,
@@ -124,8 +127,8 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
-    fn buy(id: u32, price: u32, qty: u32) -> Order { Order { id, side: Side::Buy, price, qty } }
-    fn sell(id: u32, price: u32, qty: u32) -> Order { Order { id, side: Side::Sell, price, qty } }
+    fn buy(id: u32, price: u32, qty: u32) -> Order { Order { account: id, id, side: Side::Buy, price, qty } }
+    fn sell(id: u32, price: u32, qty: u32) -> Order { Order { account: id, id, side: Side::Sell, price, qty } }
 
     #[test]
     fn simple_cross_full_fill() {
@@ -168,7 +171,7 @@ mod tests {
         fn invariants(orders in prop::collection::vec(
             (any::<bool>(), 1u32..50, 1u32..100), 0..40usize)) {
             let book: Vec<Order> = orders.iter().enumerate().map(|(i, &(b, price, qty))| {
-                Order { id: i as u32, side: if b { Side::Buy } else { Side::Sell }, price, qty }
+                Order { account: i as u32, id: i as u32, side: if b { Side::Buy } else { Side::Sell }, price, qty }
             }).collect();
 
             let c = clear(&book);

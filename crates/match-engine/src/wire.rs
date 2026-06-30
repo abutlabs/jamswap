@@ -3,17 +3,18 @@
 //! off-chain builder/tools (encode a batch, decode the result). Fixed-width
 //! little-endian; integer-only; no allocation surprises.
 //!
-//! Order  (13 bytes): id:u32 ‖ side:u8 (0=buy,1=sell) ‖ price:u32 ‖ qty:u32
+//! Order (17 bytes): account:u32 ‖ id:u32 ‖ side:u8 (0=buy,1=sell) ‖ price:u32 ‖ qty:u32
 //! Result: price:u32 ‖ volume:u64 ‖ n_fills:u32 ‖ n×(id:u32 ‖ qty:u32)
 
 use crate::{Clearing, Fill, Order, Side};
 use alloc::vec::Vec;
 
-pub const ORDER_LEN: usize = 13;
+pub const ORDER_LEN: usize = 17;
 
 pub fn encode_orders(orders: &[Order]) -> Vec<u8> {
     let mut b = Vec::with_capacity(orders.len() * ORDER_LEN);
     for o in orders {
+        b.extend_from_slice(&o.account.to_le_bytes());
         b.extend_from_slice(&o.id.to_le_bytes());
         b.push(if o.side == Side::Buy { 0 } else { 1 });
         b.extend_from_slice(&o.price.to_le_bytes());
@@ -28,10 +29,11 @@ pub fn decode_orders(data: &[u8]) -> Vec<Order> {
     for i in 0..n {
         let o = &data[i * ORDER_LEN..i * ORDER_LEN + ORDER_LEN];
         out.push(Order {
-            id: u32::from_le_bytes([o[0], o[1], o[2], o[3]]),
-            side: if o[4] == 0 { Side::Buy } else { Side::Sell },
-            price: u32::from_le_bytes([o[5], o[6], o[7], o[8]]),
-            qty: u32::from_le_bytes([o[9], o[10], o[11], o[12]]),
+            account: u32::from_le_bytes([o[0], o[1], o[2], o[3]]),
+            id: u32::from_le_bytes([o[4], o[5], o[6], o[7]]),
+            side: if o[8] == 0 { Side::Buy } else { Side::Sell },
+            price: u32::from_le_bytes([o[9], o[10], o[11], o[12]]),
+            qty: u32::from_le_bytes([o[13], o[14], o[15], o[16]]),
         });
     }
     out
@@ -72,6 +74,52 @@ pub fn decode_clearing(data: &[u8]) -> Option<Clearing> {
     Some(Clearing { price, volume, fills })
 }
 
+/// One fill resolved to its trader + side, at the uniform clearing price — what
+/// settlement (`accumulate`) needs to debit/credit balances.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SettleEntry {
+    pub account: u32,
+    pub side: Side,
+    pub qty: u32,
+}
+
+/// Encode the settlement instructions: price ‖ n ‖ n×(account ‖ side ‖ qty).
+/// Resolves each fill (by order id) back to its trader and side.
+pub fn encode_settlement(price: u32, orders: &[Order], c: &Clearing) -> Vec<u8> {
+    let mut b = Vec::with_capacity(8 + c.fills.len() * 9);
+    b.extend_from_slice(&price.to_le_bytes());
+    b.extend_from_slice(&(c.fills.len() as u32).to_le_bytes());
+    for f in &c.fills {
+        if let Some(o) = orders.iter().find(|o| o.id == f.id) {
+            b.extend_from_slice(&o.account.to_le_bytes());
+            b.push(if o.side == Side::Buy { 0 } else { 1 });
+            b.extend_from_slice(&f.qty.to_le_bytes());
+        }
+    }
+    b
+}
+
+pub fn decode_settlement(data: &[u8]) -> Option<(u32, Vec<SettleEntry>)> {
+    if data.len() < 8 {
+        return None;
+    }
+    let price = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    let n = u32::from_le_bytes([data[4], data[5], data[6], data[7]]) as usize;
+    if data.len() < 8 + n * 9 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let e = &data[8 + i * 9..8 + i * 9 + 9];
+        out.push(SettleEntry {
+            account: u32::from_le_bytes([e[0], e[1], e[2], e[3]]),
+            side: if e[4] == 0 { Side::Buy } else { Side::Sell },
+            qty: u32::from_le_bytes([e[5], e[6], e[7], e[8]]),
+        });
+    }
+    Some((price, out))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,8 +128,8 @@ mod tests {
     #[test]
     fn order_roundtrip() {
         let orders = [
-            Order { id: 1, side: Side::Buy, price: 100, qty: 10 },
-            Order { id: 2, side: Side::Sell, price: 99, qty: 7 },
+            Order { account: 7, id: 1, side: Side::Buy, price: 100, qty: 10 },
+            Order { account: 9, id: 2, side: Side::Sell, price: 99, qty: 7 },
         ];
         assert_eq!(decode_orders(&encode_orders(&orders)), orders.to_vec());
     }
@@ -89,8 +137,8 @@ mod tests {
     #[test]
     fn clearing_roundtrip() {
         let c = clear(&[
-            Order { id: 1, side: Side::Buy, price: 100, qty: 10 },
-            Order { id: 2, side: Side::Sell, price: 100, qty: 10 },
+            Order { account: 1, id: 1, side: Side::Buy, price: 100, qty: 10 },
+            Order { account: 2, id: 2, side: Side::Sell, price: 100, qty: 10 },
         ]);
         assert_eq!(decode_clearing(&encode_clearing(&c)), Some(c));
     }

@@ -26,8 +26,13 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   lasair*, deterministically (byte-identical re-runs), at **7,476 gas** for 3
   orders (~0.00015% of the refine budget). See [`docs/M1_DEMO.md`](docs/M1_DEMO.md).
   **Marmalade is a self-contained JAM service — nothing baked into Lasair.**
-- ◻️ Then: full settlement ledger + custody (deposit/withdraw), encrypted
-  orders (MEV-resistance), multi-market parallelism, off-chain infra, trading UI.
+- ✅ **Phase 2 settlement** — `accumulate` now moves real **balances**: a cleared
+  batch debits/credits each trader's base/quote at the uniform price; deposits fund
+  accounts. Verified e2e on lasair (deposit → auction → settled balances, value
+  conserved). Orders carry an `account`; the service is tagged (match vs deposit).
+- ◻️ Then: resting limit orders + round sequencing, real custody via `on_transfer`
+  (deposit/withdraw), encrypted orders (MEV-resistance), multi-market parallelism,
+  off-chain infra, trading UI.
 
 ## The matching engine
 
