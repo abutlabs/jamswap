@@ -1,0 +1,12 @@
+[package]
+name = "match-engine"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Marmalade frequent-batch-auction uniform-price matching engine (no_std, integer-only, deterministic)"
+
+[dependencies]
+
+[dev-dependencies]
+# property testing for the clearing invariants
+proptest = "1"
