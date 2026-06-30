@@ -1,0 +1,10 @@
+[package]
+name = "engine-sim"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Marmalade economic simulation — random order flow over many rounds, market-quality metrics + invariant checks"
+
+[dependencies]
+match-engine = { path = "../../crates/match-engine" }
+rand = "0.8"

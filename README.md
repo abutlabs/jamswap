@@ -58,6 +58,11 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
 - ✅ **Trading fee** (revenue model) — a flat 30 bps fee on matched notional accrues
   to a treasury account (per-market quote asset); conservation holds *including* the
   fee (property-tested over random fee rates).
+- ✅ **Economic simulation** ([`sim/engine-sim`](sim/engine-sim)) — drives the real
+  engine with random order flow over thousands of rounds (`cargo run --release`),
+  reports market quality (fill rate, price stability, fee revenue) and **asserts
+  value conservation every round** — the economic stress test behind the
+  production-ready claim.
 - ◻️ Then: real `on_transfer` custody, round sequencing via historical-lookup,
   threshold-encryption upgrade, indexer + WebSocket feeds, wallet/signing in the UI,
   a W3F grant application.

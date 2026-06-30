@@ -129,7 +129,7 @@ pub fn decode_settlement(data: &[u8]) -> Option<(u32, Vec<SettleEntry>)> {
 pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury: u32) -> Vec<(u32, i64, i64)> {
     let p = price as i64;
     let mut out: Vec<(u32, i64, i64)> = Vec::new();
-    let mut add = |out: &mut Vec<(u32, i64, i64)>, acct: u32, db: i64, dq: i64| {
+    let add = |out: &mut Vec<(u32, i64, i64)>, acct: u32, db: i64, dq: i64| {
         match out.iter_mut().find(|(a, _, _)| *a == acct) {
             Some(slot) => { slot.1 += db; slot.2 += dq; }
             None => out.push((acct, db, dq)),
