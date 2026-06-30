@@ -119,3 +119,17 @@ at `p*`. See [`crates/match-engine/src/lib.rs`](crates/match-engine/src/lib.rs).
 Honest caveats (kept in view): JAM mainnet timing isn't ours to control;
 "trustless" carries an asterisk until the order-encryption story is airtight; and
 liquidity cold-start is a real grind. See `docs/PLAN.md` §9.
+
+---
+
+## The abutlabs JAM suite
+
+Three things we built on JAM — an independent client, and two flagship services on
+it — each one-command-runnable and demonstrating something only JAM can do:
+
+- **[lasair](https://github.com/abutlabs/lasair)** — an independent OCaml JAM client
+  (+ a live multi-node testnet that runs like PolkaJam).
+- **[zk-jam-service](https://github.com/abutlabs/zk-jam-service)** — anonymous,
+  sybil-resistant voting; a real ZK proof verified in `refine`.
+- **[marmalade](https://github.com/abutlabs/marmalade)** — this: a frequent-batch-auction
+  order-book DEX; matching in `refine`, MEV-resistant, settlement on-chain.
