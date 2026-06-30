@@ -168,23 +168,15 @@ impl Service for Marmalade {
                     // a clearing consumes the pending commitments (the sealed round closed)
                     set_storage(b"commits", &[]).ok();
                     if let Some((price, entries)) = wire::decode_settlement(settle) {
-                        let p = price as u64;
-                        let mut volume = 0u64;
-                        for e in &entries {
-                            let q = e.qty as u64;
-                            let notional = q.saturating_mul(p);
-                            match e.side {
-                                Side::Buy => {
-                                    set_bal(ASSET_BASE, e.account, get_bal(ASSET_BASE, e.account).saturating_add(q));
-                                    set_bal(ASSET_QUOTE, e.account, get_bal(ASSET_QUOTE, e.account).saturating_sub(notional));
-                                    volume += q;
-                                }
-                                Side::Sell => {
-                                    set_bal(ASSET_BASE, e.account, get_bal(ASSET_BASE, e.account).saturating_sub(q));
-                                    set_bal(ASSET_QUOTE, e.account, get_bal(ASSET_QUOTE, e.account).saturating_add(notional));
-                                }
-                            }
+                        // apply conservation-checked per-account deltas (Σ=0 per asset)
+                        for (account, db, dq) in wire::settle_deltas(price, &entries) {
+                            let base = (get_bal(ASSET_BASE, account) as i64 + db).max(0) as u64;
+                            let quote = (get_bal(ASSET_QUOTE, account) as i64 + dq).max(0) as u64;
+                            set_bal(ASSET_BASE, account, base);
+                            set_bal(ASSET_QUOTE, account, quote);
                         }
+                        let volume: u64 =
+                            entries.iter().filter(|e| e.side == Side::Buy).map(|e| e.qty as u64).sum();
                         set_storage(b"last_price", &price.to_le_bytes()).ok();
                         let rounds = get_storage(b"rounds").map(|v| le_u64(&v)).unwrap_or(0) + 1;
                         set_storage(b"rounds", &rounds.to_le_bytes()).ok();

@@ -216,6 +216,17 @@ mod tests {
             prop_assert_eq!(sell_filled, c.volume);
             // no order fills beyond its quantity
             for f in &c.fills { prop_assert!(f.qty <= id_qty(f.id)); }
+
+            // settlement conservation: a cleared batch moves value, never creates
+            // or destroys it — Σ base deltas == 0 and Σ quote deltas == 0.
+            let blob = wire::encode_settlement(c.price, &book, &c);
+            if let Some((price, entries)) = wire::decode_settlement(&blob) {
+                let deltas = wire::settle_deltas(price, &entries);
+                let sum_base: i64 = deltas.iter().map(|d| d.1).sum();
+                let sum_quote: i64 = deltas.iter().map(|d| d.2).sum();
+                prop_assert_eq!(sum_base, 0);
+                prop_assert_eq!(sum_quote, 0);
+            }
         }
     }
 }

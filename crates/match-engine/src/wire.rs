@@ -120,6 +120,31 @@ pub fn decode_settlement(data: &[u8]) -> Option<(u32, Vec<SettleEntry>)> {
     Some((price, out))
 }
 
+/// Per-account balance deltas from a cleared batch, at the uniform price: a buy
+/// is +qty base / −qty·price quote, a sell the reverse. Aggregated per account.
+/// **Invariant:** Σ base deltas == 0 and Σ quote deltas == 0 — a batch moves
+/// value between traders, it never creates or destroys it (settlement's safety
+/// property; property-tested).
+pub fn settle_deltas(price: u32, entries: &[SettleEntry]) -> Vec<(u32, i64, i64)> {
+    let p = price as i64;
+    let mut out: Vec<(u32, i64, i64)> = Vec::new();
+    for e in entries {
+        let q = e.qty as i64;
+        let (db, dq) = match e.side {
+            Side::Buy => (q, -q * p),
+            Side::Sell => (-q, q * p),
+        };
+        match out.iter_mut().find(|(a, _, _)| *a == e.account) {
+            Some(slot) => {
+                slot.1 += db;
+                slot.2 += dq;
+            }
+            None => out.push((e.account, db, dq)),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
