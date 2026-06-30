@@ -1,4 +1,4 @@
-# Marmalade — security review (self-assessment)
+# Jamswap — security review (self-assessment)
 
 An honest internal review of the MVP (PLAN.md Phase 9.1). What's **fixed**, what's
 **accepted/documented** (often requiring chain-level mechanisms or a production

@@ -1,4 +1,4 @@
-//! Marmalade economic simulation (PLAN.md §9.3).
+//! Jamswap economic simulation (PLAN.md §9.3).
 //!
 //! Drives the real `match-engine` with random, realistic order flow over many
 //! rounds — orders rest and carry, fills settle through `settle_deltas` (with the
@@ -95,7 +95,7 @@ fn main() {
     } else { 0.0 };
     let fee_revenue = *bal.get(&(QUOTE, TREASURY)).unwrap_or(&0);
 
-    println!("== Marmalade economic simulation ==");
+    println!("== Jamswap economic simulation ==");
     println!("  rounds            : {rounds}   traders: {traders}   seed: {seed}");
     println!("  orders submitted  : {submitted} units;  matched: {matched} units");
     println!("  fill rate         : {fill_rate:.1}%");

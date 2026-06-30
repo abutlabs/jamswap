@@ -5,7 +5,7 @@
 
 ## What was proven
 
-The `marmalade-service` JAM service (`service/`, built with `jam-pvm-build -m
+The `jamswap-service` JAM service (`service/`, built with `jam-pvm-build -m
 service`) was deployed to a `lasair-node` and fed a sealed batch of orders. Its
 `refine` ran the frequent-batch-auction uniform-price clearing
 (`crates/match-engine`) and its `accumulate` recorded the outcome on-chain.
@@ -34,7 +34,7 @@ service`) was deployed to a `lasair-node` and fed a sealed batch of orders. Its
 
 ## Architecture answer (the open question from the brief)
 
-**Marmalade is a self-contained JAM service — nothing needs to be baked into
+**Jamswap is a self-contained JAM service — nothing needs to be baked into
 Lasair.** `refine` = matching engine, `accumulate` = settlement, service state =
 the books. Lasair is the *cost moat* (we make it the cheapest node to clear
 auctions — PLAN.md §3.9), not a functional dependency: the `.jam` runs on any
@@ -44,7 +44,7 @@ conformant JAM node.
 
 ```sh
 # build the service blob
-cd service && jam-pvm-build -m service          # -> marmalade-service.jam
+cd service && jam-pvm-build -m service          # -> jamswap-service.jam
 
 # deploy to a lasair-node and submit a batch (13 bytes/order, LE:
 #   id:u32 ‖ side:u8(0=buy,1=sell) ‖ price:u32 ‖ qty:u32)

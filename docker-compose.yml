@@ -1,18 +1,19 @@
-# Run the Marmalade DEX end-to-end — one command, built from source for your arch:
+# Run the Jamswap DEX end-to-end — one command, NO lasair source needed:
 #
-#   docker compose up --build           # -> trading UI at http://localhost:8080
+#   docker compose up                   # -> trading UI at http://localhost:8080
 #   docker compose --profile demo run --rm demo   # the narrated CLI scenario
 #
-# Brings up a lasair-node (the JAM node, from ../lasair), deploys the Marmalade
-# service, and serves the off-chain builder + trading UI. Place orders, run an
-# auction round, watch the uniform-price clearing + balances. See docs/ARCHITECTURE.md.
+# The JAM node is pulled as a published multi-arch image (ghcr.io/abutlabs/lasair-node),
+# so this runs natively on amd64 AND arm64 (Apple Silicon) — see README "Run it".
+# It deploys the Jamswap service onto that node and serves the off-chain builder +
+# trading UI: place orders, run an auction round, watch the uniform-price clearing +
+# balances. See docs/ARCHITECTURE.md.
+#
+# Pin a version instead of :latest with  LASAIR_NODE_TAG=node-v0.3.0 docker compose up
 
 services:
-  lasair-node:
-    build:
-      context: ../lasair
-      dockerfile: Dockerfile.node
-    image: lasair-node:local
+  lasair-node:                        # the JAM client, pulled (not built) — any arch
+    image: ghcr.io/abutlabs/lasair-node:${LASAIR_NODE_TAG:-latest}
     ports:
       - "19900:19900"
     restart: unless-stopped
@@ -24,9 +25,9 @@ services:
         condition: service_healthy
     environment:
       LASAIR_RPC: http://lasair-node:19900
-      JAM: /work/marmalade-service.jam
+      JAM: /work/jamswap-service.jam
     volumes:
-      - ./service/marmalade-service.jam:/work/marmalade-service.jam:ro
+      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
       - ./offchain/deploy.py:/work/deploy.py:ro
     command: ["python3", "/work/deploy.py"]
     restart: "no"
@@ -56,9 +57,9 @@ services:
         condition: service_healthy
     environment:
       LASAIR_RPC: http://lasair-node:19900
-      JAM: /work/marmalade-service.jam
+      JAM: /work/jamswap-service.jam
     volumes:
-      - ./service/marmalade-service.jam:/work/marmalade-service.jam:ro
+      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
       - ./sim/demo.py:/work/demo.py:ro
     command: ["python3", "/work/demo.py"]
     restart: "no"

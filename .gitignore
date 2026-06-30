@@ -2,4 +2,5 @@
 **/target
 Cargo.lock
 *.jam
+!service/jamswap-service.jam   # the deployable service blob — committed so `docker compose up` runs from a fresh clone
 .DS_Store

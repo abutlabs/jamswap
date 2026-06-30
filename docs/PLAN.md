@@ -1,6 +1,6 @@
-# Marmalade — a frequent-batch-auction order-book DEX on JAM
+# Jamswap — a frequent-batch-auction order-book DEX on JAM
 
-> Working codename: **Marmalade** (a preserve in the jam family; "market" is in
+> Working codename: **Jamswap** (a preserve in the jam family; "market" is in
 > there if you squint). Provisional — the clearing price in our auction is the
 > "set point," and jam famously *sets*, so **Setpoint** is the alternate name on
 > the table. Decide before public anything.
@@ -23,7 +23,7 @@ compute. So we can run an actual **matching engine** trustlessly and settle fill
 on-chain — a CEX-grade order book with DEX-grade self-custody. We clear as
 **frequent batch auctions** (one uniform clearing price per round), which is not a
 compromise but an upgrade: it removes the latency race that drives most CEX/AMM
-MEV. Marmalade is that exchange, and we have a structural edge because **we build
+MEV. Jamswap is that exchange, and we have a structural edge because **we build
 the client it runs on** (lasair) — letting us run the auctions cheaper than anyone
 who didn't write their own node.
 
@@ -47,7 +47,7 @@ engine.*
 | AMM DEX (Uniswap) | none — a formula | self | high (sandwiching) | real price discovery; no IL; limit orders |
 | CLOB DEX on a fast L1 (Hyperliquid, Phoenix) | off-chain or app-specific sequencer | self-ish | sequencer-trust / latency games | trustless *audited* matching, no privileged sequencer |
 | CEX (Binance, Coinbase) | off-chain engine | **custodial** | operator-trust | non-custodial; verifiable matching |
-| Marmalade | **in-Refine, audited** | self | batch-auction + encryption → minimal | trustless matching + encryption + our cost moat |
+| Jamswap | **in-Refine, audited** | self | batch-auction + encryption → minimal | trustless matching + encryption + our cost moat |
 
 **What we are NOT:** we are not "AWS for compute," not microsecond HFT (Refine
 settles per block), and not a place to run arbitrary smart contracts. We do one
@@ -103,7 +103,7 @@ Layered, in rough order of when they come online:
 
 We control the node software. That is rare and it compounds:
 
-- We can make lasair **fastest at refining Marmalade work-packages** → lowest COGS
+- We can make lasair **fastest at refining Jamswap work-packages** → lowest COGS
   per trade → structural fee advantage.
 - We run the **work-package builder** ourselves → reliable inclusion, optimal
   batching, and capture of whatever (intentionally minimal) builder value exists.
@@ -170,7 +170,7 @@ Real exchanges separate the **matching engine** (compute) from the **ledger**
 (state/settlement). JAM gives us that split natively:
 
 ```
-service Marmalade {
+service Jamswap {
   state:        balances ledger + resting order book + market registry
   refine():     run the FBA matching engine on a sealed batch   // MATCHING ENGINE
   accumulate(): apply fills, update balances & resting book      // SETTLEMENT
@@ -211,7 +211,7 @@ turf, unlike the AI ideas).
 
 CEX-style internal ledger (simplest correct design):
 
-- **Deposit:** user transfers asset into the Marmalade service → `on_transfer`
+- **Deposit:** user transfers asset into the Jamswap service → `on_transfer`
   credits an internal balance.
 - **Trade:** internal balance debits/credits only — fast, cheap, no token movement
   per trade.
@@ -253,7 +253,7 @@ only the *decryption* carries the asterisk.
 One work-package → one core per round. So:
 
 - **Per-market parallelism:** each pair clears as its own work-package on its own
-  core, all feeding the one Marmalade service's `accumulate`. With 341 cores,
+  core, all feeding the one Jamswap service's `accumulate`. With 341 cores,
   hundreds of markets clear *in parallel* each block.
 - Same service code, many work-packages. Coretime budgeting (§2.1) decides which
   markets auction which rounds.
@@ -283,7 +283,7 @@ Because we write the client, we can do what no DEX-on-someone-else's-chain can:
 - **L1 — PVM hot-path optimization.** The matching engine's inner loops (sorting,
   comparisons, curve aggregation) are the same ops every round. Specialize lasair's
   PVM execution for them (JIT or targeted interpretation) → cheaper refine.
-- **L2 — Fastest guarantor.** Be the node most able to refine Marmalade
+- **L2 — Fastest guarantor.** Be the node most able to refine Jamswap
   work-packages quickly and reliably → dependable inclusion.
 - **L3 — Builder integration.** Batch assembly inside lasair → optimal, low-latency
   work-package construction.
@@ -466,7 +466,7 @@ calendar promise.
 
 ## 8. Open decisions (resolve as we go)
 
-1. **Name:** Marmalade vs Setpoint vs other.
+1. **Name:** Jamswap vs Setpoint vs other.
 2. **Encryption scheme** (Phase 4): commit-reveal vs threshold vs time-lock.
 3. **Marginal allocation:** price-time priority vs VRF-seeded pro-rata lottery.
 4. **Token: yes/no/when** — default *no* until a real accrual model exists.

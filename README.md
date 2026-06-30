@@ -1,4 +1,4 @@
-# Marmalade
+# Jamswap
 
 > A frequent-batch-auction order-book DEX on JAM — a CEX-grade matching engine
 > with DEX-grade self-custody, because JAM is the first chain that can actually
@@ -7,7 +7,7 @@
 Every on-chain exchange uses an AMM (a pricing formula) instead of a real order
 book **because no blockchain could afford to run a matching engine**. JAM's
 **Refine** phase is heavy, parallel, deterministic, *audited* compute — so
-Marmalade runs an actual matching engine trustlessly and settles fills on-chain.
+Jamswap runs an actual matching engine trustlessly and settles fills on-chain.
 We clear as **frequent batch auctions** (one uniform price per round), which
 removes the latency race that drives most CEX/AMM MEV.
 
@@ -25,7 +25,7 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   `accumulate` = settlement. **M1 PROVEN** — it clears a real batch *in Refine on
   lasair*, deterministically (byte-identical re-runs), at **7,476 gas** for 3
   orders (~0.00015% of the refine budget). See [`docs/M1_DEMO.md`](docs/M1_DEMO.md).
-  **Marmalade is a self-contained JAM service — nothing baked into Lasair.**
+  **Jamswap is a self-contained JAM service — nothing baked into Lasair.**
 - ✅ **Phase 2 settlement** — `accumulate` now moves real **balances**: a cleared
   batch debits/credits each trader's base/quote at the uniform price; deposits fund
   accounts. Verified e2e on lasair (deposit → auction → settled balances, value
@@ -74,18 +74,34 @@ CI (`.github/workflows/ci.yml`) runs the matching-engine property tests
 (conservation, determinism, settlement Σ-deltas == 0) on every push — the
 "never regress" gate from PLAN.md §5.
 
-## Run it (one command)
+## Run it on your architecture (one command, no lasair source)
 
-Built from source for your architecture:
+You **don't need the lasair source** — the JAM node is pulled as a published,
+**multi-arch** image (`ghcr.io/abutlabs/lasair-node`). Just clone this repo and:
 
 ```sh
-docker compose up --build          # -> trading UI at http://localhost:8080
+docker compose up                  # -> trading UI at http://localhost:8080
 ```
 
-Brings up a lasair-node, deploys the Marmalade service, and serves the **trading
+| Your machine | What runs | Notes |
+|---|---|---|
+| **Linux / amd64** (Intel/AMD) | native | — |
+| **Apple Silicon** (M1–M4, arm64) | native | the image is built for arm64 too |
+| **Windows / WSL2** (amd64) | native | run inside a WSL2 Linux shell |
+| **arm64 without an arm64 image yet** | emulated | add `--platform linux/amd64` (slower, but works) |
+
+It pulls the node, deploys the Jamswap service onto it, and serves the **trading
 UI** + off-chain builder ([`offchain/`](offchain/)): place limit orders, run an
 auction round, and watch the uniform-price clearing, the resting order book, and
-your balances update — across multiple markets sharing one ledger.
+your balances update — across multiple markets sharing one ledger. The committed
+service blob (`service/jamswap-service.jam`) means it runs straight from a clone;
+nothing to compile.
+
+Pin a node version instead of `:latest`:
+
+```sh
+LASAIR_NODE_TAG=node-v0.3.0 docker compose up
+```
 
 The narrated CLI scenario (sealed commit/reveal round → clearing → settlement →
 resting book → cancel → MEV-resistance) is also available:
@@ -93,6 +109,12 @@ resting book → cancel → MEV-resistance) is also available:
 ```sh
 docker compose --profile demo run --rm demo   # see sim/demo.py
 ```
+
+> **JAM-client teams:** this is a fully self-contained JAM **service** — nothing is
+> baked into the client. If you have your own JAM node with a deploy/work-item RPC,
+> point `LASAIR_RPC` at it and run the same flow. lasair is just the node we ship it
+> on; the service is portable. Build the blob yourself with
+> `cd service && jam-pvm-build -m service`.
 
 Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
@@ -131,5 +153,5 @@ it — each one-command-runnable and demonstrating something only JAM can do:
   (+ a live multi-node testnet that runs like PolkaJam).
 - **[zk-jam-service](https://github.com/abutlabs/zk-jam-service)** — anonymous,
   sybil-resistant voting; a real ZK proof verified in `refine`.
-- **[marmalade](https://github.com/abutlabs/marmalade)** — this: a frequent-batch-auction
+- **[jamswap](https://github.com/abutlabs/jamswap)** — this: a frequent-batch-auction
   order-book DEX; matching in `refine`, MEV-resistant, settlement on-chain.

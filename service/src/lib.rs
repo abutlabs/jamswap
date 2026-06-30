@@ -12,8 +12,8 @@ use jam_pvm_common::{declare_service, Service};
 use blake2::{Blake2s256, Digest};
 use match_engine::{clear, resting, wire, Order, Side};
 
-declare_service!(Marmalade);
-struct Marmalade;
+declare_service!(Jamswap);
+struct Jamswap;
 
 // payload / work-output tags
 const TAG_MATCH: u8 = 0; // plaintext batch for one market: [tag][market][base][quote][orders…]
@@ -110,7 +110,7 @@ fn match_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8>
     out
 }
 
-impl Service for Marmalade {
+impl Service for Jamswap {
     fn refine(
         _core_index: CoreIndex,
         _item_index: usize,

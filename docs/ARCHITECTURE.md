@@ -1,4 +1,4 @@
-# Marmalade architecture (as built)
+# Jamswap architecture (as built)
 
 How the working MVP is put together — the JAM service state machine, the wire
 formats, the round lifecycle, and the honest trust boundaries. For the vision and
@@ -7,7 +7,7 @@ roadmap see [`PLAN.md`](PLAN.md); for the proven results see [`M1_DEMO.md`](M1_D
 ## The Refine/Accumulate split = exchange architecture
 
 ```
-service Marmalade {
+service Jamswap {
   refine()     = the MATCHING ENGINE  — heavy, parallel, audited, off the state path
   accumulate() = SETTLEMENT           — applies results to authoritative on-chain state
   state        = the books            — balances ledger, resting order book, commitments
@@ -26,7 +26,7 @@ service Marmalade {
 
 ## Work-item types (payload tag = first byte)
 
-Marmalade is **multi-market**: each work-item names a market (`market_id`) and the
+Jamswap is **multi-market**: each work-item names a market (`market_id`) and the
 two assets it trades (`base`, `quote`). Different markets clear independently (one
 work-package per market per round — JAM's per-core parallelism) into per-market
 books, sharing one global balance ledger.

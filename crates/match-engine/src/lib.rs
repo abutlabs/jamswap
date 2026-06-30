@@ -1,4 +1,4 @@
-//! Marmalade frequent-batch-auction matching engine.
+//! Jamswap frequent-batch-auction matching engine.
 //!
 //! A uniform-price sealed-bid double auction (call auction / "fixing"): every
 //! order in a batch clears at a single price `p*`, removing the latency race that

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Marmalade off-chain layer — the round builder + a trading API + the UI.
+"""Jamswap off-chain layer — the round builder + a trading API + the UI.
 
 This is the operating layer the plan calls Phase 6: it collects orders into a
 pending batch per market, and on `/api/round` reads the market's resting book from
@@ -127,7 +127,7 @@ class H(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "no route"}).encode())
 
 if __name__ == "__main__":
-    print(f"marmalade off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
+    print(f"jamswap off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
     try: ensure_markets(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

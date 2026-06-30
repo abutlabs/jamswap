@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Marmalade end-to-end demo — a narrated multi-market trading scenario.
+"""Jamswap end-to-end demo — a narrated multi-market trading scenario.
 
 Two markets (TOKA/USD and TOKB/USD) clear INDEPENDENTLY in JAM's Refine while
 sharing one balance ledger — the parallelism JAM uniquely enables. Shows: a SEALED
 (commit/reveal) round, a plaintext round, uniform-price clearing, settlement, a
 shared cross-market balance, the resting book, cancel, and MEV-resistance.
 
-  LASAIR_RPC=http://localhost:19900 JAM=service/marmalade-service.jam python3 sim/demo.py
+  LASAIR_RPC=http://localhost:19900 JAM=service/jamswap-service.jam python3 sim/demo.py
 
 Stdlib only (urllib, struct, hashlib).
 """
 import hashlib, json, os, struct, sys, urllib.request
 
 RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
-JAM = os.environ.get("JAM", "service/marmalade-service.jam")
+JAM = os.environ.get("JAM", "service/jamswap-service.jam")
 SID = 1729
 BUY, SELL = 0, 1
 USD, TOKA, TOKB = 0, 1, 2          # asset ids
@@ -43,7 +43,7 @@ def h(s): print("\n\033[1;35m== " + s + "\033[0m")
 def line(s): print("   " + s)
 
 def main():
-    h("Deploy the Marmalade DEX service")
+    h("Deploy the Jamswap DEX service")
     jam = open(JAM, "rb").read()
     line(f"deployed ({len(jam)} bytes) -> service_id {rpc('/v1/service', {'jam_hex': jam.hex()})['service_id']}")
 
@@ -95,7 +95,7 @@ def main():
     submit(match_hdr(3, M_A, TOKA, USD) + struct.pack("<I", 0) + order(1, 99, BUY, 100, 5) + bytes(32))
     line(f"Alice USD {before} -> {bal(USD,1)}  ->  {'REJECTED ✓' if before == bal(USD,1) else 'LEAKED ✗'}")
 
-    print("\n\033[1;32mMarmalade: parallel, trustless, MEV-resistant order-book auctions on JAM.\033[0m")
+    print("\n\033[1;32mJamswap: parallel, trustless, MEV-resistant order-book auctions on JAM.\033[0m")
 
 if __name__ == "__main__":
     try:
