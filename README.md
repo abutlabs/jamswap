@@ -55,6 +55,9 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   and overdraft protection; a per-asset custody total whose invariant
   (Σ balances == custody) holds by construction. (Mock custody; real `on_transfer`
   backing is the Phase-3 upgrade, blocked on JAM's asset standard.)
+- ✅ **Trading fee** (revenue model) — a flat 30 bps fee on matched notional accrues
+  to a treasury account (per-market quote asset); conservation holds *including* the
+  fee (property-tested over random fee rates).
 - ◻️ Then: real `on_transfer` custody, round sequencing via historical-lookup,
   threshold-encryption upgrade, indexer + WebSocket feeds, wallet/signing in the UI,
   a W3F grant application.

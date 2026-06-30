@@ -218,7 +218,7 @@ mod tests {
         // value conservation + determinism + per-order bound, over random books.
         #[test]
         fn invariants(orders in prop::collection::vec(
-            (any::<bool>(), 1u32..50, 1u32..100), 0..40usize)) {
+            (any::<bool>(), 1u32..50, 1u32..100), 0..40usize), fee_bps in 0u32..200) {
             let book: Vec<Order> = orders.iter().enumerate().map(|(i, &(b, price, qty))| {
                 Order { account: i as u32, id: i as u32, side: if b { Side::Buy } else { Side::Sell }, price, qty }
             }).collect();
@@ -241,7 +241,8 @@ mod tests {
             // or destroys it — Σ base deltas == 0 and Σ quote deltas == 0.
             let blob = wire::encode_settlement(c.price, &book, &c);
             if let Some((price, entries)) = wire::decode_settlement(&blob) {
-                let deltas = wire::settle_deltas(price, &entries);
+                // conservation holds for any fee, with the treasury included in the sum
+                let deltas = wire::settle_deltas(price, &entries, fee_bps, u32::MAX);
                 let sum_base: i64 = deltas.iter().map(|d| d.1).sum();
                 let sum_quote: i64 = deltas.iter().map(|d| d.2).sum();
                 prop_assert_eq!(sum_base, 0);

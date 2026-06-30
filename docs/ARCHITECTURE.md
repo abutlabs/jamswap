@@ -69,8 +69,10 @@ Settlement moves the **market's** `base`/`quote` assets between traders.
    `refine` clears the uniform-price auction; partially/un-filled orders become
    the new resting book.
 3. **Settle** — `accumulate` applies conservation-checked per-account deltas
-   (`settle_deltas`: buy = +base/−quote, sell = −base/+quote, **Σ = 0 per asset**),
-   persists the new `book`, clears `commits`, and bumps stats.
+   (`settle_deltas`: buy = +base/−(quote+fee), sell = −base/+(quote−fee)), routes a
+   **flat trading fee** (30 bps on each side's quote notional) to the treasury
+   account, persists the new `book`, clears `commits`, and bumps stats. **Σ = 0 per
+   asset including the treasury** — fees are moved, not minted.
 
 The "builder" (the party that reads on-chain `book`/`commits` and assembles the
 next payload) is, in the MVP, the test/off-chain caller. The plan's alternative —
@@ -105,6 +107,7 @@ Two layers, both proven e2e:
   matched volume — no candidate price clears more), value conservation
   (Σ buy fills == Σ sell fills == volume), determinism (byte-identical re-runs),
   per-order fill ≤ quantity.
-- **Settlement**: Σ base deltas == 0 and Σ quote deltas == 0 — a batch moves value
-  between traders, never creates or destroys it (property-tested `settle_deltas`,
-  used directly by the service).
+- **Settlement**: Σ base deltas == 0 and Σ quote deltas == 0 *including the trading
+  fee to the treasury* — a batch moves value (and fees) between accounts, never
+  creates or destroys it (property-tested `settle_deltas` over random fees, used
+  directly by the service).

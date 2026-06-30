@@ -23,6 +23,11 @@ const TAG_REVEAL: u8 = 3; // [tag][market][base][quote][commits_len][commits][re
 const TAG_CANCEL: u8 = 4; // [tag][market][account][order_id] — cancel a resting order
 const TAG_WITHDRAW: u8 = 5; // [tag][account][asset_id][amount] — debit balance (+ custody)
 
+// trading fee: a flat fee on matched quote notional (FBA has no maker/taker), paid
+// by both sides into the treasury account (in the market's quote asset). 30 bps.
+const FEE_BPS: u32 = 30;
+const FEE_ACCOUNT: u32 = u32::MAX;
+
 const NONCE_LEN: usize = 32;
 const REVEAL_LEN: usize = wire::ORDER_LEN + NONCE_LEN; // order(17) ‖ nonce(32)
 
@@ -214,8 +219,9 @@ impl Service for Marmalade {
                     set_storage(&mkey(b"book", market), book).ok();
                     set_storage(&mkey(b"commits", market), &[]).ok();
                     if let Some((price, entries)) = wire::decode_settlement(settle) {
-                        // conservation-checked deltas: base_delta in base asset, quote in quote
-                        for (account, db, dq) in wire::settle_deltas(price, &entries) {
+                        // conservation-checked deltas (incl. the fee to the treasury):
+                        // base_delta in base asset, quote_delta in quote asset.
+                        for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_BPS, FEE_ACCOUNT) {
                             let nb = (get_bal(base, account) as i64 + db).max(0) as u64;
                             let nq = (get_bal(quote, account) as i64 + dq).max(0) as u64;
                             set_bal(base, account, nb);
