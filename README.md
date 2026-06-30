@@ -41,9 +41,15 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   Verified e2e: hidden commit → reveal+match settles; an uncommitted order is
   rejected. *Honest asterisk:* adds a reveal round + a non-reveal griefing vector;
   threshold/time-lock encryption (no reveal round) is the stronger upgrade.
-- ◻️ Then: cancel/modify + round sequencing via historical-lookup, real custody via
-  `on_transfer` (deposit/withdraw + reconciliation), threshold-encryption upgrade,
-  multi-market parallelism, off-chain infra, trading UI.
+- ✅ **Cancel** — owner-authenticated removal of a resting order by `(account, id)`
+  (verified e2e in the demo). Order lifecycle: submit → rest → fill or cancel.
+- ◻️ Then: round sequencing via historical-lookup, real custody via `on_transfer`
+  (deposit/withdraw + reconciliation), threshold-encryption upgrade, multi-market
+  parallelism across cores, off-chain infra, trading UI.
+
+CI (`.github/workflows/ci.yml`) runs the matching-engine property tests
+(conservation, determinism, settlement Σ-deltas == 0) on every push — the
+"never regress" gate from PLAN.md §5.
 
 ## Run the demo (one command)
 

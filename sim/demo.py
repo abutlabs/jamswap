@@ -86,6 +86,14 @@ def main():
         a, oid, side, p, q = struct.unpack_from("<IIBII", book, i * 17)
         line(f"resting: acct{a} {'BUY ' if side == BUY else 'SELL'} {q} @ {p}")
 
+    h("Cancel — Carol cancels her resting buy (acct3, order 3)")
+    submit(bytes([4]) + struct.pack("<II", 3, 3))   # [TAG_CANCEL][account][order_id]
+    book = storage(b"book")
+    line(f"resting orders now: {len(book) // 17}")
+    for i in range(len(book) // 17):
+        a, oid, side, p, q = struct.unpack_from("<IIBII", book, i * 17)
+        line(f"resting: acct{a} {'BUY ' if side == BUY else 'SELL'} {q} @ {p}  (Carol's is gone)")
+
     h("MEV-resistance — an UNCOMMITTED order is rejected (can't be injected post-seal)")
     forged = order(3, 99, BUY, 100, 5) + bytes(32)
     before = bal(QUOTE, 3)

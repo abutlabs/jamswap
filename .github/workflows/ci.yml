@@ -1,0 +1,19 @@
+name: CI
+
+# The determinism/conservation gate (PLAN.md §5): the matching engine's property
+# tests — value conservation, byte-identical determinism, per-order bounds, and
+# settlement Σ-deltas == 0 — must pass on every push. Never regress.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  match-engine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test the matching engine (incl. property tests)
+        run: cargo test --release
+        working-directory: crates/match-engine

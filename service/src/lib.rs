@@ -20,6 +20,7 @@ const TAG_MATCH: u8 = 0; // a sealed batch of PLAINTEXT orders to clear + settle
 const TAG_DEPOSIT: u8 = 1; // fund a trader's balance (Phase-2 faucet; real custody = Phase 3)
 const TAG_COMMIT: u8 = 2; // commit a hidden order: H(order ‖ nonce) — front-running resistance
 const TAG_REVEAL: u8 = 3; // reveal+match a batch: verify each order against its commitment
+const TAG_CANCEL: u8 = 4; // cancel a resting order by (account, id) — owner-authenticated
 
 const ASSET_BASE: u8 = 0;
 const ASSET_QUOTE: u8 = 1;
@@ -93,6 +94,9 @@ impl Service for Marmalade {
             // commit a hidden order (echo the [tag][account][commitment] for accumulate)
             TAG_COMMIT => data.into(),
 
+            // cancel a resting order (echo [tag][account][order_id] for accumulate)
+            TAG_CANCEL => data.into(),
+
             // reveal + match: only orders whose H(order‖nonce) matches a recorded
             // commitment are admitted to the auction → you cannot inject an order
             // you didn't commit before the batch sealed. Layout:
@@ -156,6 +160,16 @@ impl Service for Marmalade {
                     let mut commits = get_storage(b"commits").unwrap_or_default();
                     commits.extend_from_slice(&out[5..5 + 32]);
                     set_storage(b"commits", &commits).ok();
+                }
+                // cancel a resting order by (account, id) — only the owner's matching
+                // (account, id) is removed from the book.
+                TAG_CANCEL if out.len() >= 1 + 4 + 4 => {
+                    let account = u32::from_le_bytes([out[1], out[2], out[3], out[4]]);
+                    let oid = u32::from_le_bytes([out[5], out[6], out[7], out[8]]);
+                    let orders = wire::decode_orders(&get_storage(b"book").unwrap_or_default());
+                    let kept: Vec<Order> =
+                        orders.into_iter().filter(|o| !(o.account == account && o.id == oid)).collect();
+                    set_storage(b"book", &wire::encode_orders(&kept)).ok();
                 }
                 TAG_MATCH if out.len() >= 5 => {
                     let settle_len = u32::from_le_bytes([out[1], out[2], out[3], out[4]]) as usize;
