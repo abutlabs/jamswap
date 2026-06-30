@@ -195,6 +195,26 @@ mod tests {
     }
 
     proptest! {
+        // CLEARING OPTIMALITY: the chosen p* maximizes matched volume — no other
+        // candidate price clears more. This is the defining correctness property of
+        // a uniform-price call auction (what an auditor checks).
+        #[test]
+        fn clearing_maximizes_volume(orders in prop::collection::vec(
+            (any::<bool>(), 1u32..50, 1u32..100), 0..40usize)) {
+            let book: Vec<Order> = orders.iter().enumerate().map(|(i, &(b, price, qty))| {
+                Order { account: i as u32, id: i as u32, side: if b { Side::Buy } else { Side::Sell }, price, qty }
+            }).collect();
+            let v_star = clear(&book).volume;
+            for o in &book {
+                let p = o.price;
+                let d: u64 = book.iter().filter(|x| x.side == Side::Buy && x.price >= p).map(|x| x.qty as u64).sum();
+                let s: u64 = book.iter().filter(|x| x.side == Side::Sell && x.price <= p).map(|x| x.qty as u64).sum();
+                prop_assert!(d.min(s) <= v_star, "price {} clears {} > p* volume {}", p, d.min(s), v_star);
+            }
+        }
+    }
+
+    proptest! {
         // value conservation + determinism + per-order bound, over random books.
         #[test]
         fn invariants(orders in prop::collection::vec(

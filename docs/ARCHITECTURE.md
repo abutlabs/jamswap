@@ -101,7 +101,8 @@ Two layers, both proven e2e:
 
 ## Safety invariants (tested)
 
-- **Matching** (`match-engine` proptests): value conservation
+- **Matching** (`match-engine` proptests): **clearing optimality** (`p*` maximizes
+  matched volume — no candidate price clears more), value conservation
   (Σ buy fills == Σ sell fills == volume), determinism (byte-identical re-runs),
   per-order fill ≤ quantity.
 - **Settlement**: Σ base deltas == 0 and Σ quote deltas == 0 — a batch moves value
