@@ -3,8 +3,16 @@
 > Jamswap is a JAM service that holds **live state** — order books, sealed
 > commitments, balances. That state sits in **validator RAM**. JAMKB is Gavin Wood's
 > proposed token for exactly this resource. This doc is (a) our understanding of the
-> JAMKB proposal, (b) how Jamswap is a concrete worked example of it, and (c) a
-> staged plan to make the prototype real — read-only first, enforced last.
+> JAMKB proposal, (b) how Jamswap is a concrete worked example of it, and (c) the
+> **metrics we built to make JAMKB measurable and discussable** with a running example.
+>
+> **Scope, deliberately.** We build the *measurement and the worked example* — what a
+> service's footprint actually is, and what it would cost in JAMKB. We do **not**
+> implement protocol-level enforcement in the node. Pricing JAM's state footprint is a
+> **protocol-economics decision for the JAM community**, not one any single client
+> should bake in unilaterally (it would also diverge lasair from conformance). The
+> enforcement design below is written up as an **open proposal to inform that
+> discussion** — not a roadmap we execute on our own.
 
 Source: *"DOT, DAO and the need for JAMKB"* (Polkadot Network, Medium).
 
@@ -110,22 +118,30 @@ lasair exposes a service's footprint over the operator RPC:
 The UI renders a **JAM state-footprint meter**: items, octets, KB — *actual validator
 RAM this service occupies right now*. No token, no enforcement — just the truth, live.
 
-**Phase 2 — JAMKB accounting layer (service + UI, still no protocol enforcement).**
+**Phase 2 — JAMKB accounting layer (service + UI, still no protocol enforcement).** ✅ done
 Define `JAMKB_required = ceil(octets/1024)`; treat the service's **JSMBK balance** as
-`JAMKB_held`. UI shows **required vs held vs free headroom**, updating every 6 s as
-orders accrue and clear. A "fund state" action moves JSMBK to the service account. This
+`JAMKB_held`. UI shows **required vs held vs free headroom**, updating as orders accrue
+and clear. A "top up reserve" action moves JSMBK to the service account. This
 demonstrates the economics end-to-end **without** changing consensus.
 
-**Phase 3 — Protocol-level enforcement in lasair (the big task).**
-lasair enforces the JAMKB rule at accumulate time: a `set_storage` that would push
-`footprint_octets/1024 > JAMKB_held` is **rejected** (mirrors GP's `a_b ≥ a_t`, but in
-JAMKB). Needs: a per-service JAMKB ledger in the node, the footprint computed from the
-post-state trie, and a guard in the accumulate state-transition. Gated behind a config
-flag (`LASAIR_JAMKB=1`) so conformance runs are unaffected. *This is where "the service
-consumes validator RAM, paid in JAMKB" becomes real — planned, not yet coded.*
+> **Phases 0–2 are where we stop building.** They make JAMKB *measurable and
+> discussable* on a running system — which is the contribution we want to bring to the
+> community conversation. What follows is a **proposal sketch, not a roadmap.**
 
-**Phase 4 — Documentation + proposal write-up.**
-This file + the README "How Jamswap works" section, kept in lockstep with each phase.
+**Phase 3 — Protocol-level enforcement (PROPOSAL ONLY — needs community agreement).**
+*We are deliberately not implementing this.* Pricing/enforcing the state footprint is a
+JAM-wide economic decision; a single client shouldn't bake it in (and doing so would
+diverge lasair from conformance). The sketch, for discussion: a node could enforce the
+JAMKB rule at accumulate time — a `set_storage` that pushes `footprint_octets/1024 >
+JAMKB_held` is **rejected** (mirrors GP's `a_b ≥ a_t`, but in JAMKB), via a per-service
+JAMKB ledger + a guard in the accumulate transition. **Questions for the community:**
+where does the JAMKB ledger live (a system service? the account model?); is it a hold or
+a per-block rent; how is the 1 KB↔1 JAMKB ratio governed; how does it interact with the
+existing DOT deposit `a_t`? Our metrics (Phases 0–2) exist to make these answerable with
+real numbers.
+
+**Phase 4 — Documentation + proposal write-up.** ✅ ongoing
+This file + the README "How Jamswap works" section, kept in lockstep.
 
 ## 6. Open design questions (our proposals to refine)
 

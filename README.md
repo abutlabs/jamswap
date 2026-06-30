@@ -146,8 +146,11 @@ RAM** — exactly the resource Gavin Wood's **JAMKB** token prices (1 JAMKB ≙ 
 state footprint). **JSMBK** is our prototype of that token: it backs the service's
 footprint, and because it's also a trading pair, *the cost of state gets a market
 price*. Placing orders grows the footprint; the 6 s auctions clear them and free it.
-The full understanding + a staged plan to make the validator actually meter and enforce
-this is in **[`docs/JAMKB.md`](docs/JAMKB.md)**.
+We build the **metrics** (a live footprint→JAMKB meter) to make this measurable and
+discussable — we deliberately **don't** enforce it in the node: pricing JAM's state is a
+protocol-economics decision for the community, not one a single client should bake in.
+The full understanding + that proposal (for discussion, not unilateral implementation)
+is in **[`docs/JAMKB.md`](docs/JAMKB.md)**.
 
 > **Honest note on the wallet:** lasair is a JAM node, not a Substrate chain, so
 > Talisman can't add it as an RPC "network" (JAM ≠ Substrate). What's real and works:
