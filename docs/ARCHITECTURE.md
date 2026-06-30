@@ -26,14 +26,22 @@ service Marmalade {
 
 ## Work-item types (payload tag = first byte)
 
+Marmalade is **multi-market**: each work-item names a market (`market_id`) and the
+two assets it trades (`base`, `quote`). Different markets clear independently (one
+work-package per market per round — JAM's per-core parallelism) into per-market
+books, sharing one global balance ledger.
+
 | Tag | Name | Payload | refine | accumulate |
 |---|---|---|---|---|
-| 0 | `MATCH` | plaintext orders (17 B each) | clear → settlement + resting book | settle balances, store book, bump stats |
-| 1 | `DEPOSIT` | account ‖ asset ‖ amount | echo | credit balance (Phase-2 faucet; real custody = Phase 3) |
-| 2 | `COMMIT` | account ‖ commitment(32) | echo | append commitment to the pending set |
-| 3 | `REVEAL` | commits ‖ reveals(order‖nonce) | admit only orders whose `H(order‖nonce)` ∈ commits, then clear | (output is a `MATCH` settlement → same path) |
+| 0 | `MATCH` | `market‖base‖quote` ‖ plaintext orders (17 B each) | clear → settlement + resting book | settle balances, store the market's book, bump stats |
+| 1 | `DEPOSIT` | account ‖ asset_id ‖ amount(u64) | echo | credit `(asset_id, account)` (Phase-2 faucet; real custody = Phase 3) |
+| 2 | `COMMIT` | market ‖ account ‖ commitment(32) | echo | append commitment to the market's pending set |
+| 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) | admit only orders whose `H(order‖nonce)` ∈ commits, then clear | (output is a `MATCH` settlement → same path) |
+| 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
 
-`refine` for `MATCH`/`REVEAL` emits: `[0]‖[settle_len:u32]‖[settlement]‖[resting book]`.
+`refine` for `MATCH`/`REVEAL` emits:
+`[0]‖[market:u32]‖[base:u32]‖[quote:u32]‖[settle_len:u32]‖[settlement]‖[resting book]`.
+Settlement moves the **market's** `base`/`quote` assets between traders.
 
 ## Wire formats (little-endian, integer-only)
 
@@ -45,11 +53,10 @@ service Marmalade {
 
 | Key | Value | Meaning |
 |---|---|---|
-| `B` ‖ account(4) | u64 | base-asset balance |
-| `Q` ‖ account(4) | u64 | quote-asset balance |
-| `book` | orders blob | the resting order book (carried between rounds) |
-| `commits` | 32 B × n | pending order commitments (cleared on settlement) |
-| `last_price`, `rounds`, `cum_volume` | u64 | round stats |
+| `b` ‖ asset_id(4) ‖ account(4) | u64 | balance of an asset for an account (global, cross-market) |
+| `book` ‖ market(4) | orders blob | that market's resting order book |
+| `commits` ‖ market(4) | 32 B × n | that market's pending commitments (cleared on settlement) |
+| `lp` ‖ market(4), `cv` ‖ market(4) | u64 | that market's last price, cumulative volume |
 
 ## Round lifecycle
 

@@ -1,107 +1,97 @@
 #!/usr/bin/env python3
-"""Marmalade end-to-end demo — a narrated trading scenario against a lasair node.
+"""Marmalade end-to-end demo — a narrated multi-market trading scenario.
 
-Deploys the Marmalade JAM service, funds traders, runs ONE sealed-order
-frequent-batch-auction round (commit -> reveal -> clear -> settle), then shows the
-resting order book and proves MEV-resistance (an uncommitted order is rejected).
+Two markets (TOKA/USD and TOKB/USD) clear INDEPENDENTLY in JAM's Refine while
+sharing one balance ledger — the parallelism JAM uniquely enables. Shows: a SEALED
+(commit/reveal) round, a plaintext round, uniform-price clearing, settlement, a
+shared cross-market balance, the resting book, cancel, and MEV-resistance.
 
   LASAIR_RPC=http://localhost:19900 JAM=service/marmalade-service.jam python3 sim/demo.py
 
-Reuses only the Python stdlib (urllib, struct, hashlib) — no dependencies.
+Stdlib only (urllib, struct, hashlib).
 """
 import hashlib, json, os, struct, sys, urllib.request
 
 RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
 JAM = os.environ.get("JAM", "service/marmalade-service.jam")
 SID = 1729
-
-# wire (matches crates/match-engine/src/wire.rs)
-def order(acct, oid, side, price, qty):  # 17 bytes
-    return struct.pack("<IIBII", acct, oid, side, price, qty)
-def deposit(acct, asset, amount):        # [1][account][asset][amount]
-    return bytes([1]) + struct.pack("<IBQ", acct, asset, amount)
 BUY, SELL = 0, 1
-BASE, QUOTE = 0, 1
+USD, TOKA, TOKB = 0, 1, 2          # asset ids
+M_A, M_B = 1, 2                     # market ids (TOKA/USD, TOKB/USD)
+
+def order(acct, oid, side, price, qty):                 # 17 bytes
+    return struct.pack("<IIBII", acct, oid, side, price, qty)
+def deposit(acct, asset, amount):                       # [1][acct][asset][amount]
+    return bytes([1]) + struct.pack("<II", acct, asset) + struct.pack("<Q", amount)
+def match_hdr(tag, market, base, quote):
+    return bytes([tag]) + struct.pack("<III", market, base, quote)
 
 def rpc(path, body=None):
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(RPC + path, data=data,
         headers={"content-type": "application/json"}, method="POST" if data else "GET")
     return json.loads(urllib.request.urlopen(req, timeout=30).read())
-
-def submit(payload):  # one work-item (refine + accumulate)
-    return rpc(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
-
-def storage(key_bytes):
-    r = rpc(f"/v1/service/{SID}/storage/{key_bytes.hex()}")
+def submit(payload): return rpc(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
+def storage(key):
+    r = rpc(f"/v1/service/{SID}/storage/{key.hex()}")
     return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
-
 def bal(asset, acct):
-    return int.from_bytes(storage((b"B" if asset == BASE else b"Q") + struct.pack("<I", acct)) or b"\0", "little")
-def u64(key):
-    v = storage(key); return int.from_bytes(v, "little") if v else 0
-
+    return int.from_bytes(storage(b"b" + struct.pack("<II", asset, acct)) or b"\0", "little")
+def mstate(prefix, market):
+    v = storage(prefix + struct.pack("<I", market)); return int.from_bytes(v, "little") if v else 0
 def h(s): print("\n\033[1;35m== " + s + "\033[0m")
 def line(s): print("   " + s)
 
 def main():
     h("Deploy the Marmalade DEX service")
     jam = open(JAM, "rb").read()
-    r = rpc("/v1/service", {"jam_hex": jam.hex()})
-    line(f"deployed marmalade-service ({len(jam)} bytes) -> service_id {r['service_id']}")
+    line(f"deployed ({len(jam)} bytes) -> service_id {rpc('/v1/service', {'jam_hex': jam.hex()})['service_id']}")
 
-    h("Fund three traders (Phase-2 faucet)")
-    submit(deposit(1, QUOTE, 100000)); line("Alice (acct1): +100000 quote")
-    submit(deposit(2, BASE,    1000)); line("Bob   (acct2): +1000 base")
-    submit(deposit(3, QUOTE, 100000)); line("Carol (acct3): +100000 quote")
+    h("Fund traders (one ledger, shared across all markets)")
+    submit(deposit(1, USD, 100000));  line("Alice: +100000 USD  (will buy in BOTH markets)")
+    submit(deposit(2, TOKA, 1000));   line("Bob:   +1000 TOKA")
+    submit(deposit(4, TOKB, 1000));   line("Dave:  +1000 TOKB")
 
-    # the round's orders (hidden during commit)
-    orders = {
-        "Alice buy 10 @100": (order(1, 1, BUY,  100, 10), b"alice-nonce-padding-32bytes-aaaa"),
-        "Bob  sell 6 @100":  (order(2, 2, SELL, 100,  6), b"bob---nonce-padding-32bytes-bbbb"),
-        "Carol buy 5 @98":   (order(3, 3, BUY,   98,  5), b"carol-nonce-padding-32bytes-cccc"),
-    }
-    h("Commit phase — orders are SEALED (only hashes go on-chain)")
-    for label, (o, nonce) in orders.items():
-        commit = hashlib.blake2s(o + nonce).digest()
-        submit(bytes([2]) + struct.pack("<I", struct.unpack_from("<I", o)[0]) + commit)
-        line(f"committed: {label}  ->  H = {commit.hex()[:16]}…  (the order itself is hidden)")
-    commits = storage(b"commits")
-    line(f"on-chain 'commits' = {len(commits)//32} hashes, {len(commits)} bytes — no prices/qtys visible")
+    h("Market A = TOKA/USD — a SEALED round (commit, then reveal+match)")
+    a_orders = [(order(1, 1, BUY, 100, 10), b"alice-A-nonce-padding-32bytes-aa"),
+                (order(2, 2, SELL, 100, 6), b"bob---A-nonce-padding-32bytes-bb")]
+    for o, n in a_orders:
+        submit(bytes([2]) + struct.pack("<II", M_A, struct.unpack_from("<I", o)[0]) + hashlib.blake2s(o + n).digest())
+    line("committed Alice buy + Bob sell (hidden — only hashes on-chain)")
+    commits = storage(b"commits" + struct.pack("<I", M_A))
+    reveals = b"".join(o + n for o, n in a_orders)
+    submit(match_hdr(3, M_A, TOKA, USD) + struct.pack("<I", len(commits)) + commits + reveals)
+    line(f"revealed+matched -> clearing price {mstate(b'lp', M_A)}, volume {mstate(b'cv', M_A)}")
 
-    h("Reveal + match — refine verifies each order against its commitment, then clears")
-    reveals = b"".join(o + nonce for (o, nonce) in orders.values())
-    submit(bytes([3]) + struct.pack("<I", len(commits)) + commits + reveals)
-    line(f"clearing price = {u64(b'last_price')}   (uniform price — everyone trades at it)")
-    line(f"matched volume this round (cum) = {u64(b'cum_volume')}")
+    h("Market B = TOKB/USD — a plaintext round (different price, clears independently)")
+    b_orders = order(1, 3, BUY, 50, 5) + order(4, 4, SELL, 50, 5)
+    submit(match_hdr(0, M_B, TOKB, USD) + b_orders)
+    line(f"matched -> clearing price {mstate(b'lp', M_B)}, volume {mstate(b'cv', M_B)}")
 
-    h("Settled balances")
-    line(f"Alice base={bal(BASE,1):>3}  quote={bal(QUOTE,1)}   (bought 6 @100 -> +6 base / -600 quote)")
-    line(f"Bob   base={bal(BASE,2):>3}  quote={bal(QUOTE,2)}      (sold 6 @100 -> -6 base / +600 quote)")
-    line(f"Carol base={bal(BASE,3):>3}  quote={bal(QUOTE,3)}   (didn't cross at 100 -> unchanged, rests)")
+    h("Two markets, two prices, ONE shared ledger")
+    line(f"Market A price = {mstate(b'lp', M_A)}   Market B price = {mstate(b'lp', M_B)}   (independent)")
+    line(f"Alice  USD={bal(USD,1)}  TOKA={bal(TOKA,1)}  TOKB={bal(TOKB,1)}")
+    line("       (USD 100000 − 600 [6 TOKA @100] − 250 [5 TOKB @50] = 99150, shared across both markets)")
+    line(f"Bob    USD={bal(USD,2)}  TOKA={bal(TOKA,2)}")
+    line(f"Dave   USD={bal(USD,4)}  TOKB={bal(TOKB,4)}")
 
-    h("Resting order book (partially/un-filled orders carry to the next round)")
-    book = storage(b"book")
-    for i in range(len(book) // 17):
-        a, oid, side, p, q = struct.unpack_from("<IIBII", book, i * 17)
-        line(f"resting: acct{a} {'BUY ' if side == BUY else 'SELL'} {q} @ {p}")
+    h("Resting book (Market A) + cancel")
+    def show_book(m):
+        bk = storage(b"book" + struct.pack("<I", m))
+        for i in range(len(bk) // 17):
+            a, oid, side, p, q = struct.unpack_from("<IIBII", bk, i * 17)
+            line(f"resting: acct{a} {'BUY ' if side==BUY else 'SELL'} {q} @ {p} (order {oid})")
+        return len(bk) // 17
+    show_book(M_A)
+    submit(bytes([4]) + struct.pack("<III", M_A, 1, 1))   # Alice cancels her resting buy (order 1)
+    line(f"after Alice cancels order 1 -> {show_book(M_A)} resting orders")
 
-    h("Cancel — Carol cancels her resting buy (acct3, order 3)")
-    submit(bytes([4]) + struct.pack("<II", 3, 3))   # [TAG_CANCEL][account][order_id]
-    book = storage(b"book")
-    line(f"resting orders now: {len(book) // 17}")
-    for i in range(len(book) // 17):
-        a, oid, side, p, q = struct.unpack_from("<IIBII", book, i * 17)
-        line(f"resting: acct{a} {'BUY ' if side == BUY else 'SELL'} {q} @ {p}  (Carol's is gone)")
+    h("MEV-resistance — an UNCOMMITTED order is rejected")
+    before = bal(USD, 1)
+    submit(match_hdr(3, M_A, TOKA, USD) + struct.pack("<I", 0) + order(1, 99, BUY, 100, 5) + bytes(32))
+    line(f"Alice USD {before} -> {bal(USD,1)}  ->  {'REJECTED ✓' if before == bal(USD,1) else 'LEAKED ✗'}")
 
-    h("MEV-resistance — an UNCOMMITTED order is rejected (can't be injected post-seal)")
-    forged = order(3, 99, BUY, 100, 5) + bytes(32)
-    before = bal(QUOTE, 3)
-    submit(bytes([3]) + struct.pack("<I", 0) + forged)   # empty commit set
-    after = bal(QUOTE, 3)
-    line(f"Carol quote before={before} after={after}  ->  {'REJECTED ✓ (unchanged)' if before == after else 'LEAKED ✗'}")
-
-    print("\n\033[1;32mMarmalade: a trustless, MEV-resistant order-book auction cleared in JAM's Refine.\033[0m")
+    print("\n\033[1;32mMarmalade: parallel, trustless, MEV-resistant order-book auctions on JAM.\033[0m")
 
 if __name__ == "__main__":
     try:

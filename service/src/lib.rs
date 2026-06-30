@@ -16,24 +16,24 @@ declare_service!(Marmalade);
 struct Marmalade;
 
 // payload / work-output tags
-const TAG_MATCH: u8 = 0; // a sealed batch of PLAINTEXT orders to clear + settle
-const TAG_DEPOSIT: u8 = 1; // fund a trader's balance (Phase-2 faucet; real custody = Phase 3)
-const TAG_COMMIT: u8 = 2; // commit a hidden order: H(order ‖ nonce) — front-running resistance
-const TAG_REVEAL: u8 = 3; // reveal+match a batch: verify each order against its commitment
-const TAG_CANCEL: u8 = 4; // cancel a resting order by (account, id) — owner-authenticated
+const TAG_MATCH: u8 = 0; // plaintext batch for one market: [tag][market][base][quote][orders…]
+const TAG_DEPOSIT: u8 = 1; // [tag][account][asset_id][amount] — fund a balance (Phase-2 faucet)
+const TAG_COMMIT: u8 = 2; // [tag][market][account][commitment(32)] — seal a hidden order
+const TAG_REVEAL: u8 = 3; // [tag][market][base][quote][commits_len][commits][reveals] — reveal+match
+const TAG_CANCEL: u8 = 4; // [tag][market][account][order_id] — cancel a resting order
 
-const ASSET_BASE: u8 = 0;
-const ASSET_QUOTE: u8 = 1;
 const NONCE_LEN: usize = 32;
 const REVEAL_LEN: usize = wire::ORDER_LEN + NONCE_LEN; // order(17) ‖ nonce(32)
 
+fn ru32(b: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
+}
 fn le_u64(b: &[u8]) -> u64 {
     let mut x = [0u8; 8];
     let n = core::cmp::min(8, b.len());
     x[..n].copy_from_slice(&b[..n]);
     u64::from_le_bytes(x)
 }
-
 fn commitment(reveal_bytes: &[u8]) -> [u8; 32] {
     let mut h = Blake2s256::new();
     h.update(reveal_bytes);
@@ -43,29 +43,39 @@ fn commitment(reveal_bytes: &[u8]) -> [u8; 32] {
     a
 }
 
-// balance storage key: "B"|"Q" ++ account(4 LE)
-fn bal_key(asset: u8, account: u32) -> Vec<u8> {
-    let mut k = Vec::with_capacity(5);
-    k.push(if asset == ASSET_BASE { b'B' } else { b'Q' });
+// balance key: "b" ‖ asset_id(4) ‖ account(4) — balances are global (cross-market);
+// a market just names which two assets it trades.
+fn bal_key(asset: u32, account: u32) -> Vec<u8> {
+    let mut k = Vec::with_capacity(9);
+    k.push(b'b');
+    k.extend_from_slice(&asset.to_le_bytes());
     k.extend_from_slice(&account.to_le_bytes());
     k
 }
-fn get_bal(asset: u8, account: u32) -> u64 {
+fn get_bal(asset: u32, account: u32) -> u64 {
     get_storage(&bal_key(asset, account)).map(|v| le_u64(&v)).unwrap_or(0)
 }
-fn set_bal(asset: u8, account: u32, v: u64) {
+fn set_bal(asset: u32, account: u32, v: u64) {
     set_storage(&bal_key(asset, account), &v.to_le_bytes()).ok();
 }
+// per-market state key: prefix ‖ market(4)
+fn mkey(prefix: &[u8], market: u32) -> Vec<u8> {
+    let mut k = Vec::with_capacity(prefix.len() + 4);
+    k.extend_from_slice(prefix);
+    k.extend_from_slice(&market.to_le_bytes());
+    k
+}
 
-// clear a set of orders and produce the settlement+book work-output (the form
-// accumulate settles). Shared by the plaintext (TAG_MATCH) and sealed (TAG_REVEAL)
-// paths — only how the order set is obtained differs.
-fn match_output(orders: &[Order]) -> Vec<u8> {
+// clear a market's orders → work-output: [TAG_MATCH][market][base][quote][settle_len][settle][book]
+fn match_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8> {
     let c = clear(orders);
     let settle = wire::encode_settlement(c.price, orders, &c);
     let book = wire::encode_orders(&resting(orders, &c));
-    let mut out = Vec::with_capacity(5 + settle.len() + book.len());
+    let mut out = Vec::with_capacity(17 + settle.len() + book.len());
     out.push(TAG_MATCH);
+    out.extend_from_slice(&market.to_le_bytes());
+    out.extend_from_slice(&base.to_le_bytes());
+    out.extend_from_slice(&quote.to_le_bytes());
     out.extend_from_slice(&(settle.len() as u32).to_le_bytes());
     out.extend_from_slice(&settle);
     out.extend_from_slice(&book);
@@ -85,32 +95,20 @@ impl Service for Marmalade {
             return Vec::new().into();
         }
         match data[0] {
-            // plaintext batch → clear + settle
-            TAG_MATCH => match_output(&wire::decode_orders(&data[1..])).into(),
-
-            // fund a balance (echo for accumulate)
-            TAG_DEPOSIT => data.into(),
-
-            // commit a hidden order (echo the [tag][account][commitment] for accumulate)
-            TAG_COMMIT => data.into(),
-
-            // cancel a resting order (echo [tag][account][order_id] for accumulate)
-            TAG_CANCEL => data.into(),
-
-            // reveal + match: only orders whose H(order‖nonce) matches a recorded
-            // commitment are admitted to the auction → you cannot inject an order
-            // you didn't commit before the batch sealed. Layout:
-            //   [TAG][commits_len:u32][commits (32B each)][reveals (49B each)]
-            TAG_REVEAL => {
-                if data.len() < 5 {
+            TAG_MATCH if data.len() >= 13 => {
+                let (market, base, quote) = (ru32(&data, 1), ru32(&data, 5), ru32(&data, 9));
+                match_output(market, base, quote, &wire::decode_orders(&data[13..])).into()
+            }
+            // echoes for accumulate
+            TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL => data.into(),
+            TAG_REVEAL if data.len() >= 17 => {
+                let (market, base, quote) = (ru32(&data, 1), ru32(&data, 5), ru32(&data, 9));
+                let cl = ru32(&data, 13) as usize;
+                if data.len() < 17 + cl {
                     return Vec::new().into();
                 }
-                let cl = u32::from_le_bytes([data[1], data[2], data[3], data[4]]) as usize;
-                if data.len() < 5 + cl {
-                    return Vec::new().into();
-                }
-                let commits = &data[5..5 + cl];
-                let reveals = &data[5 + cl..];
+                let commits = &data[17..17 + cl];
+                let reveals = &data[17 + cl..];
                 let n_commit = commits.len() / 32;
                 let mut verified: Vec<Order> = Vec::new();
                 for i in 0..(reveals.len() / REVEAL_LEN) {
@@ -129,7 +127,7 @@ impl Service for Marmalade {
                         }
                     }
                 }
-                match_output(&verified).into()
+                match_output(market, base, quote, &verified).into()
             }
             _ => Vec::new().into(),
         }
@@ -149,53 +147,56 @@ impl Service for Marmalade {
                 continue;
             }
             match out[0] {
-                TAG_DEPOSIT if out.len() >= 1 + 4 + 1 + 8 => {
-                    let account = u32::from_le_bytes([out[1], out[2], out[3], out[4]]);
-                    let asset = out[5];
-                    let amount = le_u64(&out[6..14]);
+                // [tag][account][asset_id][amount]
+                TAG_DEPOSIT if out.len() >= 1 + 4 + 4 + 8 => {
+                    let account = ru32(&out, 1);
+                    let asset = ru32(&out, 5);
+                    let amount = le_u64(&out[9..17]);
                     set_bal(asset, account, get_bal(asset, account).saturating_add(amount));
                 }
-                // record a commitment (append its 32 bytes to the pending set)
-                TAG_COMMIT if out.len() >= 1 + 4 + 32 => {
-                    let mut commits = get_storage(b"commits").unwrap_or_default();
-                    commits.extend_from_slice(&out[5..5 + 32]);
-                    set_storage(b"commits", &commits).ok();
+                // [tag][market][account][commitment(32)]
+                TAG_COMMIT if out.len() >= 1 + 4 + 4 + 32 => {
+                    let market = ru32(&out, 1);
+                    let key = mkey(b"commits", market);
+                    let mut commits = get_storage(&key).unwrap_or_default();
+                    commits.extend_from_slice(&out[9..9 + 32]);
+                    set_storage(&key, &commits).ok();
                 }
-                // cancel a resting order by (account, id) — only the owner's matching
-                // (account, id) is removed from the book.
-                TAG_CANCEL if out.len() >= 1 + 4 + 4 => {
-                    let account = u32::from_le_bytes([out[1], out[2], out[3], out[4]]);
-                    let oid = u32::from_le_bytes([out[5], out[6], out[7], out[8]]);
-                    let orders = wire::decode_orders(&get_storage(b"book").unwrap_or_default());
+                // [tag][market][account][order_id]
+                TAG_CANCEL if out.len() >= 1 + 4 + 4 + 4 => {
+                    let market = ru32(&out, 1);
+                    let account = ru32(&out, 5);
+                    let oid = ru32(&out, 9);
+                    let book_key = mkey(b"book", market);
+                    let orders = wire::decode_orders(&get_storage(&book_key).unwrap_or_default());
                     let kept: Vec<Order> =
                         orders.into_iter().filter(|o| !(o.account == account && o.id == oid)).collect();
-                    set_storage(b"book", &wire::encode_orders(&kept)).ok();
+                    set_storage(&book_key, &wire::encode_orders(&kept)).ok();
                 }
-                TAG_MATCH if out.len() >= 5 => {
-                    let settle_len = u32::from_le_bytes([out[1], out[2], out[3], out[4]]) as usize;
-                    if out.len() < 5 + settle_len {
+                // [tag][market][base][quote][settle_len][settle][book]
+                TAG_MATCH if out.len() >= 17 => {
+                    let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
+                    let settle_len = ru32(&out, 13) as usize;
+                    if out.len() < 17 + settle_len {
                         continue;
                     }
-                    let settle = &out[5..5 + settle_len];
-                    let book = &out[5 + settle_len..];
-                    set_storage(b"book", book).ok();
-                    // a clearing consumes the pending commitments (the sealed round closed)
-                    set_storage(b"commits", &[]).ok();
+                    let settle = &out[17..17 + settle_len];
+                    let book = &out[17 + settle_len..];
+                    set_storage(&mkey(b"book", market), book).ok();
+                    set_storage(&mkey(b"commits", market), &[]).ok();
                     if let Some((price, entries)) = wire::decode_settlement(settle) {
-                        // apply conservation-checked per-account deltas (Σ=0 per asset)
+                        // conservation-checked deltas: base_delta in base asset, quote in quote
                         for (account, db, dq) in wire::settle_deltas(price, &entries) {
-                            let base = (get_bal(ASSET_BASE, account) as i64 + db).max(0) as u64;
-                            let quote = (get_bal(ASSET_QUOTE, account) as i64 + dq).max(0) as u64;
-                            set_bal(ASSET_BASE, account, base);
-                            set_bal(ASSET_QUOTE, account, quote);
+                            let nb = (get_bal(base, account) as i64 + db).max(0) as u64;
+                            let nq = (get_bal(quote, account) as i64 + dq).max(0) as u64;
+                            set_bal(base, account, nb);
+                            set_bal(quote, account, nq);
                         }
                         let volume: u64 =
                             entries.iter().filter(|e| e.side == Side::Buy).map(|e| e.qty as u64).sum();
-                        set_storage(b"last_price", &price.to_le_bytes()).ok();
-                        let rounds = get_storage(b"rounds").map(|v| le_u64(&v)).unwrap_or(0) + 1;
-                        set_storage(b"rounds", &rounds.to_le_bytes()).ok();
-                        let cum = get_storage(b"cum_volume").map(|v| le_u64(&v)).unwrap_or(0) + volume;
-                        set_storage(b"cum_volume", &cum.to_le_bytes()).ok();
+                        set_storage(&mkey(b"lp", market), &price.to_le_bytes()).ok();
+                        let cum = get_storage(&mkey(b"cv", market)).map(|v| le_u64(&v)).unwrap_or(0) + volume;
+                        set_storage(&mkey(b"cv", market), &cum.to_le_bytes()).ok();
                     }
                 }
                 _ => {}

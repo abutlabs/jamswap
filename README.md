@@ -43,9 +43,13 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   threshold/time-lock encryption (no reveal round) is the stronger upgrade.
 - ✅ **Cancel** — owner-authenticated removal of a resting order by `(account, id)`
   (verified e2e in the demo). Order lifecycle: submit → rest → fill or cancel.
+- ✅ **Multi-market** — each work-item names a market + its `base`/`quote` assets;
+  markets clear **independently** (one work-package per market per round = JAM's
+  per-core parallelism) into per-market books, sharing one global balance ledger.
+  Demo runs two pairs (TOKA/USD @100, TOKB/USD @50) with a trader's USD shared.
 - ◻️ Then: round sequencing via historical-lookup, real custody via `on_transfer`
-  (deposit/withdraw + reconciliation), threshold-encryption upgrade, multi-market
-  parallelism across cores, off-chain infra, trading UI.
+  (deposit/withdraw + reconciliation), threshold-encryption upgrade, off-chain
+  infra (relay/builder/indexer/API), trading UI.
 
 CI (`.github/workflows/ci.yml`) runs the matching-engine property tests
 (conservation, determinism, settlement Σ-deltas == 0) on every push — the
