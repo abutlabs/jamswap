@@ -75,6 +75,10 @@
   .mrow .s-buy { color:var(--green); font-weight:700; } .mrow .s-sell { color:var(--red); font-weight:700; }
   .mrow .who { color:var(--dim); margin-left:auto; }
   .seal-summary { font-size:11px; color:var(--gold); margin:2px 0 10px; }
+  /* JAMKB footprint meter */
+  .fp-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:14px; align-items:end; }
+  .fp-n { font-size:22px; font-weight:700; } .fp-l { font-size:11px; color:var(--dim); }
+  #topup { width:100%; }
   #toasts { position:fixed; top:16px; right:16px; display:flex; flex-direction:column; gap:8px; z-index:50; }
   .toast { padding:11px 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel2);
            font-size:13px; min-width:230px; box-shadow:0 8px 24px rgba(0,0,0,.4); animation:slidein .18s ease; }
@@ -104,6 +108,23 @@
   <!-- ===================== TRADE ===================== -->
   <section id="tab-trade">
     <div class="mtabs" id="mtabs"></div>
+
+    <section class="panel" id="jamkb" style="margin-bottom:16px">
+      <h2>JAM state footprint → JAMKB &nbsp;<span id="fp-solvent" class="badge"></span></h2>
+      <div class="fp-grid">
+        <div><div class="fp-n mono" id="fp-items">0</div><div class="fp-l">storage items</div></div>
+        <div><div class="fp-n mono" id="fp-octets">0 B</div><div class="fp-l">octets in validator RAM</div></div>
+        <div><div class="fp-n mono" id="fp-req">0</div><div class="fp-l">JSMBK required (1 / KB)</div></div>
+        <div><div class="fp-n mono" id="fp-held">0</div><div class="fp-l">JSMBK held (reserve)</div></div>
+        <div><div class="fp-n mono" id="fp-head">0</div><div class="fp-l">headroom</div></div>
+        <div><button id="topup" class="small ghost">Top up reserve +100</button></div>
+      </div>
+      <div class="note">This service keeps its order books &amp; sealed commitments in <b>validator RAM</b>.
+        Under <b>JAMKB</b>, 1 JSMBK backs 1 KB of that footprint. Place orders → footprint grows;
+        the 6 s auction clears them → it shrinks. Read-only meter today; node enforcement is Phase 3
+        (<a href="https://github.com/abutlabs/jamswap/blob/main/docs/JAMKB.md" target="_blank">docs/JAMKB.md</a>).</div>
+    </section>
+
     <div class="grid3">
       <!-- order book + auction + mempool -->
       <section class="panel">
@@ -327,6 +348,28 @@ async function refreshMine(){
   }).join("");
   $("mine").querySelectorAll("[data-cancel]").forEach(btn => btn.onclick = () => cancelOrder(+btn.dataset.cancel));
 }
+async function refreshFootprint(){
+  try {
+    const f = await api("/api/footprint");
+    if (f.available === false){
+      $("fp-solvent").textContent = "node upgrade needed (≥ node-v0.4.0)";
+      $("fp-solvent").className = "badge seal"; return;
+    }
+    $("fp-items").textContent = f.items;
+    $("fp-octets").textContent = f.octets + " B";
+    $("fp-req").textContent = f.jamkb_required;
+    $("fp-held").textContent = f.jamkb_held;
+    $("fp-head").textContent = f.headroom;
+    const b = $("fp-solvent");
+    b.textContent = f.solvent ? "✓ backed" : "⚠ under-funded";
+    b.className = "badge " + (f.solvent ? "pub" : "seal");
+  } catch(e){}
+}
+$("topup").onclick = async () => {
+  try { await api("/api/deposit", { account: 4294967294, asset: 2, amount: 100 });  // STATE_ACCOUNT, JSMBK
+    toast("Topped up state reserve +100 JSMBK", "ok"); refreshFootprint(); }
+  catch(e){ toast("Top-up failed: "+e, "err"); }
+};
 async function cancelOrder(oid){
   try { const r = await api("/api/cancel_pending", { account:myAccount(), order_id:oid });
     toast(r.removed ? `Cancelled order #${oid}.` : `Order #${oid} already cleared.`, r.removed?"ok":"info"); }
@@ -397,8 +440,9 @@ function renderMarkets(){
 // ---------- boot ----------
 $("connect").onclick = connectWallet;
 $("chain-txt").textContent = "lasair · localhost";  $("chain").classList.add("live");
-renderMarkets(); subscribe(); refresh();
+renderMarkets(); subscribe(); refresh(); refreshFootprint();
 onAccountChange();
+setInterval(refreshFootprint, 2000);
 setInterval(()=>{ refreshBals(); refreshMine(); }, 6000);
 if (window.injectedWeb3 && Object.keys(window.injectedWeb3).length) setTimeout(connectWallet, 300);
 </script>

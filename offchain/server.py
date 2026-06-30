@@ -17,6 +17,7 @@ TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LI
 
 # assets + the six markets are config; the service itself is asset-agnostic.
 USDC, DOT, JSMBK = 0, 1, 2
+STATE_ACCOUNT = 0xFFFFFFFE             # the service's JAMKB (JSMBK) reserve backing its footprint
 AUCTION_SECS = 6                       # auctions clear every 6s, like JAM block production
 _lock = threading.Lock()              # guards the pending books across request + auction threads
 _next_auction = [0.0]                 # wall-clock of the next auction tick (for the UI countdown)
@@ -151,6 +152,19 @@ def api_cancel_pending(b):
     return {"ok": True, "removed": removed}
 def api_balance(q):
     return {"balance": bal(int(q["asset"]), int(q["account"]))}
+def api_footprint(q):
+    # the service's live state footprint (validator RAM) + the JAMKB it implies.
+    # JAMKB_held = the service's JSMBK reserve (STATE_ACCOUNT); 1 JSMBK = 1 KB.
+    try:
+        fp = node(f"/v1/service/{SID}/footprint")
+    except Exception:
+        # older lasair-node (< the footprint endpoint) — degrade gracefully
+        return {"available": False}
+    held = bal(JSMBK, STATE_ACCOUNT)
+    req = fp.get("jamkb_required", 0)
+    fp.update({"available": True, "jamkb_held": held, "headroom": held - req,
+               "solvent": held >= req, "state_account": STATE_ACCOUNT})
+    return fp
 
 ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
                "/api/list": api_list, "/api/order": api_order, "/api/round": api_round,
@@ -163,7 +177,8 @@ def ensure_markets():
     for m, base, quote in DEFAULT_MARKETS:
         try: api_list({"market": m, "base": base, "quote": quote})
         except Exception as e: print("list failed", m, e)
-ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine}
+ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
+              "/api/footprint": api_footprint}
 
 def auction_loop():
     # clear every market every AUCTION_SECS, mirroring JAM's 6s block cadence. Only
