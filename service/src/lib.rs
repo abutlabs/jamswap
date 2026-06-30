@@ -22,6 +22,7 @@ const TAG_COMMIT: u8 = 2; // [tag][market][account][commitment(32)] — seal a h
 const TAG_REVEAL: u8 = 3; // [tag][market][base][quote][commits_len][commits][reveals] — reveal+match
 const TAG_CANCEL: u8 = 4; // [tag][market][account][order_id] — cancel a resting order
 const TAG_WITHDRAW: u8 = 5; // [tag][account][asset_id][amount] — debit balance (+ custody)
+const TAG_LIST: u8 = 6; // [tag][market][base][quote] — list a market (canonical assets)
 
 // trading fee: a flat fee on matched quote notional (FBA has no maker/taker), paid
 // by both sides into the treasury account (in the market's quote asset). 30 bps.
@@ -87,6 +88,11 @@ fn get_cust(asset: u32) -> u64 {
 fn set_cust(asset: u32, v: u64) {
     set_storage(&cust_key(asset), &v.to_le_bytes()).ok();
 }
+// the canonical (base, quote) a market was listed with, if any.
+fn market_assets(market: u32) -> Option<(u32, u32)> {
+    let v = get_storage(&mkey(b"mkt", market))?;
+    if v.len() >= 8 { Some((ru32(&v, 0), ru32(&v, 4))) } else { None }
+}
 
 // clear a market's orders → work-output: [TAG_MATCH][market][base][quote][settle_len][settle][book]
 fn match_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8> {
@@ -122,7 +128,7 @@ impl Service for Marmalade {
                 match_output(market, base, quote, &wire::decode_orders(&data[13..])).into()
             }
             // echoes for accumulate
-            TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW => data.into(),
+            TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_LIST => data.into(),
             TAG_REVEAL if data.len() >= 17 => {
                 let (market, base, quote) = (ru32(&data, 1), ru32(&data, 5), ru32(&data, 9));
                 let cl = ru32(&data, 13) as usize;
@@ -207,9 +213,27 @@ impl Service for Marmalade {
                         orders.into_iter().filter(|o| !(o.account == account && o.id == oid)).collect();
                     set_storage(&book_key, &wire::encode_orders(&kept)).ok();
                 }
+                // [tag][market][base][quote] — list a market with canonical assets
+                TAG_LIST if out.len() >= 1 + 4 + 4 + 4 => {
+                    let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
+                    if market_assets(market).is_none() {
+                        let mut v = Vec::with_capacity(8);
+                        v.extend_from_slice(&base.to_le_bytes());
+                        v.extend_from_slice(&quote.to_le_bytes());
+                        set_storage(&mkey(b"mkt", market), &v).ok();
+                        // append to the discoverable market index
+                        let mut idx = get_storage(b"markets").unwrap_or_default();
+                        idx.extend_from_slice(&market.to_le_bytes());
+                        set_storage(b"markets", &idx).ok();
+                    }
+                }
                 // [tag][market][base][quote][settle_len][settle][book]
                 TAG_MATCH if out.len() >= 17 => {
                     let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
+                    // integrity: the market must be listed with exactly these assets
+                    if market_assets(market) != Some((base, quote)) {
+                        continue; // unlisted or asset-mismatched market — reject the round
+                    }
                     let settle_len = ru32(&out, 13) as usize;
                     if out.len() < 17 + settle_len {
                         continue;

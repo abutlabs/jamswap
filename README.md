@@ -63,6 +63,9 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   reports market quality (fill rate, price stability, fee revenue) and **asserts
   value conservation every round** — the economic stress test behind the
   production-ready claim.
+- ✅ **Market registry** — markets are *listed* with canonical assets before
+  trading; an unlisted or asset-mismatched market is rejected (verified e2e). A
+  discoverable market index backs market listing.
 - ◻️ Then: real `on_transfer` custody, round sequencing via historical-lookup,
   threshold-encryption upgrade, indexer + WebSocket feeds, wallet/signing in the UI,
   a W3F grant application.

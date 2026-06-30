@@ -39,6 +39,7 @@ books, sharing one global balance ledger.
 | 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) | admit only orders whose `H(order‖nonce)` ∈ commits, then clear | (output is a `MATCH` settlement → same path) |
 | 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
 | 5 | `WITHDRAW` | account ‖ asset_id ‖ amount(u64) | echo | debit balance + custody, **only if funded** (no overdraft) |
+| 6 | `LIST` | market ‖ base ‖ quote | echo | register a market's canonical assets (+ index it). A `MATCH`/`REVEAL` for an unlisted or asset-mismatched market is **rejected**. |
 
 `refine` for `MATCH`/`REVEAL` emits:
 `[0]‖[market:u32]‖[base:u32]‖[quote:u32]‖[settle_len:u32]‖[settlement]‖[resting book]`.
@@ -59,6 +60,8 @@ Settlement moves the **market's** `base`/`quote` assets between traders.
 | `commits` ‖ market(4) | 32 B × n | that market's pending commitments (cleared on settlement) |
 | `lp` ‖ market(4), `cv` ‖ market(4) | u64 | that market's last price, cumulative volume |
 | `cust` ‖ asset_id(4) | u64 | custodied total of an asset (deposits +, withdrawals −) |
+| `mkt` ‖ market(4) | base(4) ‖ quote(4) | a listed market's canonical assets |
+| `markets` | market_id × n | the discoverable index of listed markets |
 
 ## Round lifecycle
 

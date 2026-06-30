@@ -50,6 +50,9 @@ def api_deposit(b):
 def api_withdraw(b):
     submit(bytes([5]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), int(b["amount"])))
     return {"ok": True, "balance": bal(int(b["asset"]), int(b["account"]))}
+def api_list(b):
+    submit(bytes([6]) + struct.pack("<III", int(b["market"]), int(b["base"]), int(b["quote"])))
+    return {"ok": True}
 def api_order(b):
     m = int(b["market"]); oid = next_oid[0]; next_oid[0] += 1
     side = BUY if b["side"] == "buy" else SELL
@@ -71,7 +74,14 @@ def api_balance(q):
     return {"balance": bal(int(q["asset"]), int(q["account"]))}
 
 ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
-               "/api/order": api_order, "/api/round": api_round}
+               "/api/list": api_list, "/api/order": api_order, "/api/round": api_round}
+
+# the markets the UI shows; listed once at startup so they're tradable.
+DEFAULT_MARKETS = [(1, 1, 0), (2, 2, 0)]  # (market, base=TOKA/TOKB, quote=USD)
+def ensure_markets():
+    for m, base, quote in DEFAULT_MARKETS:
+        try: api_list({"market": m, "base": base, "quote": quote})
+        except Exception as e: print("list failed", m, e)
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance}
 
 class H(BaseHTTPRequestHandler):
@@ -105,4 +115,6 @@ class H(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     print(f"marmalade off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
+    try: ensure_markets(); print("listed default markets:", DEFAULT_MARKETS)
+    except Exception as e: print("market listing skipped:", e)
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

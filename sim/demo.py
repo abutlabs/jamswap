@@ -47,6 +47,10 @@ def main():
     jam = open(JAM, "rb").read()
     line(f"deployed ({len(jam)} bytes) -> service_id {rpc('/v1/service', {'jam_hex': jam.hex()})['service_id']}")
 
+    h("List markets (canonical assets — trading an unlisted market is rejected)")
+    submit(bytes([6]) + struct.pack("<III", M_A, TOKA, USD)); line("listed TOKA/USD")
+    submit(bytes([6]) + struct.pack("<III", M_B, TOKB, USD)); line("listed TOKB/USD")
+
     h("Fund traders (one ledger, shared across all markets)")
     submit(deposit(1, USD, 100000));  line("Alice: +100000 USD  (will buy in BOTH markets)")
     submit(deposit(2, TOKA, 1000));   line("Bob:   +1000 TOKA")
