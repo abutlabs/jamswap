@@ -51,9 +51,13 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   that runs the round lifecycle (collect orders → read the book → assemble + submit
   the batch) and a single-page exchange UI (order book, place order, run round,
   balances, faucet) at `:8080`.
-- ◻️ Then: round sequencing via historical-lookup, real custody via `on_transfer`
-  (deposit/withdraw + reconciliation), threshold-encryption upgrade, indexer +
-  WebSocket feeds, wallet/signing in the UI, a W3F grant application.
+- ✅ **Asset lifecycle** — deposit → trade → **withdraw** with conserved accounting
+  and overdraft protection; a per-asset custody total whose invariant
+  (Σ balances == custody) holds by construction. (Mock custody; real `on_transfer`
+  backing is the Phase-3 upgrade, blocked on JAM's asset standard.)
+- ◻️ Then: real `on_transfer` custody, round sequencing via historical-lookup,
+  threshold-encryption upgrade, indexer + WebSocket feeds, wallet/signing in the UI,
+  a W3F grant application.
 
 CI (`.github/workflows/ci.yml`) runs the matching-engine property tests
 (conservation, determinism, settlement Σ-deltas == 0) on every push — the

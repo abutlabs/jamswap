@@ -47,6 +47,9 @@ def book_of(m):
 def api_deposit(b):
     submit(bytes([1]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), int(b["amount"])))
     return {"ok": True}
+def api_withdraw(b):
+    submit(bytes([5]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), int(b["amount"])))
+    return {"ok": True, "balance": bal(int(b["asset"]), int(b["account"]))}
 def api_order(b):
     m = int(b["market"]); oid = next_oid[0]; next_oid[0] += 1
     side = BUY if b["side"] == "buy" else SELL
@@ -67,7 +70,8 @@ def api_state(q):
 def api_balance(q):
     return {"balance": bal(int(q["asset"]), int(q["account"]))}
 
-ROUTES_POST = {"/api/deposit": api_deposit, "/api/order": api_order, "/api/round": api_round}
+ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
+               "/api/order": api_order, "/api/round": api_round}
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance}
 
 class H(BaseHTTPRequestHandler):

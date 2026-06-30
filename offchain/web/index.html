@@ -70,7 +70,7 @@
       <select id="fasset"><option value="0">USD</option><option value="1">TOKA</option><option value="2">TOKB</option></select>
       <input id="famt" class="mono" value="100000" />
     </div>
-    <button id="fund" class="ghost">Fund account</button>
+    <div class="seg"><button id="fund" class="ghost">Deposit</button><button id="wd" class="ghost">Withdraw</button></div>
   </section>
 </main>
 
@@ -108,6 +108,7 @@ $("ssell").onclick=()=>{side="sell"; $("ssell").className=""; $("sbuy").classNam
 $("place").onclick=async()=>{ await api("/api/order",{market:cur.id,base:cur.base,quote:cur.quote,account:+$("acct").value,side,price:+$("price_in").value,qty:+$("qty_in").value}); refresh(); };
 $("run").onclick=async()=>{ await api("/api/round",{market:cur.id,base:cur.base,quote:cur.quote}); refresh(); };
 $("fund").onclick=async()=>{ await api("/api/deposit",{account:+$("bacct").value,asset:+$("fasset").value,amount:+$("famt").value}); refreshBals(); };
+$("wd").onclick=async()=>{ await api("/api/withdraw",{account:+$("bacct").value,asset:+$("fasset").value,amount:+$("famt").value}); refreshBals(); };
 $("bacct").oninput=refreshBals;
 
 renderTabs(); refresh(); setInterval(refresh, 4000);

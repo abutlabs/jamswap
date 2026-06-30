@@ -38,6 +38,7 @@ books, sharing one global balance ledger.
 | 2 | `COMMIT` | market ‖ account ‖ commitment(32) | echo | append commitment to the market's pending set |
 | 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) | admit only orders whose `H(order‖nonce)` ∈ commits, then clear | (output is a `MATCH` settlement → same path) |
 | 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
+| 5 | `WITHDRAW` | account ‖ asset_id ‖ amount(u64) | echo | debit balance + custody, **only if funded** (no overdraft) |
 
 `refine` for `MATCH`/`REVEAL` emits:
 `[0]‖[market:u32]‖[base:u32]‖[quote:u32]‖[settle_len:u32]‖[settlement]‖[resting book]`.
@@ -57,6 +58,7 @@ Settlement moves the **market's** `base`/`quote` assets between traders.
 | `book` ‖ market(4) | orders blob | that market's resting order book |
 | `commits` ‖ market(4) | 32 B × n | that market's pending commitments (cleared on settlement) |
 | `lp` ‖ market(4), `cv` ‖ market(4) | u64 | that market's last price, cumulative volume |
+| `cust` ‖ asset_id(4) | u64 | custodied total of an asset (deposits +, withdrawals −) |
 
 ## Round lifecycle
 
@@ -90,8 +92,12 @@ Two layers, both proven e2e:
   reveal is public (order visible *after* reveal, but too late for that batch).
   **Threshold / time-lock encryption** (no reveal round, no griefing) is the
   stronger upgrade — scoped, not yet built.
-- Deposits are a Phase-2 **faucet stub**; real self-custody (`on_transfer` +
-  Σbalances == custodied reconciliation) is Phase 3.
+- Deposits/withdrawals are a **mock custody** model (a faucet credit / a funded
+  debit) with the accounting invariant **Σ(balances of an asset) == `cust`[asset]**
+  holding by construction (deposit/withdraw touch balance + custody equally; trades
+  conserve). **Real self-custody** — backing deposits with actual on-chain asset
+  transfers via `on_transfer`, against the JAM token standard — is the Phase-3
+  upgrade, blocked on JAM asset-service maturity (the plan starts on a mock).
 
 ## Safety invariants (tested)
 

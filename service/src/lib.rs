@@ -21,6 +21,7 @@ const TAG_DEPOSIT: u8 = 1; // [tag][account][asset_id][amount] — fund a balanc
 const TAG_COMMIT: u8 = 2; // [tag][market][account][commitment(32)] — seal a hidden order
 const TAG_REVEAL: u8 = 3; // [tag][market][base][quote][commits_len][commits][reveals] — reveal+match
 const TAG_CANCEL: u8 = 4; // [tag][market][account][order_id] — cancel a resting order
+const TAG_WITHDRAW: u8 = 5; // [tag][account][asset_id][amount] — debit balance (+ custody)
 
 const NONCE_LEN: usize = 32;
 const REVEAL_LEN: usize = wire::ORDER_LEN + NONCE_LEN; // order(17) ‖ nonce(32)
@@ -65,6 +66,22 @@ fn mkey(prefix: &[u8], market: u32) -> Vec<u8> {
     k.extend_from_slice(&market.to_le_bytes());
     k
 }
+// custodied total per asset: deposits add, withdrawals subtract. The accounting
+// invariant Σ(balances of an asset) == custody[asset] holds by construction —
+// deposits/withdrawals touch a balance and custody equally, and trades conserve
+// (settle_deltas Σ == 0). Key: "cust" ‖ asset(4).
+fn cust_key(asset: u32) -> Vec<u8> {
+    let mut k = Vec::with_capacity(8);
+    k.extend_from_slice(b"cust");
+    k.extend_from_slice(&asset.to_le_bytes());
+    k
+}
+fn get_cust(asset: u32) -> u64 {
+    get_storage(&cust_key(asset)).map(|v| le_u64(&v)).unwrap_or(0)
+}
+fn set_cust(asset: u32, v: u64) {
+    set_storage(&cust_key(asset), &v.to_le_bytes()).ok();
+}
 
 // clear a market's orders → work-output: [TAG_MATCH][market][base][quote][settle_len][settle][book]
 fn match_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8> {
@@ -100,7 +117,7 @@ impl Service for Marmalade {
                 match_output(market, base, quote, &wire::decode_orders(&data[13..])).into()
             }
             // echoes for accumulate
-            TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL => data.into(),
+            TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW => data.into(),
             TAG_REVEAL if data.len() >= 17 => {
                 let (market, base, quote) = (ru32(&data, 1), ru32(&data, 5), ru32(&data, 9));
                 let cl = ru32(&data, 13) as usize;
@@ -153,6 +170,18 @@ impl Service for Marmalade {
                     let asset = ru32(&out, 5);
                     let amount = le_u64(&out[9..17]);
                     set_bal(asset, account, get_bal(asset, account).saturating_add(amount));
+                    set_cust(asset, get_cust(asset).saturating_add(amount));
+                }
+                // withdraw: debit balance + custody, only if funded (no overdraft)
+                TAG_WITHDRAW if out.len() >= 1 + 4 + 4 + 8 => {
+                    let account = ru32(&out, 1);
+                    let asset = ru32(&out, 5);
+                    let amount = le_u64(&out[9..17]);
+                    let b = get_bal(asset, account);
+                    if b >= amount {
+                        set_bal(asset, account, b - amount);
+                        set_cust(asset, get_cust(asset).saturating_sub(amount));
+                    }
                 }
                 // [tag][market][account][commitment(32)]
                 TAG_COMMIT if out.len() >= 1 + 4 + 4 + 32 => {
