@@ -149,8 +149,10 @@
 
         <h2>Resting book (on-chain)</h2>
         <table><thead><tr><th>price</th><th>qty</th><th>side</th></tr></thead><tbody id="book"></tbody></table>
-        <div class="note">Sealed orders publish only a hash on-chain; their price &amp; size stay hidden
-          until the auction reveals and clears them.</div>
+        <div class="note">Sealed orders publish only a hash on-chain — price &amp; size stay hidden
+          until their auction. They are <b>immediate-or-cancel</b>: they match in that auction or
+          expire, and <b>never rest in the public book</b> exposing their terms. (The reveal itself
+          is briefly public on-chain — persistent privacy needs threshold encryption; see docs.)</div>
       </section>
 
       <!-- place order -->
@@ -171,7 +173,7 @@
           <div><label>Qty (base)</label><input id="qty_in" class="mono" value="10" inputmode="numeric" /></div>
         </div>
         <label class="check"><input type="checkbox" id="sealchk" />
-          🔒 Seal this order <span style="color:var(--dim)">(hide price &amp; size until it clears)</span></label>
+          🔒 Seal this order <span style="color:var(--dim)">(hidden until its auction; match-or-expire)</span></label>
         <button id="place" style="margin-top:14px" disabled>Place order</button>
         <div class="note" id="place-note">Signs in your wallet, then joins the next 6 s auction.</div>
       </section>

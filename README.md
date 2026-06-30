@@ -134,8 +134,11 @@ The UI at `:8080` (`offchain/`) is wallet-native. The flow:
 5. **Watch the mempool** — a toggle shows *the data sitting in the service*: each queued
    order tagged **🌐 LIMIT** / **⚡ MARKET** (terms visible) or **🔒 SEALED**. Sealed
    orders publish only a Blake2s256 **commitment** on-chain (`TAG_COMMIT`); price and
-   size stay hidden until the batch reveals and clears (`TAG_REVEAL`) — real
-   commit-reveal MEV-resistance, not a mock.
+   size stay hidden until their auction reveals and clears them (`TAG_REVEAL`) — real
+   commit-reveal MEV-resistance, not a mock. Sealed orders are **immediate-or-cancel**:
+   they match in that auction or expire, and **never rest in the public book** exposing
+   their terms. (The reveal is briefly public on-chain — persistent privacy across rounds
+   needs threshold/time-lock encryption, the documented upgrade in [`docs/SECURITY.md`](docs/SECURITY.md).)
 6. **Your pending orders** — *decrypted for you* (you hold the nonce), with **cancel**
    for any not yet cleared. Resting (on-chain) orders cancel via `TAG_CANCEL`.
 

@@ -110,6 +110,23 @@ fn match_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8>
     out
 }
 
+// a SEALED batch clears immediate-or-cancel: settle whatever crossed, but emit NO resting
+// book. A revealed sealed order therefore never persists in the public book exposing its
+// price/size, and the reveal can't clobber the public resting book. Output is settle-only:
+// [TAG_REVEAL][market][base][quote][settle_len][settle]
+fn reveal_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8> {
+    let c = clear(orders);
+    let settle = wire::encode_settlement(c.price, orders, &c);
+    let mut out = Vec::with_capacity(17 + settle.len());
+    out.push(TAG_REVEAL);
+    out.extend_from_slice(&market.to_le_bytes());
+    out.extend_from_slice(&base.to_le_bytes());
+    out.extend_from_slice(&quote.to_le_bytes());
+    out.extend_from_slice(&(settle.len() as u32).to_le_bytes());
+    out.extend_from_slice(&settle);
+    out
+}
+
 impl Service for Jamswap {
     fn refine(
         _core_index: CoreIndex,
@@ -155,7 +172,7 @@ impl Service for Jamswap {
                         }
                     }
                 }
-                match_output(market, base, quote, &verified).into()
+                reveal_output(market, base, quote, &verified).into()
             }
             _ => Vec::new().into(),
         }
@@ -225,6 +242,37 @@ impl Service for Jamswap {
                         let mut idx = get_storage(b"markets").unwrap_or_default();
                         idx.extend_from_slice(&market.to_le_bytes());
                         set_storage(b"markets", &idx).ok();
+                    }
+                }
+                // sealed reveal (immediate-or-cancel): [tag][market][base][quote][settle_len][settle]
+                // — settle whatever crossed; write NO book (sealed remainder expires, never rests
+                // publicly) and don't touch the public book (so it can't clobber it).
+                TAG_REVEAL if out.len() >= 17 => {
+                    let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
+                    if market_assets(market) != Some((base, quote)) {
+                        continue;
+                    }
+                    let settle_len = ru32(&out, 13) as usize;
+                    if out.len() < 17 + settle_len {
+                        continue;
+                    }
+                    let settle = &out[17..17 + settle_len];
+                    set_storage(&mkey(b"commits", market), &[]).ok(); // commitments consumed
+                    if let Some((price, entries)) = wire::decode_settlement(settle) {
+                        if !entries.is_empty() {
+                            for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_BPS, FEE_ACCOUNT) {
+                                let apply = |bal: u64, d: i128| -> u64 {
+                                    (bal as i128 + d).clamp(0, u64::MAX as i128) as u64
+                                };
+                                set_bal(base, account, apply(get_bal(base, account), db));
+                                set_bal(quote, account, apply(get_bal(quote, account), dq));
+                            }
+                            let volume: u64 =
+                                entries.iter().filter(|e| e.side == Side::Buy).map(|e| e.qty as u64).sum();
+                            set_storage(&mkey(b"lp", market), &price.to_le_bytes()).ok();
+                            let cum = get_storage(&mkey(b"cv", market)).map(|v| le_u64(&v)).unwrap_or(0) + volume;
+                            set_storage(&mkey(b"cv", market), &cum.to_le_bytes()).ok();
+                        }
                     }
                 }
                 // [tag][market][base][quote][settle_len][settle][book]

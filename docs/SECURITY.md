@@ -37,6 +37,16 @@ carries the asterisk noted here.
   (chooses which orders/book to include); that role is inherently trusted in any
   exchange, but the **matching over the included inputs is fully validator-audited**,
   and orders are **sealed until the batch closes** (no intra-round front-running).
+- **What sealing does and doesn't hide (precise model).** A sealed order is hidden
+  (only its Blake2s256 commitment is on-chain) **until the auction it clears in**. At
+  that auction it is revealed on-chain to be matched — so the reveal is **transiently
+  public**. Sealed orders are **immediate-or-cancel**: any unmatched remainder expires
+  rather than resting, so a sealed order **never persists in the public book with its
+  terms exposed** (this was a real bug — a revealed sealed order used to rest publicly;
+  fixed by emitting no resting book on the reveal path). The MEV protection is therefore
+  *intra-round* (you can't see or front-run an order before its batch seals).
+  **Persistent privacy across rounds** (an order that rests without ever revealing) needs
+  **threshold/time-lock encryption** — the documented upgrade, not yet built.
 
 ## Sound (and why)
 
