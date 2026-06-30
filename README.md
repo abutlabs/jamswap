@@ -45,6 +45,19 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
   `on_transfer` (deposit/withdraw + reconciliation), threshold-encryption upgrade,
   multi-market parallelism, off-chain infra, trading UI.
 
+## Run the demo (one command)
+
+Watch a sealed-order batch auction clear in JAM's Refine — built from source:
+
+```sh
+docker compose up --build
+```
+
+Brings up a lasair-node and runs [`sim/demo.py`](sim/demo.py): deploy → fund
+traders → **sealed** commit/reveal round → uniform-price clearing → settlement →
+resting order book → MEV-resistance (an uncommitted order is rejected). Full
+architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
 ## The matching engine
 
 ```sh

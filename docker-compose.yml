@@ -1,0 +1,34 @@
+# Watch the Marmalade DEX clear a sealed-order batch auction in JAM's Refine —
+# one command, built from source for your architecture:
+#
+#   docker compose up --build
+#
+# Brings up a lasair-node (the JAM node + operator RPC, built from ../lasair) and
+# runs the narrated trading demo (sim/demo.py): deploy -> fund traders -> sealed
+# commit/reveal round -> uniform-price clearing -> settlement -> resting book ->
+# MEV-resistance. See docs/ARCHITECTURE.md.
+
+services:
+  lasair-node:
+    build:
+      context: ../lasair
+      dockerfile: Dockerfile.node
+    image: lasair-node:local
+    ports:
+      - "19900:19900"
+    restart: unless-stopped
+    # healthcheck (GET /v1/healthz) is baked into the image
+
+  demo:
+    image: python:3-slim
+    depends_on:
+      lasair-node:
+        condition: service_healthy
+    environment:
+      LASAIR_RPC: http://lasair-node:19900
+      JAM: /work/marmalade-service.jam
+    volumes:
+      - ./service/marmalade-service.jam:/work/marmalade-service.jam:ro
+      - ./sim/demo.py:/work/demo.py:ro
+    command: ["python3", "/work/demo.py"]
+    restart: "no"
