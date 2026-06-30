@@ -9,8 +9,11 @@ balance/state reads. Stdlib only (http.server, urllib, struct).
 
   LASAIR_RPC=http://localhost:19900 PORT=8080 python3 offchain/server.py
 """
-import json, os, struct, time, urllib.request
+import hashlib, json, os, secrets, struct, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# service payload tags (must match service/src/lib.rs)
+TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST = range(7)
 
 RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
 # Service id: an explicit SERVICE_ID wins; otherwise we DEPLOY the blob ($JAM) at
@@ -22,8 +25,15 @@ PORT = int(os.environ.get("PORT", "8080"))
 WEB = os.path.join(os.path.dirname(__file__), "web")
 
 BUY, SELL = 0, 1
-pending = {}      # market_id -> list of (account, oid, side, price, qty)
+# market_id -> list of dicts {account, oid, side, price, qty, sealed, address, reveal?}
+# A SEALED order's price/qty are never exposed in the public mempool (/api/state) —
+# only its on-chain commitment hash (Blake2s256(order17 ‖ nonce32)) is, exactly as a
+# front-runner watching the chain would see it. The terms are revealed at round time.
+pending = {}
 next_oid = [1000]
+
+def commitment(reveal_bytes):     # must match service commitment(): Blake2s256, 32B
+    return hashlib.blake2s(reveal_bytes, digest_size=32).digest()
 
 # ---- node RPC + wire ------------------------------------------------------
 def node(path, body=None):
@@ -60,20 +70,49 @@ def api_list(b):
 def api_order(b):
     m = int(b["market"]); oid = next_oid[0]; next_oid[0] += 1
     side = BUY if b["side"] == "buy" else SELL
-    pending.setdefault(m, []).append((int(b["account"]), oid, side, int(b["price"]), int(b["qty"])))
-    return {"ok": True, "order_id": oid, "pending": len(pending[m])}
+    acct, price, qty = int(b["account"]), int(b["price"]), int(b["qty"])
+    o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty,
+         "sealed": bool(b.get("sealed")), "address": b.get("address", "")}
+    if o["sealed"]:
+        # commit-reveal: publish ONLY the hash now (orders hidden on-chain), reveal at round
+        nonce = secrets.token_bytes(32)
+        o["reveal"] = order_bytes(acct, oid, side, price, qty) + nonce
+        submit(bytes([TAG_COMMIT]) + struct.pack("<II", m, acct) + commitment(o["reveal"]))
+    pending.setdefault(m, []).append(o)
+    return {"ok": True, "order_id": oid, "sealed": o["sealed"], "pending": len(pending[m])}
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
-    # the builder: resting book (from chain) + this round's pending orders
-    rest = storage(b"book" + struct.pack("<I", m))
-    body = b"".join(order_bytes(*o) for o in pending.get(m, []))
-    submit(bytes([0]) + struct.pack("<III", m, base, quote) + rest + body)
+    pend = pending.get(m, [])
+    sealed = [o for o in pend if o["sealed"]]
+    public = [o for o in pend if not o["sealed"]]
+    hdr = struct.pack("<III", m, base, quote)
+    # sealed batch: REVEAL the committed orders (the node re-checks each hash ∈ commits)
+    if sealed:
+        commits = b"".join(commitment(o["reveal"]) for o in sealed)
+        reveals = b"".join(o["reveal"] for o in sealed)
+        submit(bytes([TAG_REVEAL]) + hdr + struct.pack("<I", len(commits)) + commits + reveals)
+    # public batch: resting book (from chain) + this round's public orders -> MATCH
+    if public or not sealed:
+        rest = storage(b"book" + struct.pack("<I", m))
+        body = b"".join(order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"]) for o in public)
+        submit(bytes([TAG_MATCH]) + hdr + rest + body)
     pending[m] = []
-    return {"ok": True, "price": mstate(b"lp", m), "volume": mstate(b"cv", m), "book": book_of(m)}
+    return {"ok": True, "price": mstate(b"lp", m), "volume": mstate(b"cv", m),
+            "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public)}}
+def short(a):
+    return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a
 def api_state(q):
     m = int(q.get("market", "1"))
-    return {"price": mstate(b"lp", m), "volume": mstate(b"cv", m),
-            "book": book_of(m), "pending": len(pending.get(m, []))}
+    mempool = []
+    for o in pending.get(m, []):
+        e = {"side": "buy" if o["side"] == BUY else "sell", "sealed": o["sealed"],
+             "who": short(o.get("address", "")) or f"acct {o['account']}"}
+        # a sealed order's terms are NOT revealed in the public mempool — only that it exists
+        e["price"], e["qty"] = (None, None) if o["sealed"] else (o["price"], o["qty"])
+        mempool.append(e)
+    onchain_commits = len(storage(b"commits" + struct.pack("<I", m))) // 32
+    return {"price": mstate(b"lp", m), "volume": mstate(b"cv", m), "book": book_of(m),
+            "pending": len(pending.get(m, [])), "mempool": mempool, "sealed_onchain": onchain_commits}
 def api_balance(q):
     return {"balance": bal(int(q["asset"]), int(q["account"]))}
 

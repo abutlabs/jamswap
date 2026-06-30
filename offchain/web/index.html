@@ -5,74 +5,173 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Jamswap — order-book DEX on JAM</title>
 <style>
-  :root { --pink:#E6007A; --bg:#0e0e12; --panel:#17171d; --line:#2a2a33; --green:#21d07a; --red:#ff5470; --dim:#8a8a99; }
+  :root { --pink:#E6007A; --bg:#0e0e12; --panel:#17171d; --panel2:#1e1e26; --line:#2a2a33;
+          --green:#21d07a; --red:#ff5470; --dim:#8a8a99; --gold:#f5b14c; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:#e8e8ef; font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
   .mono { font-family:ui-monospace,"Roboto Mono",monospace; }
-  header { padding:16px 24px; border-bottom:1px solid var(--line); display:flex; align-items:baseline; gap:14px; }
+  a { color:var(--pink); }
+  header { padding:14px 24px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
   header h1 { margin:0; font-size:18px; letter-spacing:.04em; }
   header h1 b { color:var(--pink); }
-  header .sub { color:var(--dim); font-size:12px; }
-  .tabs { display:flex; gap:8px; padding:14px 24px 0; }
-  .tab { padding:7px 16px; border:1px solid var(--line); border-radius:8px 8px 0 0; cursor:pointer; color:var(--dim); }
-  .tab.active { color:#fff; border-color:var(--pink); background:var(--panel); }
-  main { display:grid; grid-template-columns: 1.2fr 1fr 1fr; gap:16px; padding:16px 24px; }
+  header .sub { color:var(--dim); font-size:12px; flex:1; }
+  /* wallet pill */
+  #wallet { display:flex; align-items:center; gap:8px; }
+  .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:5px 10px;
+          border:1px solid var(--line); border-radius:999px; color:var(--dim); background:var(--panel); }
+  .chip .dot { width:7px; height:7px; border-radius:50%; background:var(--dim); }
+  .chip.live .dot { background:var(--green); }
+  button { background:var(--pink); color:#fff; border:0; padding:10px; border-radius:8px; cursor:pointer;
+           font-weight:600; width:100%; transition:filter .12s, opacity .12s; }
+  button:hover:not(:disabled) { filter:brightness(1.12); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  button.ghost { background:transparent; border:1px solid var(--line); color:#e8e8ef; }
+  button.small { width:auto; padding:7px 14px; font-size:13px; }
+  /* tabs */
+  nav.tabs { display:flex; gap:4px; padding:12px 24px 0; }
+  nav.tabs .t { padding:9px 20px; border:1px solid transparent; border-bottom:0; border-radius:9px 9px 0 0;
+                cursor:pointer; color:var(--dim); font-weight:600; }
+  nav.tabs .t.active { color:#fff; background:var(--panel); border-color:var(--line); }
+  /* market subtabs */
+  .mtabs { display:flex; gap:8px; margin-bottom:14px; }
+  .mtab { padding:7px 16px; border:1px solid var(--line); border-radius:8px; cursor:pointer; color:var(--dim); }
+  .mtab.active { color:#fff; border-color:var(--pink); background:var(--panel2); }
+  main { padding:16px 24px; }
+  .grid3 { display:grid; grid-template-columns:1.25fr 1fr 1fr; gap:16px; }
+  .grid1 { max-width:560px; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
   .panel h2 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--dim); }
   .price { font-size:30px; font-weight:600; } .price small { font-size:13px; color:var(--dim); font-weight:400; }
   table { width:100%; border-collapse:collapse; } td,th { padding:3px 6px; text-align:right; }
   th { color:var(--dim); font-weight:500; font-size:11px; text-transform:uppercase; }
   tr.ask td { color:var(--red); } tr.bid td { color:var(--green); }
-  label { display:block; color:var(--dim); font-size:12px; margin:8px 0 3px; }
-  input, select { width:100%; background:#0e0e12; border:1px solid var(--line); color:#fff; padding:8px; border-radius:8px; }
+  label { display:block; color:var(--dim); font-size:12px; margin:10px 0 3px; }
+  input, select { width:100%; background:#0e0e12; border:1px solid var(--line); color:#fff; padding:9px; border-radius:8px; }
   .row { display:flex; gap:8px; } .row > * { flex:1; }
-  button { background:var(--pink); color:#fff; border:0; padding:10px; border-radius:8px; cursor:pointer; font-weight:600; width:100%; margin-top:12px; }
-  button.ghost { background:transparent; border:1px solid var(--line); color:#e8e8ef; }
-  .seg { display:flex; gap:8px; } .seg button { margin:0; }
-  .seg button.off { background:transparent; border:1px solid var(--line); color:var(--dim); }
-  .bal { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding:6px 0; }
+  /* buy/sell segmented — clear active/inactive */
+  .seg { display:flex; gap:8px; margin-top:4px; } .seg button { margin:0; }
+  .seg button.buy.on  { background:var(--green); color:#06160d; box-shadow:0 0 0 2px rgba(33,208,122,.3); }
+  .seg button.sell.on { background:var(--red);   color:#1a0408; box-shadow:0 0 0 2px rgba(255,84,112,.3); }
+  .seg button.off { background:transparent; border:1px solid var(--line); color:var(--dim); box-shadow:none; }
+  .bal { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding:7px 0; }
+  .bal b { font-weight:600; }
   .note { color:var(--dim); font-size:11px; margin-top:10px; }
+  .check { display:flex; align-items:center; gap:8px; margin-top:12px; color:#cfcfe0; font-size:13px; cursor:pointer; }
+  .check input { width:auto; }
+  /* mempool */
+  .mem { margin:4px 0 14px; }
+  .mem .empty { color:var(--dim); font-size:12px; padding:6px 0; }
+  .mrow { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--line);
+          border-radius:8px; margin-bottom:5px; background:var(--panel2); font-size:12px; }
+  .mrow .badge { font-size:10px; padding:2px 7px; border-radius:999px; font-weight:700; letter-spacing:.04em; }
+  .badge.pub { background:rgba(33,208,122,.16); color:var(--green); }
+  .badge.seal { background:rgba(245,177,76,.16); color:var(--gold); }
+  .mrow .s-buy { color:var(--green); font-weight:700; } .mrow .s-sell { color:var(--red); font-weight:700; }
+  .mrow .who { color:var(--dim); margin-left:auto; }
+  .seal-summary { font-size:11px; color:var(--gold); margin:2px 0 10px; }
+  /* toasts */
+  #toasts { position:fixed; top:16px; right:16px; display:flex; flex-direction:column; gap:8px; z-index:50; }
+  .toast { padding:11px 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel2);
+           font-size:13px; min-width:230px; box-shadow:0 8px 24px rgba(0,0,0,.4); animation:slidein .18s ease; }
+  .toast.ok   { border-left:3px solid var(--green); } .toast.err { border-left:3px solid var(--red); }
+  .toast.info { border-left:3px solid var(--pink);  } .toast .x { float:right; color:var(--dim); cursor:pointer; }
+  @keyframes slidein { from { opacity:0; transform:translateX(20px);} to { opacity:1; transform:none; } }
+  .hidden { display:none !important; }
 </style>
 </head>
 <body>
 <header>
   <h1><b>JAMSWAP</b> · order-book DEX on JAM</h1>
   <span class="sub">frequent batch auction · uniform price · MEV-resistant · trustless matching in Refine</span>
+  <div id="wallet">
+    <span id="chain" class="chip"><span class="dot"></span><span id="chain-txt">lasair · connecting…</span></span>
+    <button id="connect" class="small">Connect Talisman</button>
+    <select id="acctsel" class="hidden mono" style="width:auto"></select>
+  </div>
 </header>
 
-<div class="tabs" id="tabs"></div>
+<nav class="tabs" id="tabs">
+  <div class="t active" data-tab="trade">Trade</div>
+  <div class="t" data-tab="faucet">Faucet</div>
+</nav>
 
 <main>
-  <section class="panel">
-    <h2>Order book — <span id="mkt"></span></h2>
-    <div class="price mono"><span id="price">—</span> <small>last clearing price · vol <span id="vol">0</span> · pending <span id="pend">0</span></small></div>
-    <table style="margin-top:12px"><thead><tr><th>price</th><th>qty</th><th>side</th></tr></thead><tbody id="book"></tbody></table>
-    <button id="run">Run auction round →</button>
-    <div class="note">A round clears all resting + pending orders at one uniform price.</div>
-  </section>
+  <!-- ===================== TRADE ===================== -->
+  <section id="tab-trade">
+    <div class="mtabs" id="mtabs"></div>
+    <div class="grid3">
+      <!-- order book + mempool -->
+      <section class="panel">
+        <h2>Order book — <span id="mkt"></span></h2>
+        <div class="price mono"><span id="price">—</span>
+          <small>last clearing price · vol <span id="vol">0</span></small></div>
 
-  <section class="panel">
-    <h2>Place order</h2>
-    <label>Account</label><input id="acct" class="mono" value="1" />
-    <div class="seg"><button id="sbuy">Buy</button><button id="ssell" class="off">Sell</button></div>
-    <div class="row"><div><label>Price</label><input id="price_in" class="mono" value="100" /></div>
-                     <div><label>Qty</label><input id="qty_in" class="mono" value="10" /></div></div>
-    <button id="place" class="ghost">Add to batch</button>
-    <div class="note">Orders join the next auction; everyone clears at the uniform price.</div>
-  </section>
+        <h2 style="margin-top:18px">Mempool — this round
+          <span id="memcount" style="color:var(--dim)"></span></h2>
+        <div id="seal-summary" class="seal-summary"></div>
+        <div class="mem" id="mempool"><div class="empty">no orders queued for the next auction</div></div>
 
-  <section class="panel">
-    <h2>Balances &amp; faucet</h2>
-    <label>Account</label><input id="bacct" class="mono" value="1" />
-    <div id="bals"></div>
-    <label style="margin-top:14px">Faucet (demo funding)</label>
-    <div class="row">
-      <select id="fasset"><option value="0">USD</option><option value="1">TOKA</option><option value="2">TOKB</option></select>
-      <input id="famt" class="mono" value="100000" />
+        <h2>Resting book (on-chain)</h2>
+        <table><thead><tr><th>price</th><th>qty</th><th>side</th></tr></thead><tbody id="book"></tbody></table>
+
+        <button id="run" style="margin-top:14px">Run auction round →</button>
+        <div class="note">A round clears all resting + pending orders at one uniform price.
+          Sealed orders are revealed and matched in the same round.</div>
+      </section>
+
+      <!-- place order -->
+      <section class="panel">
+        <h2>Place order</h2>
+        <div id="trade-gate" class="note" style="margin:0 0 10px">Connect a wallet to trade.</div>
+        <div class="seg">
+          <button id="sbuy" class="buy on">Buy</button>
+          <button id="ssell" class="sell off">Sell</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <div><label>Price (USD)</label><input id="price_in" class="mono" value="100" inputmode="numeric" /></div>
+          <div><label>Qty</label><input id="qty_in" class="mono" value="10" inputmode="numeric" /></div>
+        </div>
+        <label class="check"><input type="checkbox" id="sealchk" />
+          🔒 Seal this order <span style="color:var(--dim)">(hide price &amp; size until the batch clears)</span></label>
+        <button id="place" style="margin-top:14px" disabled>Place order</button>
+        <div class="note" id="place-note">Signs in your wallet, then joins the next auction; everyone clears at the uniform price.</div>
+      </section>
+
+      <!-- balances -->
+      <section class="panel">
+        <h2>Your balances</h2>
+        <div id="who-trade" class="note" style="margin:0 0 8px">—</div>
+        <div id="bals"></div>
+        <div class="note">Need funds? Use the <a href="#" id="gofaucet">Faucet</a> tab.</div>
+      </section>
     </div>
-    <div class="seg"><button id="fund" class="ghost">Deposit</button><button id="wd" class="ghost">Withdraw</button></div>
+  </section>
+
+  <!-- ===================== FAUCET ===================== -->
+  <section id="tab-faucet" class="hidden">
+    <div class="grid1">
+      <section class="panel">
+        <h2>Testnet faucet</h2>
+        <div id="who-faucet" class="note" style="margin:0 0 10px">Connect a wallet to fund an account.</div>
+        <div class="row">
+          <div><label>Asset</label>
+            <select id="fasset"><option value="0">USD</option><option value="1">TOKA</option><option value="2">TOKB</option></select></div>
+          <div><label>Amount</label><input id="famt" class="mono" value="100000" inputmode="numeric" /></div>
+        </div>
+        <div class="seg" style="margin-top:14px">
+          <button id="fund" disabled>Deposit</button>
+          <button id="wd" class="ghost" disabled>Withdraw</button>
+        </div>
+        <div class="note">Demo funding on the local lasair node — credits your connected account's balance
+          on-chain. No real value. Withdraw is overdraft-protected.</div>
+        <h2 style="margin-top:20px">Balances</h2>
+        <div id="bals-faucet"></div>
+      </section>
+    </div>
   </section>
 </main>
+
+<div id="toasts"></div>
 
 <script>
 const ASSETS = {0:"USD",1:"TOKA",2:"TOKB"};
@@ -84,35 +183,180 @@ let cur = MARKETS[0], side = "buy";
 const $ = id => document.getElementById(id);
 const api = (p, body) => fetch(p, body ? {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)} : {}).then(r=>r.json());
 
-function renderTabs(){ $("tabs").innerHTML=""; MARKETS.forEach(m=>{
-  const t=document.createElement("div"); t.className="tab"+(m.id===cur.id?" active":""); t.textContent=m.name;
-  t.onclick=()=>{cur=m; renderTabs(); subscribe(); refresh();}; $("tabs").appendChild(t); }); $("mkt").textContent=cur.name; }
+// ---------- toasts ----------
+function toast(msg, kind="info", ms=3500){
+  const el = document.createElement("div"); el.className = "toast " + kind;
+  el.innerHTML = `<span class="x">✕</span>${msg}`;
+  el.querySelector(".x").onclick = () => el.remove();
+  $("toasts").appendChild(el);
+  if (ms) setTimeout(()=>el.remove(), ms);
+}
 
+// ---------- wallet (Talisman / any injected Polkadot wallet) ----------
+const DAPP = "Jamswap";
+let wallet = { ext:null, accounts:[], selected:null };
+
+function fnv32(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619)>>>0;} return h>>>0; }
+function acctId(addr){ return fnv32(addr); }                 // deterministic u32 account id from the address
+function shortAddr(a){ return a.length>14 ? a.slice(0,6)+"…"+a.slice(-6) : a; }
+function toHex(str){ return "0x"+Array.from(new TextEncoder().encode(str)).map(b=>b.toString(16).padStart(2,"0")).join(""); }
+
+async function connectWallet(){
+  const inj = window.injectedWeb3 || {};
+  const key = inj.talisman ? "talisman" : Object.keys(inj)[0];
+  if (!key){
+    toast("No Polkadot wallet found. Install <a href='https://talisman.xyz' target='_blank'>Talisman</a>, or use a demo account.", "err", 7000);
+    useDemoAccount(); return;
+  }
+  try {
+    const ext = await inj[key].enable(DAPP);
+    const accounts = await ext.accounts.get();
+    if (!accounts.length){ toast("No accounts in "+key+". Create one first.", "err"); return; }
+    wallet = { ext, accounts, selected: accounts[0] };
+    toast("Connected "+(wallet.selected.name||shortAddr(wallet.selected.address)), "ok");
+    renderWallet(); onAccountChange();
+  } catch(e){ toast("Wallet connection rejected.", "err"); }
+}
+function useDemoAccount(){
+  const r = Math.random().toString(36).slice(2,8);
+  const addr = ("5Demo"+r+"DEMOonlyNoSignature00000000000000000000000000").slice(0, 47);
+  wallet = { ext:null, demo:true, accounts:[{address:addr, name:"Demo account"}], selected:{address:addr, name:"Demo account"} };
+  toast("Using a demo account (no wallet signatures).", "info");
+  renderWallet(); onAccountChange();
+}
+async function signIntent(message){
+  if (wallet.demo) return null;                              // demo: no signing
+  const { signature } = await wallet.ext.signer.signRaw({ address: wallet.selected.address, data: toHex(message), type:"bytes" });
+  return signature;
+}
+function renderWallet(){
+  const sel = $("acctsel");
+  if (!wallet.selected){ sel.classList.add("hidden"); $("connect").classList.remove("hidden"); return; }
+  $("connect").classList.add("hidden"); sel.classList.remove("hidden");
+  sel.innerHTML = wallet.accounts.map((a,i)=>`<option value="${i}">${(a.name?a.name+" · ":"")+shortAddr(a.address)}</option>`).join("");
+  sel.onchange = () => { wallet.selected = wallet.accounts[+sel.value]; onAccountChange(); };
+}
+function connected(){ return !!wallet.selected; }
+function myAccount(){ return acctId(wallet.selected.address); }
+
+function onAccountChange(){
+  const who = wallet.selected ? `${wallet.selected.name||""} ${shortAddr(wallet.selected.address)} · acct #${myAccount()}` : "—";
+  $("who-trade").textContent = wallet.selected ? who : "—";
+  $("who-faucet").textContent = wallet.selected ? "Funding: "+who : "Connect a wallet to fund an account.";
+  $("trade-gate").classList.toggle("hidden", connected());
+  $("place").disabled = !connected();
+  $("fund").disabled = !connected(); $("wd").disabled = !connected();
+  refreshBals();
+}
+
+// ---------- order book + mempool ----------
 function renderState(s){
-  $("price").textContent = s.price || "—"; $("vol").textContent = s.volume||0; $("pend").textContent = s.pending||0;
+  $("price").textContent = s.price || "—"; $("vol").textContent = s.volume||0;
+  $("memcount").textContent = s.pending ? `· ${s.pending} queued` : "";
+  // mempool
+  const mp = $("mempool");
+  if (!s.mempool || !s.mempool.length){ mp.innerHTML = `<div class="empty">no orders queued for the next auction</div>`; }
+  else {
+    mp.innerHTML = s.mempool.map(o => {
+      const sealed = o.sealed;
+      const badge = sealed ? `<span class="badge seal">🔒 SEALED</span>` : `<span class="badge pub">🌐 PUBLIC</span>`;
+      const terms = sealed ? `<span style="color:var(--gold)">price &amp; size hidden</span>`
+                           : `<span class="mono">${o.qty} @ ${o.price}</span>`;
+      return `<div class="mrow">${badge}<span class="s-${o.side}">${o.side.toUpperCase()}</span>${terms}<span class="who mono">${o.who}</span></div>`;
+    }).join("");
+  }
+  $("seal-summary").textContent = s.sealed_onchain
+    ? `🔒 ${s.sealed_onchain} sealed commitment${s.sealed_onchain>1?"s":""} on-chain — only the hash is public until the batch clears`
+    : "";
+  // resting book
   const asks = s.book.filter(o=>o.side==="sell").sort((a,b)=>b.price-a.price);
   const bids = s.book.filter(o=>o.side==="buy").sort((a,b)=>b.price-a.price);
   $("book").innerHTML = asks.map(o=>`<tr class="ask"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>ask</td></tr>`).join("")
     + `<tr><td colspan=3 style="border-top:1px solid var(--line)"></td></tr>`
     + bids.map(o=>`<tr class="bid"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>bid</td></tr>`).join("");
 }
-async function refresh(){ renderState(await api(`/api/state?market=${cur.id}`)); refreshBals(); }
 let es = null;
 function subscribe(){ if (es) es.close(); es = new EventSource(`/api/stream?market=${cur.id}`); es.onmessage = e => { try { renderState(JSON.parse(e.data)); } catch {} }; }
+async function refresh(){ renderState(await api(`/api/state?market=${cur.id}`)); }
 async function refreshBals(){
-  const a = $("bacct").value; let html="";
-  for (const id of [0,1,2]){ const b = await api(`/api/balance?account=${a}&asset=${id}`); html += `<div class="bal"><span>${ASSETS[id]}</span><span class="mono">${b.balance}</span></div>`; }
-  $("bals").innerHTML = html;
+  if (!connected()){ $("bals").innerHTML = $("bals-faucet").innerHTML = `<div class="note">—</div>`; return; }
+  const a = myAccount(); let html="";
+  for (const id of [0,1,2]){ const b = await api(`/api/balance?account=${a}&asset=${id}`);
+    html += `<div class="bal"><span>${ASSETS[id]}</span><b class="mono">${b.balance}</b></div>`; }
+  $("bals").innerHTML = html; $("bals-faucet").innerHTML = html;
 }
-$("sbuy").onclick=()=>{side="buy"; $("sbuy").className=""; $("ssell").className="off";};
-$("ssell").onclick=()=>{side="sell"; $("ssell").className=""; $("sbuy").className="off";};
-$("place").onclick=async()=>{ await api("/api/order",{market:cur.id,base:cur.base,quote:cur.quote,account:+$("acct").value,side,price:+$("price_in").value,qty:+$("qty_in").value}); refresh(); };
-$("run").onclick=async()=>{ await api("/api/round",{market:cur.id,base:cur.base,quote:cur.quote}); refresh(); };
-$("fund").onclick=async()=>{ await api("/api/deposit",{account:+$("bacct").value,asset:+$("fasset").value,amount:+$("famt").value}); refreshBals(); };
-$("wd").onclick=async()=>{ await api("/api/withdraw",{account:+$("bacct").value,asset:+$("fasset").value,amount:+$("famt").value}); refreshBals(); };
-$("bacct").oninput=refreshBals;
 
-renderTabs(); subscribe(); refresh(); setInterval(refreshBals, 5000);  // book/price live via SSE; balances on a slow tick
+// ---------- actions ----------
+$("sbuy").onclick=()=>{ side="buy";  $("sbuy").className="buy on";  $("ssell").className="sell off"; };
+$("ssell").onclick=()=>{ side="sell"; $("ssell").className="sell on"; $("sbuy").className="buy off"; };
+
+$("place").onclick=async()=>{
+  if (!connected()) return toast("Connect a wallet first.", "err");
+  const price=+$("price_in").value, qty=+$("qty_in").value, sealed=$("sealchk").checked;
+  if (!price||!qty) return toast("Enter a price and quantity.", "err");
+  const msg = `Jamswap ${sealed?"(sealed) ":""}${side.toUpperCase()} ${qty} ${cur.name} @ ${price}`;
+  $("place").disabled = true;
+  try {
+    toast(wallet.demo ? "Placing order…" : "Confirm in your wallet…", "info", 2500);
+    await signIntent(msg);                                   // pops Talisman to sign the order
+  } catch(e){ $("place").disabled=false; return toast("Signature rejected — order not placed.", "err"); }
+  try {
+    const r = await api("/api/order", { market:cur.id, base:cur.base, quote:cur.quote,
+      account:myAccount(), address:wallet.selected.address, side, price, qty, sealed });
+    toast(`${sealed?"🔒 Sealed ":""}${side} ${qty} @ ${price} queued (order #${r.order_id}).`, "ok");
+  } catch(e){ toast("Order failed: "+e, "err"); }
+  $("place").disabled = false; refresh();
+};
+
+$("run").onclick=async()=>{
+  $("run").disabled = true; toast("Clearing auction round…", "info", 2500);
+  try {
+    const r = await api("/api/round", { market:cur.id, base:cur.base, quote:cur.quote });
+    const c = r.cleared || {};
+    toast(`Round cleared at price ${r.price} (vol ${r.volume}) — ${c.public||0} public, ${c.sealed||0} sealed.`, "ok");
+  } catch(e){ toast("Round failed: "+e, "err"); }
+  $("run").disabled = false; refresh(); refreshBals();
+};
+
+async function faucet(kind){
+  if (!connected()) return toast("Connect a wallet first.", "err");
+  const asset=+$("fasset").value, amount=+$("famt").value;
+  if (!amount) return toast("Enter an amount.", "err");
+  try {
+    await api("/api/"+kind, { account:myAccount(), address:wallet.selected.address, asset, amount });
+    toast(`${kind==="deposit"?"Funded":"Withdrew"} ${amount} ${ASSETS[asset]}.`, "ok");
+  } catch(e){ toast(kind+" failed: "+e, "err"); }
+  refreshBals();
+}
+$("fund").onclick=()=>faucet("deposit");
+$("wd").onclick=()=>faucet("withdraw");
+
+// ---------- tabs + markets ----------
+function showTab(name){
+  document.querySelectorAll("nav.tabs .t").forEach(t=>t.classList.toggle("active", t.dataset.tab===name));
+  $("tab-trade").classList.toggle("hidden", name!=="trade");
+  $("tab-faucet").classList.toggle("hidden", name!=="faucet");
+}
+document.querySelectorAll("nav.tabs .t").forEach(t=> t.onclick=()=>showTab(t.dataset.tab));
+$("gofaucet").onclick=(e)=>{ e.preventDefault(); showTab("faucet"); };
+
+function renderMarkets(){
+  $("mtabs").innerHTML=""; MARKETS.forEach(m=>{
+    const t=document.createElement("div"); t.className="mtab"+(m.id===cur.id?" active":""); t.textContent=m.name;
+    t.onclick=()=>{ cur=m; renderMarkets(); subscribe(); refresh(); }; $("mtabs").appendChild(t); });
+  $("mkt").textContent=cur.name;
+}
+
+// ---------- boot ----------
+$("connect").onclick = connectWallet;
+$("chain-txt").textContent = "lasair · localhost";  $("chain").classList.add("live");
+renderMarkets(); subscribe(); refresh();
+onAccountChange();                                  // gated until a wallet connects
+setInterval(refreshBals, 6000);
+// auto-connect if a wallet is already authorized
+if (window.injectedWeb3 && Object.keys(window.injectedWeb3).length) {
+  setTimeout(connectWallet, 300);
+}
 </script>
 </body>
 </html>

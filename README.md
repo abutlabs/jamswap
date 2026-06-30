@@ -118,6 +118,26 @@ docker compose --profile demo run --rm demo   # see sim/demo.py
 
 Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
+## The trading UI (Talisman wallet + sealed orders)
+
+The UI at `:8080` (`offchain/`) is wallet-native:
+
+- **Connect Talisman** (or any injected Polkadot wallet) — your real accounts, not
+  `Account 1`. Each order pops a **wallet confirmation** (`signRaw`) before it's
+  queued. The on-chain account id is derived from your address.
+- **Mempool view** — the order book shows what's queued for the next auction, each
+  tagged **🌐 public** (price/size visible) or **🔒 sealed**. Sealed orders publish
+  only a Blake2s256 **commitment** on-chain (`TAG_COMMIT`); their price and size stay
+  hidden until the batch reveals and clears (`TAG_REVEAL`) — real commit-reveal
+  MEV-resistance, not a mock. The panel shows how many sealed commitments are on-chain.
+- **Faucet** is its own tab — fund your connected account on the local testnet.
+
+> **Honest note on the wallet:** lasair is a JAM node, not a Substrate chain, so
+> Talisman can't add it as an RPC "network" (JAM ≠ Substrate). What's real and works:
+> Talisman supplies your accounts and signs each order (a genuine wallet confirmation).
+> Verifying those signatures **in the service** (signed operations) is the next step —
+> see [`docs/SECURITY.md`](docs/SECURITY.md).
+
 ## The matching engine
 
 ```sh
