@@ -118,25 +118,43 @@ docker compose --profile demo run --rm demo   # see sim/demo.py
 
 Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-## The trading UI (Talisman wallet + sealed orders)
+## How Jamswap works (the trading UI)
 
-The UI at `:8080` (`offchain/`) is wallet-native:
+The UI at `:8080` (`offchain/`) is wallet-native. The flow:
 
-- **Connect Talisman** (or any injected Polkadot wallet) — your real accounts, not
-  `Account 1`. Each order pops a **wallet confirmation** (`signRaw`) before it's
-  queued. The on-chain account id is derived from your address.
-- **Mempool view** — the order book shows what's queued for the next auction, each
-  tagged **🌐 public** (price/size visible) or **🔒 sealed**. Sealed orders publish
-  only a Blake2s256 **commitment** on-chain (`TAG_COMMIT`); their price and size stay
-  hidden until the batch reveals and clears (`TAG_REVEAL`) — real commit-reveal
-  MEV-resistance, not a mock. The panel shows how many sealed commitments are on-chain.
-- **Faucet** is its own tab — fund your connected account on the local testnet.
+1. **Connect Talisman** (or any injected Polkadot wallet) — your real accounts, not
+   `Account 1`. The on-chain account id is derived from your address.
+2. **Fund** in the Faucet tab — assets are **USDC, DOT, JSMBK**, tradable across all
+   three pairs (**DOT/USDC, JSMBK/USDC, JSMBK/DOT**).
+3. **Place an order** — **Buy/Sell**, **Limit** (you set the price) or **Market**
+   (takes the clearing price). Each order pops a **wallet confirmation** (`signRaw`)
+   before it joins the batch. Tick **🔒 Seal** to hide it.
+4. **Auctions clear every 6 seconds**, mirroring JAM's block cadence — a live countdown
+   shows the next one; queued orders clear automatically (no button).
+5. **Watch the mempool** — a toggle shows *the data sitting in the service*: each queued
+   order tagged **🌐 LIMIT** / **⚡ MARKET** (terms visible) or **🔒 SEALED**. Sealed
+   orders publish only a Blake2s256 **commitment** on-chain (`TAG_COMMIT`); price and
+   size stay hidden until the batch reveals and clears (`TAG_REVEAL`) — real
+   commit-reveal MEV-resistance, not a mock.
+6. **Your pending orders** — *decrypted for you* (you hold the nonce), with **cancel**
+   for any not yet cleared. Resting (on-chain) orders cancel via `TAG_CANCEL`.
+
+### JSMBK and JAMKB — pricing the state the service consumes
+
+Jamswap holds live state (order books, sealed commitments, balances) in **validator
+RAM** — exactly the resource Gavin Wood's **JAMKB** token prices (1 JAMKB ≙ 1 KB of JAM
+state footprint). **JSMBK** is our prototype of that token: it backs the service's
+footprint, and because it's also a trading pair, *the cost of state gets a market
+price*. Placing orders grows the footprint; the 6 s auctions clear them and free it.
+The full understanding + a staged plan to make the validator actually meter and enforce
+this is in **[`docs/JAMKB.md`](docs/JAMKB.md)**.
 
 > **Honest note on the wallet:** lasair is a JAM node, not a Substrate chain, so
 > Talisman can't add it as an RPC "network" (JAM ≠ Substrate). What's real and works:
 > Talisman supplies your accounts and signs each order (a genuine wallet confirmation).
 > Verifying those signatures **in the service** (signed operations) is the next step —
-> see [`docs/SECURITY.md`](docs/SECURITY.md).
+> see [`docs/SECURITY.md`](docs/SECURITY.md). Market orders take the uniform clearing
+> price, which is well-behaved with a populated book and extreme in a thin one.
 
 ## The matching engine
 
