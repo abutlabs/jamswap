@@ -29,14 +29,14 @@ fn main() {
     let mut rng = StdRng::seed_from_u64(seed);
 
     // ledger: (asset, account) -> balance. Fund every trader generously.
-    let mut bal: HashMap<(u32, u32), i64> = HashMap::new();
-    let (init_base_each, init_quote_each) = (1_000_000i64, 1_000_000_000i64);
+    let mut bal: HashMap<(u32, u32), i128> = HashMap::new();
+    let (init_base_each, init_quote_each) = (1_000_000i128, 1_000_000_000i128);
     for t in 0..traders {
         bal.insert((BASE, t), init_base_each);
         bal.insert((QUOTE, t), init_quote_each);
     }
-    let total_base0 = init_base_each * traders as i64;
-    let total_quote0 = init_quote_each * traders as i64;
+    let total_base0 = init_base_each * traders as i128;
+    let total_quote0 = init_quote_each * traders as i128;
 
     let mut book: Vec<Order> = Vec::new();
     let mut next_id: u32 = 0;
@@ -81,8 +81,8 @@ fn main() {
         book = resting(&orders, &c);
 
         // INVARIANT: total value per asset is conserved every round (incl. treasury)
-        let tb: i64 = bal.iter().filter(|((a, _), _)| *a == BASE).map(|(_, v)| *v).sum();
-        let tq: i64 = bal.iter().filter(|((a, _), _)| *a == QUOTE).map(|(_, v)| *v).sum();
+        let tb: i128 = bal.iter().filter(|((a, _), _)| *a == BASE).map(|(_, v)| *v).sum();
+        let tq: i128 = bal.iter().filter(|((a, _), _)| *a == QUOTE).map(|(_, v)| *v).sum();
         assert_eq!(tb, total_base0, "base not conserved");
         assert_eq!(tq, total_quote0, "quote not conserved");
     }

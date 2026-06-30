@@ -243,8 +243,8 @@ mod tests {
             if let Some((price, entries)) = wire::decode_settlement(&blob) {
                 // conservation holds for any fee, with the treasury included in the sum
                 let deltas = wire::settle_deltas(price, &entries, fee_bps, u32::MAX);
-                let sum_base: i64 = deltas.iter().map(|d| d.1).sum();
-                let sum_quote: i64 = deltas.iter().map(|d| d.2).sum();
+                let sum_base: i128 = deltas.iter().map(|d| d.1).sum();
+                let sum_quote: i128 = deltas.iter().map(|d| d.2).sum();
                 prop_assert_eq!(sum_base, 0);
                 prop_assert_eq!(sum_quote, 0);
             }

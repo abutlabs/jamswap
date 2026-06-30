@@ -126,20 +126,22 @@ pub fn decode_settlement(data: &[u8]) -> Option<(u32, Vec<SettleEntry>)> {
 /// Aggregated per account. **Invariant:** Σ base deltas == 0 and Σ quote deltas == 0
 /// *including the treasury* — a batch moves value (incl. fees) between accounts, it
 /// never creates or destroys it (settlement's safety property; property-tested).
-pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury: u32) -> Vec<(u32, i64, i64)> {
-    let p = price as i64;
-    let mut out: Vec<(u32, i64, i64)> = Vec::new();
-    let add = |out: &mut Vec<(u32, i64, i64)>, acct: u32, db: i64, dq: i64| {
+// i128 throughout: qty·price can exceed i64 for large orders (a real overflow that
+// wraps silently in release) — i128 holds any u32·u32 with room to spare.
+pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury: u32) -> Vec<(u32, i128, i128)> {
+    let p = price as i128;
+    let mut out: Vec<(u32, i128, i128)> = Vec::new();
+    let add = |out: &mut Vec<(u32, i128, i128)>, acct: u32, db: i128, dq: i128| {
         match out.iter_mut().find(|(a, _, _)| *a == acct) {
             Some(slot) => { slot.1 += db; slot.2 += dq; }
             None => out.push((acct, db, dq)),
         }
     };
-    let mut fee_total = 0i64;
+    let mut fee_total = 0i128;
     for e in entries {
-        let q = e.qty as i64;
+        let q = e.qty as i128;
         let notional = q * p;
-        let fee = notional * fee_bps as i64 / 10_000;
+        let fee = notional * fee_bps as i128 / 10_000;
         fee_total += fee;
         let (db, dq) = match e.side {
             Side::Buy => (q, -(notional + fee)),   // buyer pays notional + fee
