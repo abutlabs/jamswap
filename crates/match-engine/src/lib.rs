@@ -241,8 +241,8 @@ mod tests {
             // or destroys it — Σ base deltas == 0 and Σ quote deltas == 0.
             let blob = wire::encode_settlement(c.price, &book, &c);
             if let Some((price, entries)) = wire::decode_settlement(&blob) {
-                // conservation holds for any fee, with the treasury included in the sum
-                let deltas = wire::settle_deltas(price, &entries, fee_bps, u32::MAX);
+                // conservation holds for any fee + any price scale, treasury included
+                let deltas = wire::settle_deltas(price, &entries, fee_bps, u32::MAX, 10_000);
                 let sum_base: i128 = deltas.iter().map(|d| d.1).sum();
                 let sum_quote: i128 = deltas.iter().map(|d| d.2).sum();
                 prop_assert_eq!(sum_base, 0);

@@ -18,11 +18,13 @@ SID = 1729
 BUY, SELL = 0, 1
 USD, TOKA, TOKB = 0, 1, 2          # asset ids
 M_A, M_B = 1, 2                     # market ids (TOKA/USD, TOKB/USD)
+SCALE = 10_000                     # fixed-point scale (match service SCALE): atomic = display × SCALE
+def d(v): return round(v / SCALE, 4)                    # atomic -> display
 
-def order(acct, oid, side, price, qty):                 # 17 bytes
-    return struct.pack("<IIBII", acct, oid, side, price, qty)
-def deposit(acct, asset, amount):                       # [1][acct][asset][amount]
-    return bytes([1]) + struct.pack("<II", acct, asset) + struct.pack("<Q", amount)
+def order(acct, oid, side, price, qty):                 # 17 bytes; price/qty scaled to atomic
+    return struct.pack("<IIBII", acct, oid, side, price * SCALE, qty * SCALE)
+def deposit(acct, asset, amount):                       # [1][acct][asset][amount] (atomic)
+    return bytes([1]) + struct.pack("<II", acct, asset) + struct.pack("<Q", amount * SCALE)
 def match_hdr(tag, market, base, quote):
     return bytes([tag]) + struct.pack("<III", market, base, quote)
 
@@ -65,26 +67,26 @@ def main():
     commits = storage(b"commits" + struct.pack("<I", M_A))
     reveals = b"".join(o + n for o, n in a_orders)
     submit(match_hdr(3, M_A, TOKA, USD) + struct.pack("<I", len(commits)) + commits + reveals)
-    line(f"revealed+matched -> clearing price {mstate(b'lp', M_A)}, volume {mstate(b'cv', M_A)}")
+    line(f"revealed+matched -> clearing price {d(mstate(b'lp', M_A))}, volume {d(mstate(b'cv', M_A))}")
 
     h("Market B = TOKB/USD — a plaintext round (different price, clears independently)")
     b_orders = order(1, 3, BUY, 50, 5) + order(4, 4, SELL, 50, 5)
     submit(match_hdr(0, M_B, TOKB, USD) + b_orders)
-    line(f"matched -> clearing price {mstate(b'lp', M_B)}, volume {mstate(b'cv', M_B)}")
+    line(f"matched -> clearing price {d(mstate(b'lp', M_B))}, volume {d(mstate(b'cv', M_B))}")
 
     h("Two markets, two prices, ONE shared ledger")
-    line(f"Market A price = {mstate(b'lp', M_A)}   Market B price = {mstate(b'lp', M_B)}   (independent)")
-    line(f"Alice  USD={bal(USD,1)}  TOKA={bal(TOKA,1)}  TOKB={bal(TOKB,1)}")
-    line("       (USD 100000 − 600 [6 TOKA @100] − 250 [5 TOKB @50] = 99150, shared across both markets)")
-    line(f"Bob    USD={bal(USD,2)}  TOKA={bal(TOKA,2)}")
-    line(f"Dave   USD={bal(USD,4)}  TOKB={bal(TOKB,4)}")
+    line(f"Market A price = {d(mstate(b'lp', M_A))}   Market B price = {d(mstate(b'lp', M_B))}   (independent)")
+    line(f"Alice  USD={d(bal(USD,1))}  TOKA={d(bal(TOKA,1))}  TOKB={d(bal(TOKB,1))}")
+    line("       (USD 100000 − 600 [6 TOKA @100] − 250 [5 TOKB @50] − fees, shared across both markets)")
+    line(f"Bob    USD={d(bal(USD,2))}  TOKA={d(bal(TOKA,2))}")
+    line(f"Dave   USD={d(bal(USD,4))}  TOKB={d(bal(TOKB,4))}")
 
     h("Resting book (Market A) + cancel")
     def show_book(m):
         bk = storage(b"book" + struct.pack("<I", m))
         for i in range(len(bk) // 17):
             a, oid, side, p, q = struct.unpack_from("<IIBII", bk, i * 17)
-            line(f"resting: acct{a} {'BUY ' if side==BUY else 'SELL'} {q} @ {p} (order {oid})")
+            line(f"resting: acct{a} {'BUY ' if side==BUY else 'SELL'} {d(q)} @ {d(p)} (order {oid})")
         return len(bk) // 17
     show_book(M_A)
     submit(bytes([4]) + struct.pack("<III", M_A, 1, 1))   # Alice cancels her resting buy (order 1)
@@ -93,7 +95,7 @@ def main():
     h("MEV-resistance — an UNCOMMITTED order is rejected")
     before = bal(USD, 1)
     submit(match_hdr(3, M_A, TOKA, USD) + struct.pack("<I", 0) + order(1, 99, BUY, 100, 5) + bytes(32))
-    line(f"Alice USD {before} -> {bal(USD,1)}  ->  {'REJECTED ✓' if before == bal(USD,1) else 'LEAKED ✗'}")
+    line(f"Alice USD {d(before)} -> {d(bal(USD,1))}  ->  {'REJECTED ✓' if before == bal(USD,1) else 'LEAKED ✗'}")
 
     print("\n\033[1;32mJamswap: parallel, trustless, MEV-resistant order-book auctions on JAM.\033[0m")
 

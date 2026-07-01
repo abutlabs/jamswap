@@ -121,15 +121,26 @@ pub fn decode_settlement(data: &[u8]) -> Option<(u32, Vec<SettleEntry>)> {
 }
 
 /// Per-account balance deltas from a cleared batch, at the uniform price: a buy
-/// is +qty base / −qty·price quote, a sell the reverse. Each side also pays a flat
-/// fee of `fee_bps` basis points on its quote notional, routed to `treasury`.
+/// is +qty base / −(qty·price/scale) quote, a sell the reverse. Each side also pays
+/// a flat fee of `fee_bps` basis points on its quote notional, routed to `treasury`.
+///
+/// `scale` is the fixed-point price scale: prices and quantities are integer *atomic*
+/// units (display × scale), so a fractional display price like 1.1 is the integer
+/// 11000 at scale 10000. Quote notional therefore de-scales by one factor of `scale`
+/// (`qty·price/scale`). Buyers round the notional **up**, sellers **down**, so the
+/// rounding residual is always ≥ 0 and flows to the treasury — it can never overdraw
+/// it. When qty is a multiple of `scale` (the production invariant: whole-unit
+/// quantities are submitted as `qty·scale`) the division is exact and ceil == floor,
+/// so every fill is penny-perfect. `scale = 1` reproduces the un-scaled integer market.
+///
 /// Aggregated per account. **Invariant:** Σ base deltas == 0 and Σ quote deltas == 0
-/// *including the treasury* — a batch moves value (incl. fees) between accounts, it
-/// never creates or destroys it (settlement's safety property; property-tested).
+/// *including the treasury* — a batch moves value (incl. fees + rounding dust) between
+/// accounts, it never creates or destroys it (settlement's safety property; property-tested).
 // i128 throughout: qty·price can exceed i64 for large orders (a real overflow that
 // wraps silently in release) — i128 holds any u32·u32 with room to spare.
-pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury: u32) -> Vec<(u32, i128, i128)> {
+pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury: u32, scale: u32) -> Vec<(u32, i128, i128)> {
     let p = price as i128;
+    let s = scale.max(1) as i128;
     let mut out: Vec<(u32, i128, i128)> = Vec::new();
     let add = |out: &mut Vec<(u32, i128, i128)>, acct: u32, db: i128, dq: i128| {
         match out.iter_mut().find(|(a, _, _)| *a == acct) {
@@ -137,20 +148,27 @@ pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury
             None => out.push((acct, db, dq)),
         }
     };
-    let mut fee_total = 0i128;
     for e in entries {
         let q = e.qty as i128;
-        let notional = q * p;
+        let gross = q * p;
+        // buyers round up, sellers round down → residual ≥ 0 (to treasury); exact when
+        // gross is a multiple of scale (whole-unit quantities), so ceil == floor.
+        let notional = match e.side {
+            Side::Buy => (gross + s - 1) / s,
+            Side::Sell => gross / s,
+        };
         let fee = notional * fee_bps as i128 / 10_000;
-        fee_total += fee;
         let (db, dq) = match e.side {
             Side::Buy => (q, -(notional + fee)),   // buyer pays notional + fee
             Side::Sell => (-q, notional - fee),    // seller receives notional − fee
         };
         add(&mut out, e.account, db, dq);
     }
-    if fee_total != 0 {
-        add(&mut out, treasury, 0, fee_total);
+    // Treasury absorbs fees + any rounding residual so Σ quote deltas == 0 exactly.
+    // (Σ base deltas == 0 already: buys +q, sells −q, and matched buy qty == sell qty.)
+    let resid: i128 = out.iter().map(|(_, _, dq)| *dq).sum();
+    if resid != 0 {
+        add(&mut out, treasury, 0, -resid);
     }
     out
 }
@@ -176,5 +194,46 @@ mod tests {
             Order { account: 2, id: 2, side: Side::Sell, price: 100, qty: 10 },
         ]);
         assert_eq!(decode_clearing(&encode_clearing(&c)), Some(c));
+    }
+
+    #[test]
+    fn scaled_settlement_is_exact_for_whole_quantities() {
+        // scale 10000; a fractional display price 1.1 = 11000 atomic. Whole-unit
+        // quantities are atomic multiples of scale (5 units = 50000), so the notional
+        // divides exactly: 50000 · 11000 / 10000 = 55000 atomic = 5.5 display. Buyer
+        // and seller settle at the identical notional — no residual beyond the (zero) fee.
+        let scale = 10_000u32;
+        let entries = [
+            SettleEntry { account: 1, side: Side::Buy, qty: 5 * scale },
+            SettleEntry { account: 2, side: Side::Sell, qty: 5 * scale },
+        ];
+        let d = settle_deltas(11_000, &entries, 0, u32::MAX, scale);
+        let buyer = d.iter().find(|(a, _, _)| *a == 1).unwrap();
+        let seller = d.iter().find(|(a, _, _)| *a == 2).unwrap();
+        assert_eq!(buyer.1, (5 * scale) as i128);   // +5 units base (atomic)
+        assert_eq!(buyer.2, -55_000);               // −5.5 quote (atomic)
+        assert_eq!(seller.2, 55_000);               // +5.5 quote (atomic) — exact, no dust
+        assert!(d.iter().find(|(a, _, _)| *a == u32::MAX).is_none()); // no residual/fee
+        // conservation
+        assert_eq!(d.iter().map(|x| x.1).sum::<i128>(), 0);
+        assert_eq!(d.iter().map(|x| x.2).sum::<i128>(), 0);
+    }
+
+    #[test]
+    fn scaled_settlement_conserves_with_rounding_dust() {
+        // qty NOT a multiple of scale → the ceil/floor split leaves a residual, which
+        // the treasury absorbs so value is still conserved exactly.
+        let entries = [
+            SettleEntry { account: 1, side: Side::Buy, qty: 3 },
+            SettleEntry { account: 2, side: Side::Sell, qty: 1 },
+            SettleEntry { account: 3, side: Side::Sell, qty: 2 },
+        ];
+        let d = settle_deltas(7, &entries, 30, u32::MAX, 10_000);
+        assert_eq!(d.iter().map(|x| x.1).sum::<i128>(), 0);
+        assert_eq!(d.iter().map(|x| x.2).sum::<i128>(), 0);
+        // treasury only ever receives (never overdrawn)
+        if let Some(t) = d.iter().find(|(a, _, _)| *a == u32::MAX) {
+            assert!(t.2 >= 0);
+        }
     }
 }

@@ -29,6 +29,13 @@ const TAG_LIST: u8 = 6; // [tag][market][base][quote] — list a market (canonic
 const FEE_BPS: u32 = 30;
 const FEE_ACCOUNT: u32 = u32::MAX;
 
+// Fixed-point price scale: on-chain prices, quantities, and balances are integer
+// *atomic* units = display × SCALE, so a fractional price like 1.1050 is carried as
+// the integer 11050. Settlement de-scales the quote notional by one factor of SCALE
+// (see wire::settle_deltas). The off-chain layer scales on ingest and de-scales on
+// read; the matching engine itself is scale-agnostic (it matches raw integers).
+const SCALE: u32 = 10_000; // 4 decimal places
+
 const NONCE_LEN: usize = 32;
 const REVEAL_LEN: usize = wire::ORDER_LEN + NONCE_LEN; // order(17) ‖ nonce(32)
 
@@ -260,7 +267,7 @@ impl Service for Jamswap {
                     set_storage(&mkey(b"commits", market), &[]).ok(); // commitments consumed
                     if let Some((price, entries)) = wire::decode_settlement(settle) {
                         if !entries.is_empty() {
-                            for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_BPS, FEE_ACCOUNT) {
+                            for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_BPS, FEE_ACCOUNT, SCALE) {
                                 let apply = |bal: u64, d: i128| -> u64 {
                                     (bal as i128 + d).clamp(0, u64::MAX as i128) as u64
                                 };
@@ -293,7 +300,7 @@ impl Service for Jamswap {
                     if let Some((price, entries)) = wire::decode_settlement(settle) {
                         // conservation-checked deltas (incl. the fee to the treasury):
                         // base_delta in base asset, quote_delta in quote asset.
-                        for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_BPS, FEE_ACCOUNT) {
+                        for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_BPS, FEE_ACCOUNT, SCALE) {
                             let apply = |bal: u64, d: i128| -> u64 {
                                 (bal as i128 + d).clamp(0, u64::MAX as i128) as u64
                             };

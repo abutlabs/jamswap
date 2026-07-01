@@ -74,7 +74,8 @@ fn main() {
             .iter()
             .filter_map(|f| orders.iter().find(|o| o.id == f.id).map(|o| SettleEntry { account: o.account, side: o.side, qty: f.qty }))
             .collect();
-        for (acct, db, dq) in settle_deltas(c.price, &entries, FEE_BPS, TREASURY) {
+        // scale 1: this stress test works in the raw integer domain (no fixed-point display)
+        for (acct, db, dq) in settle_deltas(c.price, &entries, FEE_BPS, TREASURY, 1) {
             *bal.entry((BASE, acct)).or_insert(0) += db;
             *bal.entry((QUOTE, acct)).or_insert(0) += dq;
         }
