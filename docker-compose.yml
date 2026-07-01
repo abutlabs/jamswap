@@ -1,7 +1,11 @@
 # Run the Jamswap DEX end-to-end — one command, NO lasair source needed:
 #
-#   docker compose up                   # -> trading UI at http://localhost:8080
+#   docker compose up                   # -> single-node dev harness + trading UI :8080
 #   docker compose --profile demo run --rm demo   # the narrated CLI scenario
+#
+# For a REAL 6-validator JAM testnet (consensus, TCP gossip, leader rotation, 6s slots)
+# instead of this single-node harness, use the sibling compose file:
+#   docker compose -f docker-compose.testnet.yml up      # -> 6 validators + UI :8080
 #
 # The JAM node is pulled as a published multi-arch image (ghcr.io/abutlabs/lasair-node),
 # so this runs natively on amd64 AND arm64 (Apple Silicon) — see README "Run it".

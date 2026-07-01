@@ -84,8 +84,8 @@ Jamswap's on-chain (in-validator-RAM) footprint **is** its state:
 32 B commitment to validator RAM; an unmatched limit order rests as 17 B). Every **6 s
 auction** (matching JAM's 6 s block cadence) **clears** orders → book and commitments
 shrink → **footprint falls → JAMKB is freed**. The DEX becomes a live, visible meter of
-JAM state being consumed and released — and **JSMBK is the JAMKB-prototype token** that
-backs it. Because JSMBK is *also* a trading pair on the DEX, the **cost of state has a
+JAM state being consumed and released — and **JAMKB is the prototype token** for that
+resource. Because JAMKB is *also* a trading pair on the DEX, the **cost of state has a
 real market price** (in USDC/DOT) — precisely the inelastic-resource pricing JAMKB
 exists to create. The DEX trades the very token that pays for the DEX's RAM.
 
@@ -94,19 +94,25 @@ exists to create. The DEX trades the very token that pays for the DEX's RAM.
 ```
 footprint_octets(service) = Σ over storage items ( len(key) + len(value) )
 footprint_items(service)  = count of storage items
-JAMKB_required(service)   = ceil( footprint_octets / 1024 )          # 1 JSMBK = 1 KB
+JAMKB_required(service)   = ceil( footprint_octets / 1024 )          # 1 JAMKB = 1 KB
 solvent                   = JAMKB_held(service) ≥ JAMKB_required(service)
 ```
 
-`JAMKB_held` is the service's JSMBK balance (a special account = the service itself).
+`JAMKB_held` is the service's JAMKB balance (a special account = the service itself).
 A round that **adds** sealed commitments / resting orders **raises** `JAMKB_required`;
 clearing **lowers** it. Insolvency (footprint > JAMKB held) is the condition the
 protocol must react to.
 
+> **Implemented as a read-only tracker (for now).** The prototype surfaces
+> `JAMKB_required` as a live meter only — nothing is held, funded, or consumed, and
+> `solvent` is not enforced. The held-reserve / solvency model above is the *deferred*
+> design (see Phase 2); re-enabling it is a contained change once the protocol question
+> in §7 is settled.
+
 ## 5. Multiphase plan (build order — safe first, invasive last)
 
 **Phase 0 — DEX foundation (no JAMKB enforcement; clearly-scoped UX).**
-Tokens → **USDC, DOT, JSMBK**; **all pairs** (DOT/USDC, JSMBK/USDC, JSMBK/DOT);
+Tokens → **USDC, DOT, JAMKB**; **all pairs** (DOT/USDC, JAMKB/USDC, JAMKB/DOT);
 **limit + market** order types; **6 s auto-auction** (a server tick clears every market
 every 6 s, like block production); a **mempool toggle** that reveals the data sitting in
 the service (sealed + unsealed); **users view/decrypt their own** pending orders (they
@@ -119,10 +125,12 @@ The UI renders a **JAM state-footprint meter**: items, octets, KB — *actual va
 RAM this service occupies right now*. No token, no enforcement — just the truth, live.
 
 **Phase 2 — JAMKB accounting layer (service + UI, still no protocol enforcement).** ✅ done
-Define `JAMKB_required = ceil(octets/1024)`; treat the service's **JSMBK balance** as
-`JAMKB_held`. UI shows **required vs held vs free headroom**, updating as orders accrue
-and clear. A "top up reserve" action moves JSMBK to the service account. This
-demonstrates the economics end-to-end **without** changing consensus.
+Define `JAMKB_required = ceil(octets/1024)`; the UI surfaces it as a **read-only tracker**
+alongside items and octets, updating live as orders accrue and clear. JAMKB is **not
+consumed for now** — nothing is held, funded, or debited; the meter just measures the
+footprint. (An earlier iteration modelled a held reserve with headroom/solvency and a
+"top up reserve" action; that consumption model is deferred until the protocol question
+below is settled.) This surfaces the economics end-to-end **without** changing consensus.
 
 > **Phases 0–2 are where we stop building.** They make JAMKB *measurable and
 > discussable* on a running system — which is the contribution we want to bring to the
@@ -148,7 +156,7 @@ This file + the README "How Jamswap works" section, kept in lockstep.
 1. **Hold vs rent.** The article is *hold-to-occupy* (JAMKB locked while state exists),
    not a per-block burn. We follow hold semantics. A rent/decay variant (footprint
    costs JAMKB-flow over time) is a richer but more opinionated model — note, don't build.
-2. **Who supplies the JAMKB?** Options: (a) the **service** holds a JSMBK reserve and
+2. **Who supplies the JAMKB?** Options: (a) the **service** holds a JAMKB reserve and
    each order's submitter tops it up (state is a cost of trading); (b) a **per-order
    bond** returned when the order clears/cancels (aligns incentives — you pay JAMKB
    while your order occupies RAM, refunded when it leaves). We lean to (b): it makes

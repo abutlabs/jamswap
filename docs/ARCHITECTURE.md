@@ -51,6 +51,12 @@ Settlement moves the **market's** `base`/`quote` assets between traders.
 - **Settlement**: `price:u32 ‖ n:u32 ‖ n×(account:u32 ‖ side:u8 ‖ qty:u32)`
 - **Reveal** (49 B): `order(17) ‖ nonce(32)`; **commitment** = `Blake2s256(reveal)`
 
+Prices, quantities, and balances are integer **atomic** units = display × `SCALE`
+(`SCALE = 10_000` → 4 decimals), so a fractional price like `1.1050` is carried as the
+integer `11050`. The matching engine stays integer-only; **settlement** de-scales the
+quote notional by one factor of `SCALE` (`qty·price / SCALE`). The off-chain layer
+scales on ingest and de-scales on read, so the UI speaks plain decimals end-to-end.
+
 ## Storage layout (service state)
 
 | Key | Value | Meaning |
@@ -72,10 +78,12 @@ Settlement moves the **market's** `base`/`quote` assets between traders.
    `refine` clears the uniform-price auction; partially/un-filled orders become
    the new resting book.
 3. **Settle** — `accumulate` applies conservation-checked per-account deltas
-   (`settle_deltas`: buy = +base/−(quote+fee), sell = −base/+(quote−fee)), routes a
-   **flat trading fee** (30 bps on each side's quote notional) to the treasury
-   account, persists the new `book`, clears `commits`, and bumps stats. **Σ = 0 per
-   asset including the treasury** — fees are moved, not minted.
+   (`settle_deltas`: buy = +base/−(quote+fee), sell = −base/+(quote−fee); quote notional
+   = `qty·price / SCALE`, buyers rounding up and sellers down so any fixed-point dust
+   flows to the treasury — exact when quantities are whole units), routes a **flat
+   trading fee** (30 bps on each side's quote notional) to the treasury account,
+   persists the new `book`, clears `commits`, and bumps stats. **Σ = 0 per asset
+   including the treasury** — fees (and rounding dust) are moved, not minted.
 
 The "builder" (the party that reads on-chain `book`/`commits` and assembles the
 next payload) is, in the MVP, the test/off-chain caller. The plan's alternative —
@@ -111,6 +119,6 @@ Two layers, both proven e2e:
   (Σ buy fills == Σ sell fills == volume), determinism (byte-identical re-runs),
   per-order fill ≤ quantity.
 - **Settlement**: Σ base deltas == 0 and Σ quote deltas == 0 *including the trading
-  fee to the treasury* — a batch moves value (and fees) between accounts, never
-  creates or destroys it (property-tested `settle_deltas` over random fees, used
-  directly by the service).
+  fee and any fixed-point rounding dust to the treasury* — a batch moves value, never
+  creates or destroys it (property-tested `settle_deltas` over random fees **and price
+  scales**, used directly by the service).

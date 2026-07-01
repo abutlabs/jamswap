@@ -53,6 +53,11 @@ cd service && jam-pvm-build -m service          # -> jamswap-service.jam
 # read settlement: GET /v1/service/<id>/storage/<hex("last_price"|"rounds"|...)>
 ```
 
+> *This is the M1 snapshot. Since then the order wire gained an `account` field
+> (orders are **17 B**) and prices/quantities are **fixed-point atomic** units (× 10⁴);
+> see [`ARCHITECTURE.md`](ARCHITECTURE.md) for the current formats. The M1 result above
+> (refine gas, byte-identical determinism) is in `refine`/matching and is unchanged.*
+
 ## Next (PLAN.md phases)
 
 Phase 2 settlement (per-fill balance ledger + custody), Phase 3 deposits/

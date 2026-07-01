@@ -58,6 +58,11 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
 - ✅ **Trading fee** (revenue model) — a flat 30 bps fee on matched notional accrues
   to a treasury account (per-market quote asset); conservation holds *including* the
   fee (property-tested over random fee rates).
+- ✅ **Fixed-point decimal prices** — prices, quantities, and balances are integer
+  *atomic* units (display × 10⁴), so orders carry 4 decimals (e.g. `1.1050`) while the
+  engine stays integer-only. Settlement de-scales the quote notional exactly (buyers
+  round up / sellers down, any dust to the treasury); conservation is preserved and
+  property-tested over random price scales.
 - ✅ **Economic simulation** ([`sim/engine-sim`](sim/engine-sim)) — drives the real
   engine with random order flow over thousands of rounds (`cargo run --release`),
   reports market quality (fill rate, price stability, fee revenue) and **asserts
@@ -80,8 +85,22 @@ You **don't need the lasair source** — the JAM node is pulled as a published,
 **multi-arch** image (`ghcr.io/abutlabs/lasair-node`). Just clone this repo and:
 
 ```sh
-docker compose up                  # -> trading UI at http://localhost:8080
+docker compose up                  # -> Single Node, trading UI at http://localhost:8080
 ```
+
+That single node is a dev harness (immediate local execution). To run against **real
+JAM consensus** — **six validators** with TCP block gossip, wall-clock leader rotation,
+6 s slots, and STF import (PolkaJam-style) — use the testnet compose instead:
+
+```sh
+docker compose -f docker-compose.testnet.yml up    # -> 6 validators + same UI at :8080
+```
+
+Now every order is gossiped, included in a block, and re-executed by all six validators
+byte-identically; settlement lands a slot or two later (real 6 s cadence). The validator
+count is **fixed at 6** — the `lasair-testnet-node` image ships a 6-validator genesis
+(`NODE_INDEX` 0–5) — and the dex points at validator `v0`'s operator RPC. Both modes
+serve the same UI on `:8080`; the arch notes below apply to either.
 
 | Your machine | What runs | Notes |
 |---|---|---|
@@ -118,14 +137,14 @@ docker compose --profile demo run --rm demo   # see sim/demo.py
 
 Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-## How Jamswap works (the trading UI)
+## How Jamswap Prototype works (the trading UI)
 
 The UI at `:8080` (`offchain/`) is wallet-native. The flow:
 
 1. **Connect Talisman** (or any injected Polkadot wallet) — your real accounts, not
    `Account 1`. The on-chain account id is derived from your address.
-2. **Fund** in the Faucet tab — assets are **USDC, DOT, JSMBK**, tradable across all
-   three pairs (**DOT/USDC, JSMBK/USDC, JSMBK/DOT**).
+2. **Fund** in the Faucet tab — assets are **USDC, DOT, JAMKB**, tradable across all
+   three pairs (**DOT/USDC, JAMKB/USDC, JAMKB/DOT**).
 3. **Place an order** — **Buy/Sell**, **Limit** (you set the price) or **Market**
    (takes the clearing price). Each order pops a **wallet confirmation** (`signRaw`)
    before it joins the batch. Tick **🔒 Seal** to hide it.
@@ -142,12 +161,13 @@ The UI at `:8080` (`offchain/`) is wallet-native. The flow:
 6. **Your pending orders** — *decrypted for you* (you hold the nonce), with **cancel**
    for any not yet cleared. Resting (on-chain) orders cancel via `TAG_CANCEL`.
 
-### JSMBK and JAMKB — pricing the state the service consumes
+### JAMKB — pricing the state the service consumes
 
 Jamswap holds live state (order books, sealed commitments, balances) in **validator
 RAM** — exactly the resource Gavin Wood's **JAMKB** token prices (1 JAMKB ≙ 1 KB of JAM
-state footprint). **JSMBK** is our prototype of that token: it backs the service's
-footprint, and because it's also a trading pair, *the cost of state gets a market
+state footprint). **JAMKB** is our prototype of that token: the DEX tracks the footprint
+it implies as a **read-only meter** (nothing is held, funded, or consumed for now), and
+because JAMKB is also a trading pair, *the cost of state gets a market
 price*. Placing orders grows the footprint; the 6 s auctions clear them and free it.
 We build the **metrics** (a live footprint→JAMKB meter) to make this measurable and
 discussable — we deliberately **don't** enforce it in the node: pricing JAM's state is a
