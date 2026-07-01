@@ -16,9 +16,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST = range(7)
 
 # assets + the six markets are config; the service itself is asset-agnostic.
-USDC, DOT, JSMBK = 0, 1, 2
-STATE_ACCOUNT = 0xFFFFFFFE             # the service's JAMKB (JSMBK) reserve backing its footprint
+USDC, DOT, JAMKB = 0, 1, 2
 AUCTION_SECS = 6                       # auctions clear every 6s, like JAM block production
+# Fixed-point price scale (must match SCALE in service/src/lib.rs). On-chain, prices,
+# quantities, and balances are integer *atomic* units = display × SCALE, so a fractional
+# price like 1.1050 is carried as 11050. We scale on the way IN (orders, deposits) and
+# de-scale on the way OUT (book, mempool, balances, prices), so the UI speaks plain
+# decimals while the chain/engine stay integer-only.
+SCALE = 10_000                         # 4 decimal places
+def to_atomic(x): return int(round(float(x) * SCALE))
+def disp(v):                           # atomic int -> display number (int if whole)
+    d = round(v / SCALE, 4)
+    return int(d) if d == int(d) else d
 _lock = threading.Lock()              # guards the pending books across request + auction threads
 _next_auction = [0.0]                 # wall-clock of the next auction tick (for the UI countdown)
 
@@ -61,16 +70,17 @@ def book_of(m):
     bk = storage(b"book" + struct.pack("<I", m)); out = []
     for i in range(len(bk) // 17):
         a, oid, side, p, q = struct.unpack_from("<IIBII", bk, i * 17)
-        out.append({"account": a, "id": oid, "side": "buy" if side == BUY else "sell", "price": p, "qty": q})
+        out.append({"account": a, "id": oid, "side": "buy" if side == BUY else "sell",
+                    "price": disp(p), "qty": disp(q)})
     return out
 
 # ---- API handlers ---------------------------------------------------------
 def api_deposit(b):
-    submit(bytes([1]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), int(b["amount"])))
+    submit(bytes([1]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), to_atomic(b["amount"])))
     return {"ok": True}
 def api_withdraw(b):
-    submit(bytes([5]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), int(b["amount"])))
-    return {"ok": True, "balance": bal(int(b["asset"]), int(b["account"]))}
+    submit(bytes([5]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), to_atomic(b["amount"])))
+    return {"ok": True, "balance": disp(bal(int(b["asset"]), int(b["account"])))}
 def api_list(b):
     submit(bytes([6]) + struct.pack("<III", int(b["market"]), int(b["base"]), int(b["quote"])))
     return {"ok": True}
@@ -82,8 +92,10 @@ def api_order(b):
     m = int(b["market"]); oid = next_oid[0]; next_oid[0] += 1
     side = BUY if b["side"] == "buy" else SELL
     otype = b.get("type", "limit")
-    acct, qty = int(b["account"]), int(b["qty"])
-    price = (MARKET_BUY_PRICE if side == BUY else MARKET_SELL_PRICE) if otype == "market" else int(b["price"])
+    # atomic units on-chain: qty and limit price scale by SCALE. Market prices are
+    # sentinels (already atomic-domain), so they cross everything without scaling.
+    acct, qty = int(b["account"]), to_atomic(b["qty"])
+    price = (MARKET_BUY_PRICE if side == BUY else MARKET_SELL_PRICE) if otype == "market" else to_atomic(b["price"])
     o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty, "type": otype,
          "sealed": bool(b.get("sealed")), "address": b.get("address", "")}
     if o["sealed"]:
@@ -108,12 +120,15 @@ def api_round(b):
         commits = b"".join(commitment(o["reveal"]) for o in sealed)
         reveals = b"".join(o["reveal"] for o in sealed)
         submit(bytes([TAG_REVEAL]) + hdr + struct.pack("<I", len(commits)) + commits + reveals)
-    # public batch: resting book (from chain) + this round's public orders -> MATCH
-    if public or not sealed:
+    # public batch: resting book (from chain) + this round's public orders -> MATCH.
+    # Only when there are new public orders — an empty match would re-clear the resting
+    # book to volume 0 / price 0 and wipe the last clearing price (e.g. "clear now" on an
+    # idle market). Resting orders don't cross on their own, so skipping is a safe no-op.
+    if public:
         rest = storage(b"book" + struct.pack("<I", m))
         body = b"".join(order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"]) for o in public)
         submit(bytes([TAG_MATCH]) + hdr + rest + body)
-    return {"ok": True, "price": mstate(b"lp", m), "volume": mstate(b"cv", m),
+    return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
             "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public)}}
 def short(a):
     return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a
@@ -123,13 +138,13 @@ def mempool_entry(o, owner=False):
     e = {"oid": o["oid"], "account": o["account"], "side": "buy" if o["side"] == BUY else "sell",
          "sealed": o["sealed"], "type": o.get("type", "limit"),
          "who": short(o.get("address", "")) or f"acct {o['account']}"}
-    e["price"], e["qty"] = (None, None) if (o["sealed"] and not owner) else (o["price"], o["qty"])
+    e["price"], e["qty"] = (None, None) if (o["sealed"] and not owner) else (disp(o["price"]), disp(o["qty"]))
     return e
 def api_state(q):
     m = int(q.get("market", "1"))
     mempool = [mempool_entry(o) for o in pending.get(m, [])]
     onchain_commits = len(storage(b"commits" + struct.pack("<I", m))) // 32
-    return {"price": mstate(b"lp", m), "volume": mstate(b"cv", m), "book": book_of(m),
+    return {"price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)), "book": book_of(m),
             "pending": len(pending.get(m, [])), "mempool": mempool, "sealed_onchain": onchain_commits,
             "next_auction_in": round(max(0.0, _next_auction[0] - time.time()), 1), "auction_secs": AUCTION_SECS}
 def api_mine(q):
@@ -151,19 +166,18 @@ def api_cancel_pending(b):
             removed += len(orders) - len(keep); pending[mid] = keep
     return {"ok": True, "removed": removed}
 def api_balance(q):
-    return {"balance": bal(int(q["asset"]), int(q["account"]))}
+    return {"balance": disp(bal(int(q["asset"]), int(q["account"])))}
 def api_footprint(q):
     # the service's live state footprint (validator RAM) + the JAMKB it implies.
-    # JAMKB_held = the service's JSMBK reserve (STATE_ACCOUNT); 1 JSMBK = 1 KB.
+    # JAMKB is a READ-ONLY tracker for now: 1 JAMKB = 1 KB of footprint. This is a
+    # measurement only — nothing is held, funded, or consumed. Whether to enforce a
+    # reserve/consumption model in the node is a deferred protocol decision (docs/JAMKB.md).
     try:
         fp = node(f"/v1/service/{SID}/footprint")
     except Exception:
         # older lasair-node (< the footprint endpoint) — degrade gracefully
         return {"available": False}
-    held = bal(JSMBK, STATE_ACCOUNT)
-    req = fp.get("jamkb_required", 0)
-    fp.update({"available": True, "jamkb_held": held, "headroom": held - req,
-               "solvent": held >= req, "state_account": STATE_ACCOUNT})
+    fp["available"] = True
     return fp
 
 ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
@@ -172,7 +186,7 @@ ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
 
 # the markets the UI shows; listed once at startup so they're tradable.
 # every combination of the three assets: (market_id, base, quote)
-DEFAULT_MARKETS = [(1, DOT, USDC), (2, JSMBK, USDC), (3, JSMBK, DOT)]
+DEFAULT_MARKETS = [(1, DOT, USDC), (2, JAMKB, USDC), (3, JAMKB, DOT)]
 def ensure_markets():
     for m, base, quote in DEFAULT_MARKETS:
         try: api_list({"market": m, "base": base, "quote": quote})

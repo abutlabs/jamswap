@@ -3,451 +3,656 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Jamswap — order-book DEX on JAM</title>
+<title>JAMswap — order-book DEX on JAM</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-  :root { --pink:#E6007A; --bg:#0e0e12; --panel:#17171d; --panel2:#1e1e26; --line:#2a2a33;
-          --green:#21d07a; --red:#ff5470; --dim:#8a8a99; --gold:#f5b14c; }
-  * { box-sizing:border-box; }
-  body { margin:0; background:var(--bg); color:#e8e8ef; font:14px/1.5 ui-sans-serif,system-ui,sans-serif; }
-  .mono { font-family:ui-monospace,"Roboto Mono",monospace; }
-  a { color:var(--pink); }
-  header { padding:14px 24px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; }
-  header h1 { margin:0; font-size:18px; letter-spacing:.04em; }
-  header h1 b { color:var(--pink); }
-  header .sub { color:var(--dim); font-size:12px; flex:1; }
-  #wallet { display:flex; align-items:center; gap:8px; }
-  .chip { display:inline-flex; align-items:center; gap:6px; font-size:12px; padding:5px 10px;
-          border:1px solid var(--line); border-radius:999px; color:var(--dim); background:var(--panel); }
-  .chip .dot { width:7px; height:7px; border-radius:50%; background:var(--dim); }
-  .chip.live .dot { background:var(--green); }
-  button { background:var(--pink); color:#fff; border:0; padding:10px; border-radius:8px; cursor:pointer;
-           font-weight:600; width:100%; transition:filter .12s, opacity .12s; }
-  button:hover:not(:disabled) { filter:brightness(1.12); }
-  button:disabled { opacity:.4; cursor:not-allowed; }
-  button.ghost { background:transparent; border:1px solid var(--line); color:#e8e8ef; }
-  button.small { width:auto; padding:7px 14px; font-size:13px; }
-  button.tiny { width:auto; padding:3px 9px; font-size:11px; font-weight:500; }
-  nav.tabs { display:flex; gap:4px; padding:12px 24px 0; }
-  nav.tabs .t { padding:9px 20px; border:1px solid transparent; border-bottom:0; border-radius:9px 9px 0 0;
-                cursor:pointer; color:var(--dim); font-weight:600; }
-  nav.tabs .t.active { color:#fff; background:var(--panel); border-color:var(--line); }
-  .mtabs { display:flex; gap:8px; margin-bottom:14px; flex-wrap:wrap; }
-  .mtab { padding:7px 16px; border:1px solid var(--line); border-radius:8px; cursor:pointer; color:var(--dim); }
-  .mtab.active { color:#fff; border-color:var(--pink); background:var(--panel2); }
-  main { padding:16px 24px; }
-  .grid3 { display:grid; grid-template-columns:1.25fr 1fr 1fr; gap:16px; }
-  .grid1 { max-width:560px; }
-  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
-  .panel h2 { margin:0 0 12px; font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--dim);
-              display:flex; align-items:center; justify-content:space-between; }
-  .price { font-size:30px; font-weight:600; } .price small { font-size:13px; color:var(--dim); font-weight:400; }
-  /* auction countdown */
-  .auction { display:flex; align-items:center; gap:10px; margin:14px 0; padding:10px 12px;
-             border:1px solid var(--line); border-radius:10px; background:var(--panel2); }
-  .auction .clock { font-size:20px; font-weight:700; color:var(--pink); min-width:42px; text-align:center; }
-  .auction .lbl { font-size:12px; color:var(--dim); flex:1; }
-  .bar { height:4px; background:#0e0e12; border-radius:3px; overflow:hidden; margin-top:6px; }
-  .bar > div { height:100%; background:var(--pink); transition:width .25s linear; }
-  table { width:100%; border-collapse:collapse; } td,th { padding:3px 6px; text-align:right; }
-  th { color:var(--dim); font-weight:500; font-size:11px; text-transform:uppercase; }
-  tr.ask td { color:var(--red); } tr.bid td { color:var(--green); }
-  label { display:block; color:var(--dim); font-size:12px; margin:10px 0 3px; }
-  input, select { width:100%; background:#0e0e12; border:1px solid var(--line); color:#fff; padding:9px; border-radius:8px; }
-  .row { display:flex; gap:8px; } .row > * { flex:1; }
-  .seg { display:flex; gap:8px; margin-top:4px; } .seg button { margin:0; }
-  .seg button.buy.on  { background:var(--green); color:#06160d; box-shadow:0 0 0 2px rgba(33,208,122,.3); }
-  .seg button.sell.on { background:var(--red);   color:#1a0408; box-shadow:0 0 0 2px rgba(255,84,112,.3); }
-  .seg button.pick.on { background:var(--pink); color:#fff; }
-  .seg button.off { background:transparent; border:1px solid var(--line); color:var(--dim); box-shadow:none; }
-  .bal { display:flex; justify-content:space-between; border-bottom:1px solid var(--line); padding:7px 0; }
-  .bal b { font-weight:600; }
-  .note { color:var(--dim); font-size:11px; margin-top:10px; }
-  .check { display:flex; align-items:center; gap:8px; margin-top:12px; color:#cfcfe0; font-size:13px; cursor:pointer; }
-  .check input { width:auto; }
-  .mem { margin:4px 0 14px; }
-  .mem .empty { color:var(--dim); font-size:12px; padding:6px 0; }
-  .mrow { display:flex; align-items:center; gap:8px; padding:6px 8px; border:1px solid var(--line);
-          border-radius:8px; margin-bottom:5px; background:var(--panel2); font-size:12px; }
-  .mrow .badge { font-size:10px; padding:2px 7px; border-radius:999px; font-weight:700; letter-spacing:.04em; }
-  .badge.pub { background:rgba(33,208,122,.16); color:var(--green); }
-  .badge.seal { background:rgba(245,177,76,.16); color:var(--gold); }
-  .badge.mkt { background:rgba(230,0,122,.16); color:var(--pink); }
-  .mrow .s-buy { color:var(--green); font-weight:700; } .mrow .s-sell { color:var(--red); font-weight:700; }
-  .mrow .who { color:var(--dim); margin-left:auto; }
-  .seal-summary { font-size:11px; color:var(--gold); margin:2px 0 10px; }
-  /* JAMKB footprint meter */
-  .fp-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:14px; align-items:end; }
-  .fp-n { font-size:22px; font-weight:700; } .fp-l { font-size:11px; color:var(--dim); }
-  #topup { width:100%; }
-  #toasts { position:fixed; top:16px; right:16px; display:flex; flex-direction:column; gap:8px; z-index:50; }
-  .toast { padding:11px 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel2);
-           font-size:13px; min-width:230px; box-shadow:0 8px 24px rgba(0,0,0,.4); animation:slidein .18s ease; }
-  .toast.ok   { border-left:3px solid var(--green); } .toast.err { border-left:3px solid var(--red); }
-  .toast.info { border-left:3px solid var(--pink);  } .toast .x { float:right; color:var(--dim); cursor:pointer; }
-  @keyframes slidein { from { opacity:0; transform:translateX(20px);} to { opacity:1; transform:none; } }
-  .hidden { display:none !important; }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+  body{background:radial-gradient(ellipse 120% 40% at 50% -4%,rgba(230,0,122,.09) 0%,transparent 55%),#0d0d14;
+       color:#f0f0ff;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;}
+  input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;}
+  input[type=number]{-moz-appearance:textfield;}
+  input,select,button,textarea{font-family:inherit;}
+  a{color:#E6007A;}
+  .mono{font-family:'IBM Plex Mono',monospace;}
+  .hidden{display:none !important;}
+  @keyframes slideIn{from{opacity:0;transform:translateX(14px);}to{opacity:1;transform:none;}}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+  ::-webkit-scrollbar{width:3px;} ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:2px;}
 </style>
 </head>
 <body>
-<header>
-  <h1><b>JAMSWAP</b> · order-book DEX on JAM</h1>
-  <span class="sub">frequent batch auction · uniform price · MEV-resistant · matching in Refine</span>
-  <div id="wallet">
-    <span id="chain" class="chip"><span class="dot"></span><span id="chain-txt">lasair · connecting…</span></span>
-    <button id="connect" class="small">Connect Talisman</button>
-    <select id="acctsel" class="hidden mono" style="width:auto"></select>
-  </div>
-</header>
 
-<nav class="tabs" id="tabs">
-  <div class="t active" data-tab="trade">Trade</div>
-  <div class="t" data-tab="faucet">Faucet</div>
+<!-- NAV -->
+<nav style="position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:4px;padding:0 32px;height:62px;background:rgba(13,13,20,.9);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-bottom:1px solid rgba(255,255,255,.06);">
+  <a href="#" style="display:flex;align-items:baseline;text-decoration:none;flex-shrink:0;margin-right:14px;">
+    <span style="font-size:20px;font-weight:700;color:#E6007A;letter-spacing:-.03em;">JAM</span><span style="font-size:20px;font-weight:700;color:#f0f0ff;letter-spacing:-.03em;">swap</span>
+  </a>
+  <button id="nav-trade">Trade</button>
+  <button id="nav-faucet">Faucet</button>
+  <a href="https://github.com/abutlabs/jamswap" target="_blank" style="padding:7px 14px;border-radius:10px;color:rgba(240,240,255,.35);font-size:14px;font-weight:500;text-decoration:none;">Docs ↗</a>
+  <div style="flex:1;"></div>
+  <div style="display:flex;align-items:center;gap:7px;padding:6px 14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:999px;font-size:12px;color:rgba(240,240,255,.5);margin-right:10px;flex-shrink:0;">
+    <div style="width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 8px rgba(74,222,128,.9);animation:pulse 2s infinite;flex-shrink:0;"></div>
+    <span>lasair · localhost</span>
+  </div>
+  <button id="connect"><span id="wallet-label">Connect wallet</span></button>
 </nav>
 
-<main>
-  <!-- ===================== TRADE ===================== -->
+<!-- BODY -->
+<div style="max-width:1440px;margin:0 auto;padding:0 28px 64px;">
+
+  <!-- ═══════════════════ TRADE TAB ═══════════════════ -->
   <section id="tab-trade">
-    <div class="mtabs" id="mtabs"></div>
 
-    <section class="panel" id="jamkb" style="margin-bottom:16px">
-      <h2>JAM state footprint → JAMKB &nbsp;<span id="fp-solvent" class="badge"></span></h2>
-      <div class="fp-grid">
-        <div><div class="fp-n mono" id="fp-items">0</div><div class="fp-l">storage items</div></div>
-        <div><div class="fp-n mono" id="fp-octets">0 B</div><div class="fp-l">octets in validator RAM</div></div>
-        <div><div class="fp-n mono" id="fp-req">0</div><div class="fp-l">JSMBK required (1 / KB)</div></div>
-        <div><div class="fp-n mono" id="fp-held">0</div><div class="fp-l">JSMBK held (reserve)</div></div>
-        <div><div class="fp-n mono" id="fp-head">0</div><div class="fp-l">headroom</div></div>
-        <div><button id="topup" class="small ghost">Top up reserve +100</button></div>
+    <!-- Market selector + meta -->
+    <div style="display:flex;align-items:center;gap:8px;padding:20px 0 16px;flex-wrap:wrap;">
+      <div id="mtabs" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"></div>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:11px;color:rgba(240,240,255,.28);letter-spacing:.02em;">
+        <span>Frequent batch auctions</span><span style="opacity:.5;">·</span>
+        <span>30 bps fee</span><span style="opacity:.5;">·</span>
+        <span>MEV-resistant</span>
       </div>
-      <div class="note">This service keeps its order books &amp; sealed commitments in <b>validator RAM</b>.
-        Under <b>JAMKB</b>, 1 JSMBK backs 1 KB of that footprint. Place orders → footprint grows;
-        the 6 s auction clears them → it shrinks. This is a <b>measurement</b> to ground the JAMKB
-        discussion — enforcing it in the node is a protocol decision for the community, not ours to
-        bake in (<a href="https://github.com/abutlabs/jamswap/blob/main/docs/JAMKB.md" target="_blank">docs/JAMKB.md</a>).</div>
-    </section>
+    </div>
 
-    <div class="grid3">
-      <!-- order book + auction + mempool -->
-      <section class="panel">
-        <h2>Order book — <span id="mkt"></span></h2>
-        <div class="price mono"><span id="price">—</span>
-          <small>last clearing price · vol <span id="vol">0</span></small></div>
+    <!-- 3-column grid -->
+    <div style="display:grid;grid-template-columns:minmax(268px,1fr) 396px minmax(230px,1fr);gap:14px;align-items:start;">
 
-        <div class="auction">
-          <span class="clock mono" id="clock">6</span>
-          <div class="lbl">next auction (every 6 s, like a JAM block)
-            <div class="bar"><div id="bar" style="width:100%"></div></div></div>
-          <button id="run" class="tiny ghost">clear now</button>
+      <!-- ─── COL 1: ORDER BOOK ─── -->
+      <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <!-- Order book panel -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <span id="ob-market" style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Order Book</span>
+            <div style="display:flex;align-items:baseline;gap:8px;">
+              <span id="last-price" class="mono" style="font-size:22px;font-weight:600;color:#f0f0ff;line-height:1;">—</span>
+              <span style="font-size:11px;color:rgba(240,240,255,.3);">vol <span id="vol">0</span></span>
+            </div>
+          </div>
+          <div style="display:flex;justify-content:space-between;padding:0 4px;margin-bottom:4px;">
+            <span style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.2);">Price</span>
+            <span style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.2);">Size</span>
+          </div>
+          <div id="asks"></div>
+          <div style="display:flex;align-items:center;gap:8px;margin:7px 0;">
+            <div style="flex:1;height:1px;background:rgba(255,255,255,.07);"></div>
+            <span id="spread" class="mono" style="font-size:10px;color:rgba(240,240,255,.25);white-space:nowrap;">spread —</span>
+            <div style="flex:1;height:1px;background:rgba(255,255,255,.07);"></div>
+          </div>
+          <div id="bids"></div>
         </div>
 
-        <h2>Mempool — the data in the service
-          <button id="memtoggle" class="tiny ghost">hide</button></h2>
-        <div id="memwrap">
-          <div id="seal-summary" class="seal-summary"></div>
-          <div class="mem" id="mempool"><div class="empty">no orders queued for the next auction</div></div>
+        <!-- Auction countdown -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Next Auction</span>
+            <button id="run">clear now</button>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:12px;">
+            <span id="auction-sec" class="mono" style="font-size:44px;font-weight:700;color:#E6007A;line-height:1;">6</span>
+            <span style="font-size:14px;color:rgba(240,240,255,.28);">sec</span>
+            <span style="font-size:11px;color:rgba(240,240,255,.2);margin-left:6px;">· JAM block cadence</span>
+          </div>
+          <div style="height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;">
+            <div id="auction-bar" style="height:100%;background:linear-gradient(90deg,#E6007A,rgba(230,0,122,.55));border-radius:2px;width:100%;transition:width .22s linear;"></div>
+          </div>
         </div>
 
-        <h2>Resting book (on-chain)</h2>
-        <table><thead><tr><th>price</th><th>qty</th><th>side</th></tr></thead><tbody id="book"></tbody></table>
-        <div class="note">Sealed orders publish only a hash on-chain — price &amp; size stay hidden
-          until their auction. They are <b>immediate-or-cancel</b>: they match in that auction or
-          expire, and <b>never rest in the public book</b> exposing their terms. (The reveal itself
-          is briefly public on-chain — persistent privacy needs threshold encryption; see docs.)</div>
-      </section>
+        <!-- Mempool -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Mempool</span>
+            <button id="mem-toggle" style="padding:4px 10px;background:transparent;border:1px solid rgba(255,255,255,.08);color:rgba(240,240,255,.35);border-radius:6px;font-size:11px;cursor:pointer;">hide</button>
+          </div>
+          <div id="memwrap">
+            <div id="mempool"></div>
+            <div id="seal-summary" style="font-size:11px;color:#F59E0B;margin-top:8px;"></div>
+          </div>
+        </div>
 
-      <!-- place order -->
-      <section class="panel">
-        <h2>Place order</h2>
-        <div id="trade-gate" class="note" style="margin:0 0 10px">Connect a wallet to trade.</div>
-        <div class="seg">
-          <button id="sbuy" class="buy on">Buy</button>
-          <button id="ssell" class="sell off">Sell</button>
-        </div>
-        <label>Order type</label>
-        <div class="seg">
-          <button id="tlimit" class="pick on">Limit</button>
-          <button id="tmarket" class="pick off">Market</button>
-        </div>
-        <div class="row" style="margin-top:8px">
-          <div id="price-wrap"><label>Price (quote)</label><input id="price_in" class="mono" value="5" inputmode="numeric" /></div>
-          <div><label>Qty (base)</label><input id="qty_in" class="mono" value="10" inputmode="numeric" /></div>
-        </div>
-        <label class="check"><input type="checkbox" id="sealchk" />
-          🔒 Seal this order <span style="color:var(--dim)">(hidden until its auction; match-or-expire)</span></label>
-        <button id="place" style="margin-top:14px" disabled>Place order</button>
-        <div class="note" id="place-note">Signs in your wallet, then joins the next 6 s auction.</div>
-      </section>
+      </div>
 
-      <!-- balances + my orders -->
-      <section class="panel">
-        <h2>Your balances</h2>
-        <div id="who-trade" class="note" style="margin:0 0 8px">—</div>
-        <div id="bals"></div>
-        <h2 style="margin-top:20px">Your pending orders</h2>
-        <div id="mine"><div class="note">—</div></div>
-        <div class="note">Sealed orders are <b>decrypted here for you</b> (you hold the nonce).
-          Cancel any that haven't cleared yet.</div>
-      </section>
+      <!-- ─── COL 2: TRADE CARD ─── -->
+      <div>
+        <div style="background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:22px;position:sticky;top:78px;">
+
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+            <span style="font-size:15px;font-weight:700;color:#f0f0ff;">Place order</span>
+            <div style="display:flex;gap:2px;background:rgba(255,255,255,.055);border-radius:10px;padding:3px;">
+              <button id="tlimit">Limit</button>
+              <button id="tmarket">Market</button>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:8px;margin-bottom:18px;">
+            <button id="sbuy">Buy DOT</button>
+            <button id="ssell">Sell DOT</button>
+          </div>
+
+          <!-- Qty -->
+          <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:14px 16px;margin-bottom:8px;">
+            <div id="side-label" style="font-size:11px;color:rgba(240,240,255,.32);margin-bottom:8px;">You buy</div>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <input id="qty-in" type="number" value="10" placeholder="0" class="mono" style="flex:1;background:transparent;border:none;outline:none;font-size:28px;font-weight:600;color:#f0f0ff;min-width:0;" />
+              <div id="base-chip" style="display:flex;align-items:center;gap:7px;padding:7px 13px;border-radius:10px;flex-shrink:0;">
+                <div id="base-dot" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></div>
+                <span id="base-label" style="font-size:13px;font-weight:700;color:#f0f0ff;white-space:nowrap;">DOT</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Price (limit only) -->
+          <div id="price-block" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:14px 16px;margin-bottom:8px;">
+            <div style="font-size:11px;color:rgba(240,240,255,.32);margin-bottom:8px;">At price</div>
+            <div style="display:flex;align-items:center;gap:12px;">
+              <input id="price-in" type="number" value="100" placeholder="0" class="mono" style="flex:1;background:transparent;border:none;outline:none;font-size:28px;font-weight:600;color:#f0f0ff;min-width:0;" />
+              <div id="quote-chip" style="display:flex;align-items:center;gap:7px;padding:7px 13px;border-radius:10px;flex-shrink:0;">
+                <div id="quote-dot" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></div>
+                <span id="quote-label" style="font-size:13px;font-weight:700;color:#f0f0ff;white-space:nowrap;">USDC</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Summary -->
+          <div style="padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.025);margin-bottom:16px;">
+            <span id="summary" style="font-size:12px;color:rgba(240,240,255,.42);">Enter quantity and price to see total</span>
+          </div>
+
+          <!-- Seal toggle -->
+          <div id="seal-toggle" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);border-radius:14px;cursor:pointer;margin-bottom:14px;user-select:none;">
+            <div id="seal-track" style="width:38px;height:22px;background:rgba(255,255,255,.12);border-radius:11px;position:relative;flex-shrink:0;transition:background .18s;">
+              <div id="seal-knob" style="position:absolute;width:16px;height:16px;background:#fff;border-radius:50%;top:3px;left:3px;box-shadow:0 1px 4px rgba(0,0,0,.45);transition:left .18s;"></div>
+            </div>
+            <div>
+              <div style="font-size:13px;font-weight:500;color:#f0f0ff;">🔒 Seal order</div>
+              <div style="font-size:11px;color:rgba(240,240,255,.28);margin-top:2px;">Hidden until auction · immediate-or-cancel · MEV-resistant</div>
+            </div>
+          </div>
+
+          <!-- Fee -->
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px;margin-bottom:16px;">
+            <span style="font-size:12px;color:rgba(240,240,255,.28);">Fee (30 bps)</span>
+            <span class="mono" style="font-size:12px;color:rgba(240,240,255,.48);"><span id="fee">—</span> <span id="fee-quote">USDC</span></span>
+          </div>
+
+          <!-- CTA -->
+          <button id="place" style="width:100%;">Connect wallet to trade</button>
+          <div style="text-align:center;margin-top:12px;font-size:11px;color:rgba(240,240,255,.2);">Signs in wallet · queues for the next 6 s auction</div>
+
+        </div>
+      </div>
+
+      <!-- ─── COL 3: ACCOUNT ─── -->
+      <div style="display:flex;flex-direction:column;gap:12px;">
+
+        <!-- Balances -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Your Balances</span>
+            <span id="wallet-addr" class="mono" style="font-size:10px;color:rgba(240,240,255,.22);overflow:hidden;max-width:120px;text-overflow:ellipsis;white-space:nowrap;"></span>
+          </div>
+          <div id="bals"></div>
+        </div>
+
+        <!-- Pending orders -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;display:block;margin-bottom:14px;">Your Orders</span>
+          <div id="mine"></div>
+          <div style="margin-top:10px;font-size:11px;color:rgba(240,240,255,.2);">Sealed orders decrypted for you (you hold the nonce)</div>
+        </div>
+
+        <!-- JAMKB footprint -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">JAM State Footprint</span>
+            <span id="fp-badge" style="font-size:9px;padding:2px 8px;background:rgba(74,222,128,.08);color:#4ADE80;border-radius:999px;font-weight:700;letter-spacing:.06em;">READ-ONLY</span>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+            <div>
+              <div id="fp-items" class="mono" style="font-size:22px;font-weight:700;color:#f0f0ff;line-height:1.1;">0</div>
+              <div style="font-size:10px;color:rgba(240,240,255,.28);margin-top:4px;">items</div>
+            </div>
+            <div>
+              <div id="fp-octets" class="mono" style="font-size:16px;font-weight:700;color:#f0f0ff;line-height:1.2;">0 B</div>
+              <div style="font-size:10px;color:rgba(240,240,255,.28);margin-top:4px;">validator RAM</div>
+            </div>
+            <div>
+              <div id="fp-jamkb" class="mono" style="font-size:22px;font-weight:700;color:#E6007A;line-height:1.1;">0</div>
+              <div style="font-size:10px;color:rgba(240,240,255,.28);margin-top:4px;">JAMKB</div>
+            </div>
+          </div>
+          <div style="font-size:11px;color:rgba(240,240,255,.2);line-height:1.5;">1 JAMKB = 1 KB of validator-RAM · place orders → grows · 6 s auctions → shrinks</div>
+        </div>
+
+      </div>
     </div>
   </section>
 
-  <!-- ===================== FAUCET ===================== -->
+  <!-- ═══════════════════ FAUCET TAB ═══════════════════ -->
   <section id="tab-faucet" class="hidden">
-    <div class="grid1">
-      <section class="panel">
-        <h2>Testnet faucet</h2>
-        <div id="who-faucet" class="note" style="margin:0 0 10px">Connect a wallet to fund an account.</div>
-        <div class="row">
-          <div><label>Asset</label>
-            <select id="fasset"><option value="0">USDC</option><option value="1">DOT</option><option value="2">JSMBK</option></select></div>
-          <div><label>Amount</label><input id="famt" class="mono" value="100000" inputmode="numeric" /></div>
+    <div style="max-width:480px;margin:36px auto;">
+      <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:28px;">
+        <h2 style="font-size:18px;font-weight:700;color:#f0f0ff;margin-bottom:6px;">Testnet faucet</h2>
+        <p style="font-size:13px;color:rgba(240,240,255,.38);margin-bottom:26px;line-height:1.6;">Fund your connected account on lasair — no real value. Withdraw is overdraft-protected.</p>
+
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.32);font-weight:600;margin-bottom:8px;">Asset</div>
+        <div id="fassets" style="display:flex;gap:6px;margin-bottom:18px;"></div>
+
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.32);font-weight:600;margin-bottom:8px;">Amount</div>
+        <input id="famt" type="number" value="100000" class="mono" style="width:100%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:14px 16px;font-size:18px;color:#f0f0ff;outline:none;margin-bottom:20px;" />
+
+        <div style="display:flex;gap:8px;margin-bottom:24px;">
+          <button id="deposit">Deposit</button>
+          <button id="withdraw">Withdraw</button>
         </div>
-        <div class="seg" style="margin-top:14px">
-          <button id="fund" disabled>Deposit</button>
-          <button id="wd" class="ghost" disabled>Withdraw</button>
+
+        <div style="font-size:12px;color:rgba(240,240,255,.26);padding:12px 14px;background:rgba(255,255,255,.02);border-radius:12px;border:1px solid rgba(255,255,255,.05);line-height:1.6;margin-bottom:24px;">
+          <strong style="color:rgba(240,240,255,.48);">JAMKB</strong> = prototype state-footprint token — 1 JAMKB = 1 KB of the service's validator-RAM footprint.
+          See <a href="https://github.com/abutlabs/jamswap/blob/main/docs/JAMKB.md" target="_blank" style="text-decoration:none;">docs/JAMKB.md</a>.
         </div>
-        <div class="note">Demo funding on the local lasair node — credits your connected account's balance
-          on-chain. No real value. <b>JSMBK</b> is the prototype JAMKB token (see docs/JAMKB.md):
-          it backs the service's state footprint. Withdraw is overdraft-protected.</div>
-        <h2 style="margin-top:20px">Balances</h2>
-        <div id="bals-faucet"></div>
-      </section>
+
+        <div style="border-top:1px solid rgba(255,255,255,.07);padding-top:22px;">
+          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.32);font-weight:600;margin-bottom:14px;">Current Balances</div>
+          <div id="bals-faucet"></div>
+        </div>
+      </div>
     </div>
   </section>
-</main>
 
-<div id="toasts"></div>
+</div>
+
+<!-- TOASTS -->
+<div id="toasts" style="position:fixed;top:76px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:500;max-width:340px;pointer-events:none;"></div>
 
 <script>
-const ASSETS = {0:"USDC",1:"DOT",2:"JSMBK"};
+// ═══════════════════ config ═══════════════════
+const ASSETS = {0:"USDC",1:"DOT",2:"JAMKB"};
+const DOT_COLORS = ["#60A5FA","#E6007A","#F59E0B"];            // USDC, DOT, JAMKB
+const DOT_BG     = ["rgba(96,165,250,.13)","rgba(230,0,122,.13)","rgba(245,158,11,.13)"];
 const MARKETS = [
-  {id:1, name:"DOT/USDC",   base:1, quote:0},
-  {id:2, name:"JSMBK/USDC", base:2, quote:0},
-  {id:3, name:"JSMBK/DOT",  base:2, quote:1},
+  {id:1,name:"DOT/USDC",  base:1,quote:0,baseLabel:"DOT",  quoteLabel:"USDC"},
+  {id:2,name:"JAMKB/USDC",base:2,quote:0,baseLabel:"JAMKB",quoteLabel:"USDC"},
+  {id:3,name:"JAMKB/DOT", base:2,quote:1,baseLabel:"JAMKB",quoteLabel:"DOT"},
 ];
-let cur = MARKETS[0], side = "buy", otype = "limit";
-const $ = id => document.getElementById(id);
-const api = (p, body) => fetch(p, body ? {method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)} : {}).then(r=>r.json());
 
-// ---------- toasts ----------
-function toast(msg, kind="info", ms=3500){
-  const el = document.createElement("div"); el.className = "toast " + kind;
-  el.innerHTML = `<span class="x">✕</span>${msg}`;
-  el.querySelector(".x").onclick = () => el.remove();
-  $("toasts").appendChild(el);
-  if (ms) setTimeout(()=>el.remove(), ms);
+const state = {
+  tab:"trade", market:MARKETS[0], side:"buy", otype:"limit", sealed:false, wallet:null,
+  book:[], lastPrice:null, volume:0, mempool:[], sealedOnchain:0,
+  nextIn:6, auctionSecs:6, bals:{0:0,1:0,2:0}, pending:[],
+  fp:{items:0,octets:"—",jamkb:0,available:true}, mempoolOpen:true,
+  fAsset:"0", runDisabled:false,
+};
+
+const $ = id => document.getElementById(id);
+const api = (p, body) => fetch(p, body
+  ? {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)}
+  : {}).then(r => r.json()).catch(() => ({}));
+
+// ═══════════════════ style builders ═══════════════════
+const NAV = on => "padding:7px 16px;border-radius:10px;font-size:14px;font-weight:500;border:none;cursor:pointer;" +
+  (on ? "background:rgba(255,255,255,.07);color:#f0f0ff;" : "background:transparent;color:rgba(240,240,255,.42);");
+const WALLET = c => "padding:8px 20px;border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;" +
+  (c ? "background:rgba(255,255,255,.07);color:#f0f0ff;border:1px solid rgba(255,255,255,.12);" : "background:#E6007A;color:#fff;border:none;");
+const MTAB = on => "padding:9px 20px;border-radius:12px;font-size:14px;cursor:pointer;" +
+  (on ? "font-weight:700;background:rgba(230,0,122,.1);color:#E6007A;border:1px solid rgba(230,0,122,.28);"
+      : "font-weight:500;background:rgba(255,255,255,.04);color:rgba(240,240,255,.48);border:1px solid rgba(255,255,255,.07);");
+const RUN = d => "padding:5px 12px;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;background:transparent;" +
+  (d ? "border:1px solid rgba(255,255,255,.05);color:rgba(240,240,255,.18);cursor:not-allowed;" : "border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.52);");
+const SEG = on => "padding:5px 14px;border-radius:8px;font-size:12px;border:none;cursor:pointer;" +
+  (on ? "background:rgba(255,255,255,.1);color:#f0f0ff;font-weight:600;" : "background:transparent;color:rgba(240,240,255,.38);");
+const BUY = on => "flex:1;padding:12px;border-radius:14px;font-size:14px;font-weight:600;cursor:pointer;" +
+  (on ? "background:rgba(74,222,128,.12);color:#4ADE80;border:1px solid rgba(74,222,128,.25);" : "background:rgba(255,255,255,.04);color:rgba(240,240,255,.38);border:1px solid rgba(255,255,255,.08);");
+const SELL = on => "flex:1;padding:12px;border-radius:14px;font-size:14px;font-weight:600;cursor:pointer;" +
+  (on ? "background:rgba(248,113,113,.12);color:#F87171;border:1px solid rgba(248,113,113,.25);" : "background:rgba(255,255,255,.04);color:rgba(240,240,255,.38);border:1px solid rgba(255,255,255,.08);");
+const CTA = (c, side) => "width:100%;padding:16px;border-radius:16px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:.01em;font-family:inherit;" +
+  (c ? (side==="buy" ? "background:rgba(74,222,128,.14);color:#4ADE80;border:1.5px solid rgba(74,222,128,.3);"
+                     : "background:rgba(248,113,113,.14);color:#F87171;border:1.5px solid rgba(248,113,113,.3);")
+     : "background:#E6007A;color:#fff;border:none;");
+const FASSET = on => "flex:1;padding:9px 16px;border-radius:10px;font-size:13px;cursor:pointer;" +
+  (on ? "background:#E6007A;color:#fff;border:none;font-weight:700;" : "background:rgba(255,255,255,.04);color:rgba(240,240,255,.48);border:1px solid rgba(255,255,255,.07);font-weight:500;");
+const FBTN = (kind, c) => kind==="deposit"
+  ? "flex:1;padding:14px;border:none;border-radius:14px;font-size:14px;font-weight:700;font-family:inherit;background:#E6007A;color:#fff;" + (c?"cursor:pointer;":"cursor:not-allowed;opacity:.4;")
+  : "flex:1;padding:14px;border-radius:14px;font-size:14px;font-weight:600;border:1px solid rgba(255,255,255,.1);font-family:inherit;background:rgba(255,255,255,.06);color:rgba(240,240,255,.75);" + (c?"cursor:pointer;":"cursor:not-allowed;opacity:.4;");
+
+// ═══════════════════ toasts (imperative) ═══════════════════
+function toast(msg, kind="info", ms=4500){
+  const border = kind==="ok" ? "#4ADE80" : kind==="err" ? "#F87171" : "#E6007A";
+  const el = document.createElement("div");
+  el.style.cssText = "padding:13px 16px;background:rgba(12,12,20,.97);border:1px solid rgba(255,255,255,.1);border-left:3px solid "+border+";border-radius:14px;font-size:13px;color:#f0f0ff;box-shadow:0 8px 40px rgba(0,0,0,.55);animation:slideIn .18s ease;display:flex;align-items:flex-start;gap:10px;pointer-events:auto;";
+  const span = document.createElement("span"); span.style.cssText="flex:1;line-height:1.5;"; span.innerHTML = msg;
+  const x = document.createElement("button"); x.textContent="✕";
+  x.style.cssText = "background:transparent;border:none;color:rgba(240,240,255,.32);cursor:pointer;font-size:16px;padding:0;line-height:1;flex-shrink:0;";
+  const close = () => el.remove(); x.onclick = close;
+  el.append(span, x); $("toasts").appendChild(el);
+  if (ms) setTimeout(close, ms);
 }
 
-// ---------- wallet ----------
-const DAPP = "Jamswap";
-let wallet = { ext:null, accounts:[], selected:null };
-function fnv32(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619)>>>0;} return h>>>0; }
-function acctId(addr){ return fnv32(addr); }
-function shortAddr(a){ return a.length>14 ? a.slice(0,6)+"…"+a.slice(-6) : a; }
-function toHex(str){ return "0x"+Array.from(new TextEncoder().encode(str)).map(b=>b.toString(16).padStart(2,"0")).join(""); }
+// ═══════════════════ wallet ═══════════════════
+function fnv32(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619)>>>0; } return h>>>0; }
+const acctId = a => fnv32(a);
+const short = a => a && a.length>14 ? a.slice(0,6)+"…"+a.slice(-6) : (a||"");
+const toHex = s => "0x"+Array.from(new TextEncoder().encode(s)).map(b=>b.toString(16).padStart(2,"0")).join("");
+const isConn = () => !!state.wallet;
+const myAcct = () => state.wallet ? acctId(state.wallet.selected.address) : null;
 
 async function connectWallet(){
   const inj = window.injectedWeb3 || {};
   const key = inj.talisman ? "talisman" : Object.keys(inj)[0];
-  if (!key){
-    toast("No Polkadot wallet found. Install <a href='https://talisman.xyz' target='_blank'>Talisman</a>, or use a demo account.", "err", 7000);
-    useDemoAccount(); return;
-  }
+  if (!key){ useDemoWallet(); return; }
   try {
-    const ext = await inj[key].enable(DAPP);
+    const ext = await inj[key].enable("Jamswap");
     const accounts = await ext.accounts.get();
-    if (!accounts.length){ toast("No accounts in "+key+". Create one first.", "err"); return; }
-    wallet = { ext, accounts, selected: accounts[0] };
-    toast("Connected "+(wallet.selected.name||shortAddr(wallet.selected.address)), "ok");
-    renderWallet(); onAccountChange();
-  } catch(e){ toast("Wallet connection rejected.", "err"); }
+    if (!accounts.length){ toast("No accounts in wallet.", "err"); return; }
+    state.wallet = { ext, accounts, selected:accounts[0], demo:false };
+    toast("Connected: "+(state.wallet.selected.name||short(state.wallet.selected.address)), "ok");
+    renderWallet(); refreshBals(); refreshMine();
+  } catch { toast("Wallet connection rejected.", "err"); }
 }
-function useDemoAccount(){
+function useDemoWallet(){
   const r = Math.random().toString(36).slice(2,8);
-  const addr = ("5Demo"+r+"DEMOonlyNoSignature00000000000000000000000000").slice(0, 47);
-  wallet = { ext:null, demo:true, accounts:[{address:addr, name:"Demo account"}], selected:{address:addr, name:"Demo account"} };
+  const address = ("5Demo"+r+"0".repeat(48)).slice(0,47);
+  state.wallet = { ext:null, accounts:[{address,name:"Demo account"}], selected:{address,name:"Demo account"}, demo:true };
   toast("Using a demo account (no wallet signatures).", "info");
-  renderWallet(); onAccountChange();
-}
-async function signIntent(message){
-  if (wallet.demo) return null;
-  const { signature } = await wallet.ext.signer.signRaw({ address: wallet.selected.address, data: toHex(message), type:"bytes" });
-  return signature;
-}
-function renderWallet(){
-  const sel = $("acctsel");
-  if (!wallet.selected){ sel.classList.add("hidden"); $("connect").classList.remove("hidden"); return; }
-  $("connect").classList.add("hidden"); sel.classList.remove("hidden");
-  sel.innerHTML = wallet.accounts.map((a,i)=>`<option value="${i}">${(a.name?a.name+" · ":"")+shortAddr(a.address)}</option>`).join("");
-  sel.onchange = () => { wallet.selected = wallet.accounts[+sel.value]; onAccountChange(); };
-}
-function connected(){ return !!wallet.selected; }
-function myAccount(){ return acctId(wallet.selected.address); }
-function onAccountChange(){
-  const who = wallet.selected ? `${wallet.selected.name||""} ${shortAddr(wallet.selected.address)} · acct #${myAccount()}` : "—";
-  $("who-trade").textContent = wallet.selected ? who : "—";
-  $("who-faucet").textContent = wallet.selected ? "Funding: "+who : "Connect a wallet to fund an account.";
-  $("trade-gate").classList.toggle("hidden", connected());
-  $("place").disabled = !connected();
-  $("fund").disabled = !connected(); $("wd").disabled = !connected();
-  refreshBals(); refreshMine();
+  renderWallet(); refreshBals(); refreshMine();
 }
 
-// ---------- auction countdown ----------
-let nextIn = 6;
-function tickClock(){
-  nextIn = Math.max(0, nextIn - 0.25);
-  $("clock").textContent = Math.ceil(nextIn);
-  $("bar").style.width = (100 * nextIn / (window._auctionSecs||6)) + "%";
-}
-setInterval(tickClock, 250);
-
-// ---------- order book + mempool ----------
-function renderState(s){
-  $("price").textContent = s.price || "—"; $("vol").textContent = s.volume||0;
-  window._auctionSecs = s.auction_secs || 6;
-  if (typeof s.next_auction_in === "number") nextIn = s.next_auction_in;
-  const mp = $("mempool");
-  if (!s.mempool || !s.mempool.length){ mp.innerHTML = `<div class="empty">no orders queued for the next auction</div>`; }
-  else {
-    mp.innerHTML = s.mempool.map(o => {
-      const badge = o.sealed ? `<span class="badge seal">🔒 SEALED</span>`
-                  : (o.type==="market" ? `<span class="badge mkt">⚡ MARKET</span>` : `<span class="badge pub">🌐 LIMIT</span>`);
-      const terms = o.sealed ? `<span style="color:var(--gold)">price &amp; size hidden</span>`
-                  : `<span class="mono">${o.qty}${o.type==="market"?"":" @ "+o.price}</span>`;
-      return `<div class="mrow">${badge}<span class="s-${o.side}">${o.side.toUpperCase()}</span>${terms}<span class="who mono">${o.who}</span></div>`;
-    }).join("");
-  }
-  $("seal-summary").textContent = s.sealed_onchain
-    ? `🔒 ${s.sealed_onchain} sealed commitment${s.sealed_onchain>1?"s":""} on-chain — only the hash is public until the batch clears`
-    : "";
-  const asks = s.book.filter(o=>o.side==="sell").sort((a,b)=>b.price-a.price);
-  const bids = s.book.filter(o=>o.side==="buy").sort((a,b)=>b.price-a.price);
-  $("book").innerHTML = asks.map(o=>`<tr class="ask"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>ask</td></tr>`).join("")
-    + `<tr><td colspan=3 style="border-top:1px solid var(--line)"></td></tr>`
-    + bids.map(o=>`<tr class="bid"><td class="mono">${o.price}</td><td class="mono">${o.qty}</td><td>bid</td></tr>`).join("");
-}
+// ═══════════════════ data ═══════════════════
 let es = null;
-function subscribe(){ if (es) es.close(); es = new EventSource(`/api/stream?market=${cur.id}`); es.onmessage = e => { try { renderState(JSON.parse(e.data)); } catch {} }; }
-async function refresh(){ renderState(await api(`/api/state?market=${cur.id}`)); }
+function subscribe(){
+  if (es) es.close();
+  es = new EventSource("/api/stream?market="+state.market.id);
+  es.onmessage = e => { try { applyState(JSON.parse(e.data)); } catch {} };
+}
+async function refresh(){
+  const s = await api("/api/state?market="+state.market.id);
+  if (s && s.book !== undefined) applyState(s);
+}
+function applyState(s){
+  state.book = s.book || [];
+  state.lastPrice = s.price || null;
+  state.volume = s.volume || 0;
+  state.mempool = s.mempool || [];
+  state.sealedOnchain = s.sealed_onchain || 0;
+  state.auctionSecs = s.auction_secs || 6;
+  if (typeof s.next_auction_in === "number") state.nextIn = s.next_auction_in;
+  renderBook(); renderMempool();
+  $("last-price").textContent = state.lastPrice !== null ? String(state.lastPrice) : "—";
+  $("vol").textContent = state.volume;
+}
 async function refreshBals(){
-  if (!connected()){ $("bals").innerHTML = $("bals-faucet").innerHTML = `<div class="note">—</div>`; return; }
-  const a = myAccount(); let html="";
-  for (const id of [0,1,2]){ const b = await api(`/api/balance?account=${a}&asset=${id}`);
-    html += `<div class="bal"><span>${ASSETS[id]}</span><b class="mono">${b.balance}</b></div>`; }
-  $("bals").innerHTML = html; $("bals-faucet").innerHTML = html;
+  if (!isConn()){ renderBals(); return; }
+  const a = myAcct(); const bals = {};
+  for (const id of [0,1,2]){ const b = await api("/api/balance?account="+a+"&asset="+id); bals[id] = (b && b.balance) || 0; }
+  state.bals = bals; renderBals();
 }
 async function refreshMine(){
-  if (!connected()){ $("mine").innerHTML = `<div class="note">—</div>`; return; }
-  const { orders } = await api(`/api/mine?account=${myAccount()}`);
-  if (!orders || !orders.length){ $("mine").innerHTML = `<div class="note">no pending orders</div>`; return; }
-  const mname = id => (MARKETS.find(m=>m.id===id)||{}).name || ("mkt "+id);
-  $("mine").innerHTML = orders.map(o => {
-    const lock = o.sealed ? "🔒 " : "";
-    const t = o.type==="market" ? "market" : (o.price);
-    return `<div class="mrow"><span class="s-${o.side}">${o.side.toUpperCase()}</span>
-      <span class="mono">${lock}${o.qty} @ ${t}</span><span class="who">${mname(o.market)}</span>
-      <button class="tiny ghost" data-cancel="${o.oid}">cancel</button></div>`;
-  }).join("");
-  $("mine").querySelectorAll("[data-cancel]").forEach(btn => btn.onclick = () => cancelOrder(+btn.dataset.cancel));
+  if (!isConn()){ state.pending = []; renderMine(); return; }
+  const r = await api("/api/mine?account="+myAcct());
+  state.pending = (r && r.orders) || []; renderMine();
 }
-async function refreshFootprint(){
-  try {
-    const f = await api("/api/footprint");
-    if (f.available === false){
-      $("fp-solvent").textContent = "node upgrade needed (≥ node-v0.4.0)";
-      $("fp-solvent").className = "badge seal"; return;
-    }
-    $("fp-items").textContent = f.items;
-    $("fp-octets").textContent = f.octets + " B";
-    $("fp-req").textContent = f.jamkb_required;
-    $("fp-held").textContent = f.jamkb_held;
-    $("fp-head").textContent = f.headroom;
-    const b = $("fp-solvent");
-    b.textContent = f.solvent ? "✓ backed" : "⚠ under-funded";
-    b.className = "badge " + (f.solvent ? "pub" : "seal");
-  } catch(e){}
-}
-$("topup").onclick = async () => {
-  try { await api("/api/deposit", { account: 4294967294, asset: 2, amount: 100 });  // STATE_ACCOUNT, JSMBK
-    toast("Topped up state reserve +100 JSMBK", "ok"); refreshFootprint(); }
-  catch(e){ toast("Top-up failed: "+e, "err"); }
-};
-async function cancelOrder(oid){
-  try { const r = await api("/api/cancel_pending", { account:myAccount(), order_id:oid });
-    toast(r.removed ? `Cancelled order #${oid}.` : `Order #${oid} already cleared.`, r.removed?"ok":"info"); }
-  catch(e){ toast("Cancel failed: "+e, "err"); }
-  refreshMine(); refresh();
+async function refreshFp(){
+  const f = await api("/api/footprint");
+  if (!f || f.available === false) state.fp = {items:0, octets:"—", jamkb:0, available:false};
+  else state.fp = {items:f.items||0, octets:(f.octets||0)+" B", jamkb:f.jamkb_required||0, available:true};
+  renderFp();
 }
 
-// ---------- actions ----------
-$("sbuy").onclick=()=>{ side="buy";  $("sbuy").className="buy on";  $("ssell").className="sell off"; };
-$("ssell").onclick=()=>{ side="sell"; $("ssell").className="sell on"; $("sbuy").className="buy off"; };
-$("tlimit").onclick=()=>{ otype="limit"; $("tlimit").className="pick on"; $("tmarket").className="pick off"; $("price-wrap").classList.remove("hidden"); };
-$("tmarket").onclick=()=>{ otype="market"; $("tmarket").className="pick on"; $("tlimit").className="pick off"; $("price-wrap").classList.add("hidden"); };
-$("memtoggle").onclick=()=>{ const w=$("memwrap"); const h=w.classList.toggle("hidden"); $("memtoggle").textContent=h?"show":"hide"; };
-
-$("place").onclick=async()=>{
-  if (!connected()) return toast("Connect a wallet first.", "err");
-  const qty=+$("qty_in").value, price=+$("price_in").value, sealed=$("sealchk").checked;
-  if (!qty || (otype==="limit" && !price)) return toast("Enter "+(otype==="limit"?"a price and ":"")+"a quantity.", "err");
-  const msg = `Jamswap ${sealed?"(sealed) ":""}${otype.toUpperCase()} ${side.toUpperCase()} ${qty} ${cur.name}${otype==="limit"?" @ "+price:""}`;
+// ═══════════════════ actions ═══════════════════
+async function placeOrder(){
+  if (!isConn()){ connectWallet(); return; }
+  const qty = parseFloat($("qty-in").value), price = parseFloat($("price-in").value);
+  const {market, side, otype, sealed, wallet} = state;
+  if (!qty || (otype==="limit" && !price)){ toast("Enter "+(otype==="limit"?"a price and ":"")+"a quantity.", "err"); return; }
+  const msg = "Jamswap "+(sealed?"(sealed) ":"")+otype.toUpperCase()+" "+side.toUpperCase()+" "+qty+" "+market.name+(otype==="limit"?" @ "+price:"");
   $("place").disabled = true;
-  try { toast(wallet.demo ? "Placing order…" : "Confirm in your wallet…", "info", 2500); await signIntent(msg); }
-  catch(e){ $("place").disabled=false; return toast("Signature rejected — order not placed.", "err"); }
+  if (!wallet.demo){
+    try { toast("Confirm in your wallet…", "info", 2500);
+      await wallet.ext.signer.signRaw({address:wallet.selected.address, data:toHex(msg), type:"bytes"}); }
+    catch { $("place").disabled=false; toast("Signature rejected — order not placed.", "err"); return; }
+  }
   try {
-    const body = { market:cur.id, base:cur.base, quote:cur.quote, account:myAccount(),
-      address:wallet.selected.address, side, qty, type:otype, sealed };
+    const body = {market:market.id, base:market.base, quote:market.quote, account:myAcct(),
+      address:wallet.selected.address, side, qty, type:otype, sealed};
     if (otype==="limit") body.price = price;
     const r = await api("/api/order", body);
-    toast(`${sealed?"🔒 ":""}${otype} ${side} ${qty}${otype==="limit"?" @ "+price:""} queued (#${r.order_id}).`, "ok");
-  } catch(e){ toast("Order failed: "+e, "err"); }
+    toast((sealed?"🔒 ":"")+otype+" "+side+" "+qty+(otype==="limit"?" @ "+price:"")+" queued (#"+(r.order_id||"?")+").", "ok");
+  } catch { toast("Order failed.", "err"); }
   $("place").disabled = false; refresh(); refreshMine();
-};
-
-$("run").onclick=async()=>{
-  $("run").disabled = true;
-  try { const r = await api("/api/round", { market:cur.id, base:cur.base, quote:cur.quote });
+}
+async function runRound(){
+  state.runDisabled = true; $("run").style.cssText = RUN(true);
+  try {
+    const r = await api("/api/round", {market:state.market.id, base:state.market.base, quote:state.market.quote});
     const c = r.cleared || {};
-    toast(`Cleared at ${r.price} (vol ${r.volume}) — ${c.public||0} public, ${c.sealed||0} sealed.`, "ok"); }
-  catch(e){ toast("Round failed: "+e, "err"); }
-  setTimeout(()=>$("run").disabled=false, 800); refresh(); refreshBals(); refreshMine();
-};
-
+    toast("Cleared at "+r.price+" · vol "+r.volume+" · "+(c.public||0)+" public, "+(c.sealed||0)+" sealed.", "ok");
+  } catch { toast("Round failed.", "err"); }
+  setTimeout(() => { state.runDisabled=false; $("run").style.cssText = RUN(false); }, 1200);
+  refresh(); refreshBals(); refreshMine();
+}
+async function cancelOrder(oid){
+  try { const r = await api("/api/cancel_pending", {account:myAcct(), order_id:oid});
+    toast(r.removed ? "Cancelled #"+oid+"." : "Order #"+oid+" already cleared.", r.removed?"ok":"info"); }
+  catch { toast("Cancel failed.", "err"); }
+  refreshMine(); refresh();
+}
 async function faucet(kind){
-  if (!connected()) return toast("Connect a wallet first.", "err");
-  const asset=+$("fasset").value, amount=+$("famt").value;
-  if (!amount) return toast("Enter an amount.", "err");
-  try { await api("/api/"+kind, { account:myAccount(), address:wallet.selected.address, asset, amount });
-    toast(`${kind==="deposit"?"Funded":"Withdrew"} ${amount} ${ASSETS[asset]}.`, "ok"); }
-  catch(e){ toast(kind+" failed: "+e, "err"); }
+  if (!isConn()){ toast("Connect a wallet first.", "err"); return; }
+  const amount = parseFloat($("famt").value);
+  if (!amount){ toast("Enter an amount.", "err"); return; }
+  try { await api("/api/"+kind, {account:myAcct(), address:state.wallet.selected.address, asset:+state.fAsset, amount});
+    toast((kind==="deposit"?"Deposited ":"Withdrew ")+amount+" "+ASSETS[+state.fAsset]+".", "ok"); }
+  catch { toast(kind+" failed.", "err"); }
   refreshBals();
 }
-$("fund").onclick=()=>faucet("deposit");
-$("wd").onclick=()=>faucet("withdraw");
+function switchMarket(m){ state.market = m; renderMarketTabs(); renderMarketDeps(); subscribe(); refresh(); }
 
-// ---------- tabs + markets ----------
-function showTab(name){
-  document.querySelectorAll("nav.tabs .t").forEach(t=>t.classList.toggle("active", t.dataset.tab===name));
-  $("tab-trade").classList.toggle("hidden", name!=="trade");
-  $("tab-faucet").classList.toggle("hidden", name!=="faucet");
+// ═══════════════════ render ═══════════════════
+function renderTabs(){
+  const t = state.tab;
+  $("nav-trade").style.cssText  = NAV(t==="trade");
+  $("nav-faucet").style.cssText = NAV(t==="faucet");
+  $("tab-trade").classList.toggle("hidden", t!=="trade");
+  $("tab-faucet").classList.toggle("hidden", t!=="faucet");
 }
-document.querySelectorAll("nav.tabs .t").forEach(t=> t.onclick=()=>showTab(t.dataset.tab));
-function renderMarkets(){
-  $("mtabs").innerHTML=""; MARKETS.forEach(m=>{
-    const t=document.createElement("div"); t.className="mtab"+(m.id===cur.id?" active":""); t.textContent=m.name;
-    t.onclick=()=>{ cur=m; renderMarkets(); subscribe(); refresh(); }; $("mtabs").appendChild(t); });
-  $("mkt").textContent=cur.name;
+function renderWallet(){
+  const c = isConn();
+  $("wallet-label").textContent = c ? (state.wallet.selected.name || short(state.wallet.selected.address)) : "Connect wallet";
+  $("connect").style.cssText = WALLET(c);
+  $("wallet-addr").textContent = c ? short(state.wallet.selected.address) : "";
+  renderCTA();
+  renderFaucetBtns();
+}
+function renderMarketTabs(){
+  $("mtabs").innerHTML = "";
+  MARKETS.forEach(m => {
+    const b = document.createElement("button");
+    b.textContent = m.name; b.style.cssText = MTAB(m.id===state.market.id);
+    b.onclick = () => switchMarket(m);
+    $("mtabs").appendChild(b);
+  });
+}
+function renderMarketDeps(){
+  const m = state.market;
+  $("ob-market").textContent = "Order Book · "+m.name;
+  $("base-label").textContent = m.baseLabel;
+  $("quote-label").textContent = m.quoteLabel;
+  $("fee-quote").textContent = m.quoteLabel;
+  $("base-chip").style.background = DOT_BG[m.base];   $("base-dot").style.background = DOT_COLORS[m.base];
+  $("quote-chip").style.background = DOT_BG[m.quote];  $("quote-dot").style.background = DOT_COLORS[m.quote];
+  renderSide(); renderSummaryFee();
+}
+function renderSide(){
+  const buy = state.side==="buy", m = state.market;
+  $("sbuy").textContent = "Buy "+m.baseLabel;  $("sbuy").style.cssText  = BUY(buy);
+  $("ssell").textContent = "Sell "+m.baseLabel; $("ssell").style.cssText = SELL(!buy);
+  $("side-label").textContent = buy ? "You buy" : "You sell";
+  renderCTA(); renderSummaryFee();
+}
+function renderType(){
+  const limit = state.otype==="limit";
+  $("tlimit").style.cssText  = SEG(limit);
+  $("tmarket").style.cssText = SEG(!limit);
+  $("price-block").classList.toggle("hidden", !limit);
+  renderSummaryFee();
+}
+function renderSeal(){
+  $("seal-track").style.background = state.sealed ? "#E6007A" : "rgba(255,255,255,.12)";
+  $("seal-knob").style.left = state.sealed ? "19px" : "3px";
+}
+function renderCTA(){
+  const c = isConn(), m = state.market;
+  $("place").textContent = c ? (state.side==="buy" ? "Buy "+m.baseLabel : "Sell "+m.baseLabel) : "Connect wallet to trade";
+  $("place").style.cssText = CTA(c, state.side);
+}
+function renderSummaryFee(){
+  const qty = parseFloat($("qty-in").value) || 0;
+  const price = parseFloat($("price-in").value) || 0;
+  const notional = qty*price, fee = notional*0.003;
+  const q = state.market.quoteLabel;
+  let summary;
+  if (state.otype==="market") summary = "Market order · takes the uniform clearing price";
+  else if (notional>0) summary = state.side==="buy" ? "You pay ~"+notional.toFixed(2)+" "+q : "You receive ~"+(notional*0.997).toFixed(2)+" "+q;
+  else summary = "Enter quantity and price to see total";
+  $("summary").textContent = summary;
+  $("fee").textContent = fee>0 ? fee.toFixed(4) : "—";
+}
+function bookRow(o, color, barBg, edge){
+  return '<div style="position:relative;display:flex;justify-content:space-between;padding:3px 4px;border-radius:3px;margin-bottom:1px;overflow:hidden;">'
+    + '<div style="position:absolute;'+edge+':0;top:0;bottom:0;width:'+o.depthPct+'%;background:'+barBg+';pointer-events:none;"></div>'
+    + '<span class="mono" style="position:relative;font-size:12px;color:'+color+';font-weight:500;">'+o.price+'</span>'
+    + '<span class="mono" style="position:relative;font-size:12px;color:rgba(240,240,255,.45);">'+o.qty+'</span></div>';
+}
+const emptyBook = t => '<div style="font-size:12px;color:rgba(240,240,255,.18);padding:10px 4px;text-align:center;">'+t+'</div>';
+function renderBook(){
+  const asks = state.book.filter(o=>o.side==="sell");
+  const bids = state.book.filter(o=>o.side==="buy");
+  const maxQ = Math.max(1, ...asks.map(o=>o.qty), ...bids.map(o=>o.qty));
+  const pAsks = asks.slice().sort((a,b)=>b.price-a.price).slice(0,8).map(a=>({price:a.price,qty:a.qty,depthPct:Math.round(100*a.qty/maxQ)}));
+  const pBids = bids.slice().sort((a,b)=>b.price-a.price).slice(0,8).map(b=>({price:b.price,qty:b.qty,depthPct:Math.round(100*b.qty/maxQ)}));
+  $("asks").innerHTML = pAsks.length ? pAsks.map(a=>bookRow(a,"#F87171","rgba(248,113,113,.07)","right")).join("") : emptyBook("No asks");
+  $("bids").innerHTML = pBids.length ? pBids.map(b=>bookRow(b,"#4ADE80","rgba(74,222,128,.07)","left")).join("") : emptyBook("No bids");
+  const loAsk = pAsks.length ? pAsks[pAsks.length-1].price : null;
+  const hiBid = pBids.length ? pBids[0].price : null;
+  // round to the price scale (4 dp) to avoid float-subtraction artifacts (1.356-1.234)
+  const spread = (loAsk!==null && hiBid!==null) ? String(Math.round((loAsk-hiBid)*1e4)/1e4) : "—";
+  $("spread").textContent = "spread "+spread;
+}
+function renderMempool(){
+  $("memwrap").classList.toggle("hidden", !state.mempoolOpen);
+  $("mem-toggle").textContent = state.mempoolOpen ? "hide" : "show";
+  if (!state.mempoolOpen) return;
+  const mp = $("mempool");
+  if (!state.mempool.length){
+    mp.innerHTML = '<div style="font-size:12px;color:rgba(240,240,255,.22);padding:4px 0;">No orders queued for next auction</div>';
+  } else {
+    mp.innerHTML = '<div style="display:flex;flex-direction:column;gap:4px;">' + state.mempool.map(o => {
+      const badgeBg = o.sealed ? "rgba(245,158,11,.12)" : (o.type==="market" ? "rgba(230,0,122,.12)" : "rgba(74,222,128,.12)");
+      const badgeColor = o.sealed ? "#F59E0B" : (o.type==="market" ? "#E6007A" : "#4ADE80");
+      const badgeLabel = o.sealed ? "🔒 SEALED" : (o.type==="market" ? "⚡ MKT" : "◉ LIMIT");
+      const sideColor = o.side==="buy" ? "#4ADE80" : "#F87171";
+      const qtyDisplay = o.sealed ? "hidden" : (o.type==="market" ? String(o.qty) : o.qty+" @ "+o.price);
+      const who = o.who ? String(o.who).slice(0,6)+"…" : "";
+      return '<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:10px;">'
+        + '<span style="font-size:9px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:999px;background:'+badgeBg+';color:'+badgeColor+';flex-shrink:0;">'+badgeLabel+'</span>'
+        + '<span style="font-size:12px;font-weight:700;color:'+sideColor+';flex-shrink:0;">'+(o.side||"").toUpperCase()+'</span>'
+        + '<span class="mono" style="font-size:11px;color:rgba(240,240,255,.5);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+qtyDisplay+'</span>'
+        + '<span class="mono" style="font-size:10px;color:rgba(240,240,255,.22);flex-shrink:0;">'+who+'</span></div>';
+    }).join("") + '</div>';
+  }
+  $("seal-summary").textContent = state.sealedOnchain
+    ? "🔒 "+state.sealedOnchain+" sealed commitment"+(state.sealedOnchain!==1?"s":"")+" on-chain — hash only public"
+    : "";
+}
+function balRow(id, big){
+  return '<div style="display:flex;align-items:center;justify-content:space-between;'
+    + (big ? 'padding:8px 0;' : 'padding:10px 12px;background:rgba(255,255,255,.03);border-radius:12px;') + '">'
+    + '<div style="display:flex;align-items:center;gap:9px;">'
+    + '<div style="width:8px;height:8px;border-radius:50%;background:'+DOT_COLORS[id]+';box-shadow:0 0 8px '+DOT_COLORS[id]+';flex-shrink:0;"></div>'
+    + '<span style="font-size:13px;'+(big?'color:rgba(240,240,255,.58);':'font-weight:500;color:rgba(240,240,255,.6);')+'">'+ASSETS[id]+'</span></div>'
+    + '<span class="mono" style="font-size:'+(big?"15px":"14px")+';font-weight:600;color:#f0f0ff;">'+(state.bals[id]||0).toLocaleString()+'</span></div>';
+}
+function renderBals(){
+  if (!isConn()){
+    $("bals").innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);padding:4px 0;">Connect wallet to view balances</div>';
+  } else {
+    $("bals").innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;">'+[0,1,2].map(id=>balRow(id,false)).join("")+'</div>';
+  }
+  $("bals-faucet").innerHTML = '<div style="display:flex;flex-direction:column;gap:10px;">'+[0,1,2].map(id=>balRow(id,true)).join("")+'</div>';
+}
+function renderMine(){
+  const mine = $("mine");
+  if (!state.pending.length){ mine.innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);">No pending orders</div>'; return; }
+  mine.innerHTML = '<div style="display:flex;flex-direction:column;gap:6px;">' + state.pending.map(o => {
+    const mname = (MARKETS.find(m=>m.id===o.market)||{}).name || ("mkt "+o.market);
+    const sideColor = o.side==="buy" ? "#4ADE80" : "#F87171";
+    const priceDisplay = o.type==="market" ? "market" : String(o.price);
+    return '<div style="display:flex;align-items:center;gap:7px;padding:9px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;">'
+      + '<span style="font-size:12px;font-weight:700;color:'+sideColor+';flex-shrink:0;">'+(o.side||"").toUpperCase()+'</span>'
+      + '<span class="mono" style="font-size:11px;color:rgba(240,240,255,.5);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+o.qty+' @ '+priceDisplay+'</span>'
+      + '<span style="font-size:10px;color:rgba(240,240,255,.28);flex-shrink:0;">'+mname+'</span>'
+      + '<button data-cancel="'+o.oid+'" style="padding:3px 8px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.4);border-radius:6px;font-size:11px;cursor:pointer;flex-shrink:0;">✕</button></div>';
+  }).join("") + '</div>';
+  mine.querySelectorAll("[data-cancel]").forEach(b => b.onclick = () => cancelOrder(+b.dataset.cancel));
+}
+function renderFp(){
+  $("fp-items").textContent = state.fp.items;
+  $("fp-octets").textContent = state.fp.octets;
+  $("fp-jamkb").textContent = state.fp.jamkb;
+  $("fp-badge").textContent = state.fp.available ? "READ-ONLY" : "NODE UPGRADE";
+  $("fp-badge").style.cssText = state.fp.available
+    ? "font-size:9px;padding:2px 8px;background:rgba(74,222,128,.08);color:#4ADE80;border-radius:999px;font-weight:700;letter-spacing:.06em;"
+    : "font-size:9px;padding:2px 8px;background:rgba(245,158,11,.1);color:#F59E0B;border-radius:999px;font-weight:700;letter-spacing:.06em;";
+}
+function renderFaucetTabs(){
+  $("fassets").innerHTML = "";
+  [{v:"0",l:"USDC"},{v:"1",l:"DOT"},{v:"2",l:"JAMKB"}].forEach(a => {
+    const b = document.createElement("button"); b.textContent = a.l; b.style.cssText = FASSET(a.v===state.fAsset);
+    b.onclick = () => { state.fAsset = a.v; renderFaucetTabs(); };
+    $("fassets").appendChild(b);
+  });
+}
+function renderFaucetBtns(){
+  const c = isConn();
+  $("deposit").style.cssText = FBTN("deposit", c);
+  $("withdraw").style.cssText = FBTN("withdraw", c);
 }
 
-// ---------- boot ----------
-$("connect").onclick = connectWallet;
-$("chain-txt").textContent = "lasair · localhost";  $("chain").classList.add("live");
-renderMarkets(); subscribe(); refresh(); refreshFootprint();
-onAccountChange();
-setInterval(refreshFootprint, 2000);
-setInterval(()=>{ refreshBals(); refreshMine(); }, 6000);
-if (window.injectedWeb3 && Object.keys(window.injectedWeb3).length) setTimeout(connectWallet, 300);
+// auction clock (targeted — must not re-render focused inputs)
+function tickClock(){
+  state.nextIn = Math.max(0, state.nextIn - 0.25);
+  $("auction-sec").textContent = Math.ceil(state.nextIn);
+  $("auction-bar").style.width = (100 * state.nextIn / (state.auctionSecs||6)) + "%";
+}
+
+// ═══════════════════ boot ═══════════════════
+$("nav-trade").onclick  = () => { state.tab="trade"; renderTabs(); };
+$("nav-faucet").onclick = () => { state.tab="faucet"; renderTabs(); };
+$("connect").onclick    = connectWallet;
+$("sbuy").onclick   = () => { state.side="buy";  renderSide(); };
+$("ssell").onclick  = () => { state.side="sell"; renderSide(); };
+$("tlimit").onclick = () => { state.otype="limit";  renderType(); };
+$("tmarket").onclick= () => { state.otype="market"; renderType(); };
+$("seal-toggle").onclick = () => { state.sealed = !state.sealed; renderSeal(); };
+$("place").onclick  = placeOrder;
+$("run").onclick    = runRound;
+$("mem-toggle").onclick = () => { state.mempoolOpen = !state.mempoolOpen; renderMempool(); };
+$("deposit").onclick  = () => faucet("deposit");
+$("withdraw").onclick = () => faucet("withdraw");
+$("qty-in").oninput   = renderSummaryFee;
+$("price-in").oninput = renderSummaryFee;
+
+// initial paint
+renderTabs(); renderWallet(); renderMarketTabs(); renderMarketDeps();
+renderSide(); renderType(); renderSeal(); renderBook(); renderMempool();
+renderBals(); renderMine(); renderFp(); renderFaucetTabs();
+$("run").style.cssText = RUN(false);
+
+// live feeds
+subscribe(); refresh(); refreshFp();
+setInterval(tickClock, 250);
+setInterval(() => { refreshBals(); refreshMine(); }, 6000);
+setInterval(refreshFp, 2000);
+if (window.injectedWeb3 && Object.keys(window.injectedWeb3).length) setTimeout(connectWallet, 500);
 </script>
 </body>
 </html>
