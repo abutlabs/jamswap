@@ -269,11 +269,13 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
    FLAT in order count** (zk-jam-service `spikes/fba-zk/`). The circuit proves
    settlement validity in ZK (every filled order marketable at p*, fills within
    qty, base conservation, bound to a commitment of the hidden orders); a lied
-   settlement is rejected. Orders never appear on-chain. Not-yet-proven:
-   p*-optimality (argmax) — the documented next circuit layer. This is also
-   option 2's scaling answer (fold decryption+matching into one proof → the
-   per-order ~n·5.6M vanishes). Remaining work is circuit maturity (optimality,
-   larger N) + binding orders_commitment to the on-chain sealed set, not the chain.
+   settlement is rejected. Orders never appear on-chain. **p*-optimality now
+   also proven** (the circuit enforces volume >= V(p_j) for every order price →
+   p* achieves the max matchable volume; a suboptimal/under-filled clearing is
+   unsatisfiable; verify gas unchanged since public inputs are unchanged). This
+   is also option 2's scaling answer (fold decryption+matching into one proof →
+   the per-order ~n·5.6M vanishes). Remaining work is circuit maturity (larger N)
+   + binding orders_commitment to the on-chain sealed set, not the chain.
 4. Batch capacity is generous: tens of thousands of sealed orders per work-package,
    input-bound, provided refine outputs a constant-size commitment and accumulate is O(1).
 
