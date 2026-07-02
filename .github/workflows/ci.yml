@@ -2,8 +2,10 @@ name: CI
 
 # The determinism/conservation gate (PLAN.md §5): the matching engine's property
 # tests — value conservation, byte-identical determinism, per-order bounds, and
-# settlement Σ-deltas == 0 — plus the auth (ed25519 + canonical-message) unit tests
-# must pass on every push. The service must also always compile. Never regress.
+# settlement Σ-deltas == 0 — plus the engine scenario tests, the auth (ed25519 +
+# canonical-message) unit tests, and the round-lifecycle tests (sealed-order
+# carry-forward / reveal-on-cross) must pass on every push. The service must also
+# always compile. Never regress. Full test map: docs/TESTING.md.
 
 on:
   push:
@@ -37,4 +39,6 @@ jobs:
           python-version: '3.11'
       - name: Syntax-check the off-chain builder + demo
         run: |
-          python3 -m py_compile offchain/server.py offchain/deploy.py sim/demo.py
+          python3 -m py_compile offchain/server.py offchain/round.py offchain/deploy.py sim/demo.py
+      - name: Round-lifecycle tests (sealed-order carry-forward / reveal-on-cross)
+        run: python3 -m unittest discover -s offchain/tests -v

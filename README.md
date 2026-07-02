@@ -1,114 +1,195 @@
 # Jamswap
 
-> A frequent-batch-auction order-book DEX on JAM — a CEX-grade matching engine
-> with DEX-grade self-custody, because JAM is the first chain that can actually
-> *run* the matching engine.
+> A real order-book exchange that runs **trustlessly on a blockchain** — the kind of
+> matching engine that until now only centralized exchanges could afford to run.
 
-Every on-chain exchange uses an AMM (a pricing formula) instead of a real order
-book **because no blockchain could afford to run a matching engine**. JAM's
-**Refine** phase is heavy, parallel, deterministic, *audited* compute — so
-Jamswap runs an actual matching engine trustlessly and settles fills on-chain.
-We clear as **frequent batch auctions** (one uniform price per round), which
-removes the latency race that drives most CEX/AMM MEV.
+Jamswap is a **decentralized exchange (DEX)** built on [JAM](https://jam.web3.foundation).
+It lets you trade one token for another the way a stock exchange or a company like
+Coinbase does — using a live **order book** and a proper **matching engine** — but with
+no company in the middle. You keep custody of your own funds, and every trade is
+re-checked by every validator on the network.
 
-Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](docs/PLAN.md).
+**New here? Start with the three sections below** — what it is, how it works, and how
+it hides your orders. Then [try it in one command](#try-it-in-one-command).
 
-## Status
+---
 
-**Kickoff (2026-06-30).** Phase 0/1 underway — the core matching engine.
+## What is it? (and why it couldn't exist before)
 
-- ✅ **`crates/match-engine`** — the FBA uniform-price clearing algorithm:
-  `no_std`, integer-only, fully deterministic (so every JAM validator re-executes
-  it byte-identically). Property-tested for value conservation, determinism, and
-  per-order fill bounds.
-- ✅ **`service/`** — the `no_std` JAM service: `refine` = the matching engine,
-  `accumulate` = settlement. **M1 PROVEN** — it clears a real batch *in Refine on
-  lasair*, deterministically (byte-identical re-runs), at **7,476 gas** for 3
-  orders (~0.00015% of the refine budget). See [`docs/M1_DEMO.md`](docs/M1_DEMO.md).
-  **Jamswap is a self-contained JAM service — nothing baked into Lasair.**
-- ✅ **Phase 2 settlement** — `accumulate` now moves real **balances**: a cleared
-  batch debits/credits each trader's base/quote at the uniform price; deposits fund
-  accounts. Verified e2e on lasair (deposit → auction → settled balances, value
-  conserved). Orders carry an `account`; the service is tagged (match vs deposit).
-- ✅ **Resting limit orders** — partially/un-filled orders persist in an on-chain
-  book and fill in a later round when a crossing order arrives (verified e2e: a
-  lone buy rests, then a later sell crosses it and settles). A true continuous
-  CLOB, not isolated auctions.
-- ✅ **Sealed orders (MEV-resistance, Phase 4 MVP)** — commit–reveal: in the commit
-  round only `H(order ‖ nonce)` is on-chain (orders hidden); in the reveal round
-  `refine` admits only orders whose hash matches a recorded commitment. Combined
-  with the batch auction (no latency race), nobody can front-run within a round.
-  Verified e2e: hidden commit → reveal+match settles; an uncommitted order is
-  rejected. *Honest asterisk:* adds a reveal round + a non-reveal griefing vector;
-  threshold/time-lock encryption (no reveal round) is the stronger upgrade.
-- ✅ **Cancel** — owner-authenticated removal of a resting order by `(account, id)`
-  (verified e2e in the demo). Order lifecycle: submit → rest → fill or cancel.
-- ✅ **Multi-market** — each work-item names a market + its `base`/`quote` assets;
-  markets clear **independently** (one work-package per market per round = JAM's
-  per-core parallelism) into per-market books, sharing one global balance ledger.
-  Demo runs two pairs (TOKA/USD @100, TOKB/USD @50) with a trader's USD shared.
-- ✅ **Off-chain builder + trading UI** ([`offchain/`](offchain/)) — a stdlib API
-  that runs the round lifecycle (collect orders → read the book → assemble + submit
-  the batch) and a single-page exchange UI (order book, place order, run round,
-  balances, faucet) at `:8080`.
-- ✅ **Asset lifecycle** — deposit → trade → **withdraw** with conserved accounting
-  and overdraft protection; a per-asset custody total whose invariant
-  (Σ balances == custody) holds by construction. (Mock custody; real `on_transfer`
-  backing is the Phase-3 upgrade, blocked on JAM's asset standard.)
-- ✅ **Trading fee** (revenue model) — a flat 30 bps fee on matched notional accrues
-  to a treasury account (per-market quote asset); conservation holds *including* the
-  fee (property-tested over random fee rates).
-- ✅ **Fixed-point decimal prices** — prices, quantities, and balances are integer
-  *atomic* units (display × 10⁴), so orders carry 4 decimals (e.g. `1.1050`) while the
-  engine stays integer-only. Settlement de-scales the quote notional exactly (buyers
-  round up / sellers down, any dust to the treasury); conservation is preserved and
-  property-tested over random price scales.
-- ✅ **Economic simulation** ([`sim/engine-sim`](sim/engine-sim)) — drives the real
-  engine with random order flow over thousands of rounds (`cargo run --release`),
-  reports market quality (fill rate, price stability, fee revenue) and **asserts
-  value conservation every round** — the economic stress test behind the
-  production-ready claim.
-- ✅ **Market registry** — markets are *listed* with canonical assets before
-  trading; an unlisted or asset-mismatched market is rejected (verified e2e). A
-  discoverable market index backs market listing.
-- ✅ **Signed operations** — an account is a collision-free `u32` handle **bound to an
-  ed25519 key** by a signed `TAG_REGISTER`; **withdraw / cancel / treasury-sweep are
-  verified in the service** (ed25519, replay-nonce'd), order placement is signed +
-  builder-verified. Forged/replayed/tampered ops are rejected (verified e2e on the
-  6-validator testnet; auth unit-tested in CI). A flat **fee treasury** with a
-  governance-key sweep, a **market-order slippage band** (±10%), an order-submission
-  **collateral guard**, and **good-till-time order expiry** round out the trading layer.
-- ◻️ Then: trustless per-order signature check in `refine` (not just at the builder),
-  fund escrow at submission, real `on_transfer` custody, round sequencing via
-  historical-lookup, threshold-encryption upgrade, indexer + WebSocket feeds, a W3F
-  grant application.
+Almost every exchange you can name is one of two kinds:
 
-CI (`.github/workflows/ci.yml`) runs the matching-engine property tests
-(conservation, determinism, settlement Σ-deltas == 0) on every push — the
-"never regress" gate from PLAN.md §5.
+- **A centralized exchange (CEX)** — Coinbase, Binance. Fast, real order books, but you
+  hand them your money and trust them not to lose or misuse it.
+- **A decentralized exchange (DEX)** — Uniswap and friends. You keep your funds, but
+  they *don't* use a real order book. They use a **pricing formula** (an "AMM") instead.
 
-## Run it on your architecture (one command, no lasair source)
+Why does no DEX use a real order book? **Because running a matching engine on a
+blockchain was too expensive.** Matching thousands of buy and sell orders is heavy
+computation, and blockchains charge for every step — so DEXs settled for the cheap
+formula-based approximation, which costs traders in worse prices and "slippage".
 
-You **don't need the lasair source** — the JAM node is pulled as a published,
-**multi-arch** image (`ghcr.io/abutlabs/lasair-node`). Just clone this repo and:
+**JAM changes the economics.** JAM has a special phase called **Refine** designed for
+heavy, parallel, deterministic computation that every validator can independently verify.
+That's exactly the shape of a matching engine. So Jamswap runs a **genuine order-book
+matching engine** on-chain — CEX-grade matching, DEX-grade self-custody. It's the
+cleanest demonstration of something **only JAM can do**.
+
+---
+
+## How does it work? (ELI5)
+
+Three ideas make Jamswap tick:
+
+**1. It clears trades in fair batches, not a race.**
+Most exchanges process orders one at a time, first-come-first-served — which turns
+trading into a speed race that bots win. Jamswap instead collects every order in a
+**6-second window** (matching JAM's block rhythm) and clears them **all at once at a
+single fair price** (a "frequent batch auction"). Everyone in the batch trades at the
+same price. There's no "first", so there's no speed game — and no room for the front-
+running that plagues other chains.
+
+**2. The matching happens where JAM is strong, settlement where it's safe.**
+JAM splits work into two phases, and Jamswap maps an exchange straight onto them:
+
+| JAM phase | Jamswap role | Think of it as… |
+|-----------|--------------|-----------------|
+| **Refine** | the **matching engine** — figures out who trades with whom, at what price | the trading floor |
+| **Accumulate** | **settlement** — moves the actual balances between accounts | the vault / clearing house |
+
+The matching is **deterministic** (integer-only, no randomness), so every validator
+re-runs it and gets the byte-identical result — that's what makes it trustless. Then
+settlement moves your tokens and records the new order book.
+
+**3. You keep your own funds.**
+JAM has no built-in wallets, so Jamswap gives your account its own cryptographic key
+(held in your browser, exportable). Your orders are signed by that key; withdrawing or
+cancelling is verified against it. No exchange can move your money — only you can.
+
+Once matched, any part of your order that didn't fill can **rest in the order book** and
+fill later when a matching order arrives — a true continuous exchange, not a one-shot
+auction.
+
+**Full technical architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+**What's built and what's next:** [`docs/STATUS.md`](docs/STATUS.md).
+
+---
+
+## Hiding your orders (MEV-resistance)
+
+A big reason on-chain trading feels rigged is **MEV**: bots watch the public queue of
+pending trades and jump ahead of yours to skim a profit. The batch auction above already
+removes the speed game. On top of that, Jamswap can **seal your order** so its price and
+size stay hidden until the moment it clears — so nobody can react to it at all.
+
+There are **three approaches**, a ladder from simplest to strongest:
+
+- **Rung 3 — Commit–reveal.** You post only a locked fingerprint of your order; you
+  reveal it when the auction runs. No trusted parties, but needs a reveal step. *(Shipped, available as a fallback.)*
+- **Rung 2 — Encrypt-until-batch.** You encrypt your order to a committee and go offline;
+  they help decrypt it only when the batch closes, with a proof they did it honestly. No
+  reveal step. *(Shipped — **this is the default** when you run Jamswap.)*
+- **Rung 1 — ZK dark-pool.** The auction runs privately off-chain and the chain verifies
+  a single zero-knowledge proof that it cleared correctly — orders **never** appear
+  on-chain. Strongest privacy, and cheapest at scale. *(Proven in a research spike; not
+  yet wired into Jamswap.)*
+
+A sealed order that finds no counterparty in the current auction doesn't vanish — it
+**rests hidden** on-chain (only its commitment/ciphertext is posted) and keeps trying
+each auction, revealing its terms **only in the round it actually crosses** a
+counterparty. So you can place a sealed sell now and a sealed buy minutes later and
+they'll match, all while their terms stay private until they clear.
+
+**Read the full ELI5 of all three — what each protects, what it still leaks, and its
+current state — in [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md).** The precise trust
+boundaries are in [`docs/SECURITY.md`](docs/SECURITY.md).
+
+Whichever rung you use, the guarantee never changes: **the auction itself is always
+re-verified by every validator.** Sealing changes *who can see your order and when* — not
+whether it cleared honestly.
+
+---
+
+## A practical use for JAMKB (pricing JAM's memory)
+
+JAM's designer, Gavin Wood, has proposed a token called **JAMKB** to price a scarce
+resource: **the memory (RAM) that a service occupies across every validator**. The rule
+is simple — **1 JAMKB lets a service keep 1 KB of state**. It's a proposal; nobody has a
+running example of what it would actually feel like.
+
+**Jamswap is that worked example.** A live exchange is *made of* state that sits in
+validator RAM — the order book, the sealed commitments, the balances. And that state
+**visibly breathes**:
+
+- Placing an order **grows** the footprint (a sealed order writes a 32-byte commitment;
+  a resting order takes 17 bytes).
+- Every 6-second auction **clears** orders → the book and commitments shrink → the
+  footprint **falls again**.
+
+So Jamswap is a **live meter of JAM state being consumed and released** — and because
+JAMKB is *also* one of the tradable tokens on the exchange, **the cost of state gets a
+real market price**. The DEX trades the very token that would pay for the DEX's memory.
+It even surfaces a genuine tradeoff: **sealed (private) orders cost more state** than
+plain ones, so privacy has a measurable JAMKB price.
+
+**The exchange even pays its own rent.** The 30 bps trading fee funds a treasury that
+must first cover the service's JAMKB state rent (`ceil(footprint ÷ 1 KB)` JAMKB); only
+the **surplus** is withdrawable profit, and only by the owner. So the DEX earns fees,
+buys the JAMKB that pays for its own RAM, and hands the rest to its operator — a complete
+self-funding loop. Details: [`docs/REVENUE.md`](docs/REVENUE.md).
+
+We built the **measurement** and the worked example — a live footprint→JAMKB meter — but
+we deliberately **do not enforce** it in the node. Pricing JAM's state is a protocol-wide
+economic decision for the community, not something one client should impose. The full
+understanding and the proposal-for-discussion are in [`docs/JAMKB.md`](docs/JAMKB.md).
+
+---
+
+## Try it in one command
+
+You **don't need the JAM client's source code.** The node is pulled as a published,
+**multi-arch** image (`ghcr.io/abutlabs/lasair-node`). Clone this repo and:
 
 ```sh
-docker compose up                  # -> Single Node, trading UI at http://localhost:8080
+docker compose up            # trading UI at http://localhost:8080
 ```
 
-That single node is a dev harness (immediate local execution). To run against **real
-JAM consensus** — **six validators** with TCP block gossip, wall-clock leader rotation,
-6 s slots, and STF import (PolkaJam-style) — use the testnet compose instead:
+This starts a single dev node, deploys the Jamswap service onto it (the compiled
+`service/jamswap-service.jam` ships in the repo — nothing to build), and serves the
+**trading UI**. Open `http://localhost:8080` and you can:
+
+1. **Create an account** — an ed25519 keypair your browser holds (exportable/importable).
+2. **Fund it** in the Faucet tab — assets are **USDC, DOT, JAMKB**, trading across three
+   pairs (**DOT/USDC, JAMKB/USDC, JAMKB/DOT**).
+3. **Place an order** — Buy/Sell, Limit or Market. Tick **🔒 Seal** to hide it.
+4. **Watch it clear** — auctions run **every 6 seconds** automatically; a live countdown
+   shows the next one. Watch the order book, the mempool, and your balances update.
+
+Toggle the **mempool** view to see the data actually sitting in the service: open orders
+are tagged 🌐 LIMIT / ⚡ MARKET (terms visible) or 🔒 SEALED (only a commitment on-chain,
+terms hidden until they clear).
+
+### Run it against real JAM consensus (6 validators)
+
+The single node above is a dev harness. To run against a real multi-validator network —
+six validators with block gossip, wall-clock leader rotation, 6-second slots, and full
+state-transition import (PolkaJam-style):
 
 ```sh
-docker compose -f docker-compose.testnet.yml up    # -> 6 validators + same UI at :8080
+docker compose -f docker-compose.testnet.yml up    # 6 validators + the same UI at :8080
 ```
 
 Now every order is gossiped, included in a block, and re-executed by all six validators
-byte-identically; settlement lands a slot or two later (real 6 s cadence). The validator
-count is **fixed at 6** — the `lasair-testnet-node` image ships a 6-validator genesis
-(`NODE_INDEX` 0–5) — and the dex points at validator `v0`'s operator RPC. Both modes
-serve the same UI on `:8080`; the arch notes below apply to either.
+byte-identically; settlement lands a slot or two later at the real 6-second cadence.
+
+### Options
+
+```sh
+LASAIR_NODE_TAG=node-v0.3.0 docker compose up   # pin a node version instead of :latest
+docker compose --profile demo run --rm demo     # run the narrated CLI walkthrough (see sim/demo.py)
+```
+
+To fall back from the default committee sealing (rung 2) to commit–reveal (rung 3),
+uncomment `ENC_MODE: "0"` under the `dex` service in `docker-compose.yml`.
 
 | Your machine | What runs | Notes |
 |---|---|---|
@@ -117,136 +198,55 @@ serve the same UI on `:8080`; the arch notes below apply to either.
 | **Windows / WSL2** (amd64) | native | run inside a WSL2 Linux shell |
 | **arm64 without an arm64 image yet** | emulated | add `--platform linux/amd64` (slower, but works) |
 
-It pulls the node, deploys the Jamswap service onto it, and serves the **trading
-UI** + off-chain builder ([`offchain/`](offchain/)): place limit orders, run an
-auction round, and watch the uniform-price clearing, the resting order book, and
-your balances update — across multiple markets sharing one ledger. The committed
-service blob (`service/jamswap-service.jam`) means it runs straight from a clone;
-nothing to compile.
+> **Running your own JAM node?** Jamswap is a fully self-contained JAM **service** —
+> nothing is baked into the client. Point `LASAIR_RPC` at any conformant node with a
+> deploy/work-item RPC and run the same flow. Build the blob yourself with
+> `cd service && jam-pvm-build -m service`. lasair is just the node we ship it on.
 
-**Sealed orders default to encrypt-until-batch (option 2 — no reveal round).** The dex
-image builds an off-protocol **committee sidecar** ([`crates/committee`](crates/committee/));
-on startup it commits the committee keys on-chain and thereafter sealed orders are
-ECIES-encrypted to that committee. At each auction the committee decrypts and refine
-verifies a Chaum-Pedersen proof of correct decryption — so a sealed order's terms stay
-hidden until it clears, with **no per-owner reveal step and no non-reveal griefing**. Set
-`ENC_MODE=0` in the `dex` service to fall back to plain commit–reveal (option 3). The
-verifiable-decryption crypto is in [`crates/vdec`](crates/vdec/) (host soundness tests) and
-gas-measured in `zk-jam-service/spikes/vdec-gas`; e2e proof in
-[`offchain/test_enc_round.py`](offchain/test_enc_round.py).
+---
 
-Pin a node version instead of `:latest`:
+## Learn more
 
-```sh
-LASAIR_NODE_TAG=node-v0.3.0 docker compose up
-```
+| Doc | What's in it |
+|-----|--------------|
+| [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md) | The three order-hiding approaches, ELI5 — what each protects and its state today |
+| [`docs/JAMKB.md`](docs/JAMKB.md) | JAMKB explained + how Jamswap is a live worked example of it |
+| [`docs/REVENUE.md`](docs/REVENUE.md) | The self-funding treasury — fees pay the JAMKB rent, owner takes the profit |
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | The full technical build: state machine, wire formats, round lifecycle |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Honest self-assessment — what's fixed, what carries an asterisk |
+| [`docs/TESTING.md`](docs/TESTING.md) | The test layers — matching engine, order sequences, sealed lifecycle, e2e |
+| [`docs/STATUS.md`](docs/STATUS.md) | Builder's checklist — everything built, everything next |
+| [`docs/PLAN.md`](docs/PLAN.md) | The thesis, business case, and phased roadmap |
+| [`docs/M1_DEMO.md`](docs/M1_DEMO.md) | The first proof: a real batch cleared in Refine on a live node |
+| [`docs/LASAIR_INTERNALS.md`](docs/LASAIR_INTERNALS.md) | Deep answers on the JAM client's internals (host calls, gas, purity) |
 
-The narrated CLI scenario (sealed commit/reveal round → clearing → settlement →
-resting book → cancel → MEV-resistance) is also available:
-
-```sh
-docker compose --profile demo run --rm demo   # see sim/demo.py
-```
-
-> **JAM-client teams:** this is a fully self-contained JAM **service** — nothing is
-> baked into the client. If you have your own JAM node with a deploy/work-item RPC,
-> point `LASAIR_RPC` at it and run the same flow. lasair is just the node we ship it
-> on; the service is portable. Build the blob yourself with
-> `cd service && jam-pvm-build -m service`.
-
-Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-
-## How Jamswap Prototype works (the trading UI)
-
-The UI at `:8080` (`offchain/`) is self-custodial with a JAM-native account. The flow:
-
-1. **Create account** — JAM has no protocol-level accounts or wallets (services define
-   their own model — see the wallet note below), so your account is an **ed25519 keypair
-   this app holds** (WebCrypto, persisted locally, **exportable/importable**). A signed
-   registration binds it to a collision-free on-chain handle. No extension required; a
-   future JAM wallet standard can slot in later.
-2. **Fund** in the Faucet tab — assets are **USDC, DOT, JAMKB**, tradable across all
-   three pairs (**DOT/USDC, JAMKB/USDC, JAMKB/DOT**).
-3. **Place an order** — **Buy/Sell**, **Limit** (you set the price) or **Market**
-   (a marketable-limit within a ±10% band of the last price). Each order is **signed by
-   your account key** and the signature travels with it. Tick **🔒 Seal** to hide it.
-4. **Auctions clear every 6 seconds**, mirroring JAM's block cadence — a live countdown
-   shows the next one; queued orders clear automatically (no button).
-5. **Watch the mempool** — a toggle shows *the data sitting in the service*: each queued
-   order tagged **🌐 LIMIT** / **⚡ MARKET** (terms visible) or **🔒 SEALED**. Sealed
-   orders publish only a Blake2s256 **commitment** on-chain (`TAG_COMMIT`); price and
-   size stay hidden until their auction reveals and clears them (`TAG_REVEAL`) — real
-   commit-reveal MEV-resistance, not a mock. Sealed orders are **immediate-or-cancel**:
-   they match in that auction or expire, and **never rest in the public book** exposing
-   their terms. (The reveal is briefly public on-chain — persistent privacy across rounds
-   needs threshold/time-lock encryption, the documented upgrade in [`docs/SECURITY.md`](docs/SECURITY.md).)
-6. **Your pending orders** — *decrypted for you* (you hold the nonce), with **cancel**
-   for any not yet cleared. Resting (on-chain) orders cancel via `TAG_CANCEL`.
-
-### JAMKB — pricing the state the service consumes
-
-Jamswap holds live state (order books, sealed commitments, balances) in **validator
-RAM** — exactly the resource Gavin Wood's **JAMKB** token prices (1 JAMKB ≙ 1 KB of JAM
-state footprint). **JAMKB** is our prototype of that token: the DEX tracks the footprint
-it implies as a **read-only meter** (nothing is held, funded, or consumed for now), and
-because JAMKB is also a trading pair, *the cost of state gets a market
-price*. Placing orders grows the footprint; the 6 s auctions clear them and free it.
-We build the **metrics** (a live footprint→JAMKB meter) to make this measurable and
-discussable — we deliberately **don't** enforce it in the node: pricing JAM's state is a
-protocol-economics decision for the community, not one a single client should bake in.
-The full understanding + that proposal (for discussion, not unilateral implementation)
-is in **[`docs/JAMKB.md`](docs/JAMKB.md)**.
-
-> **Honest note on the account model (why no Talisman).** JAM is not Substrate, so no
-> Polkadot wallet can add lasair as an RPC "network" — and that won't change: JAM has *no
-> protocol-level accounts or transactions* ("there is no transaction in JAM chain; users only
-> interact with services", per the JAM designers), so **each service defines its own account
-> model**. A Substrate wallet like Talisman would only hand us an **sr25519** signature — a
-> curve too costly to verify in the PVM — so it buys us nothing here. Instead the service owns
-> its scheme: an account is a collision-free handle **bound to an ed25519 key** by a signed
-> registration, and the browser holds that key (WebCrypto, exportable). **Withdraw, cancel, and
-> the treasury sweep are verified in the service** (replay-nonce'd) — forged/replayed ops are
-> rejected (verified e2e on the 6-validator testnet; unit-tested in `match-engine/src/auth.rs`).
-> Order placement is signed and verified at the (trusted) off-chain builder; the trustless
-> in-`refine` order check is the documented next step. Market orders are now **marketable-limit
-> with a ±10% slippage band**. A future JAM wallet standard (a `jam:` WalletConnect namespace,
-> or wallets signing ed25519 for services) can slot in without changing the model. See
-> [`docs/SECURITY.md`](docs/SECURITY.md).
-
-## The matching engine
-
-```sh
-cd crates/match-engine && cargo test --release
-```
-
-Uniform-price sealed-bid double auction: aggregate demand/supply curves, clearing
-price `p*` maximizing matched volume (tie-break: minimal imbalance, then lowest
-price), and price-time-priority rationing of the marginal order. Everyone trades
-at `p*`. See [`crates/match-engine/src/lib.rs`](crates/match-engine/src/lib.rs).
+---
 
 ## Why it's a JAM flagship
 
-- It's the **cleanest demonstration of what JAM uniquely enables**: AMMs exist
-  only because of the compute limit JAM removes.
-- The **batch auction is MEV-resistant by construction** (no intra-round latency
-  race); orders will be encrypted until the batch seals (Phase 4).
-- We build the client it runs on (**lasair**) → a structural cost moat
-  (cheapest to clear auctions → lowest fees with margin).
+- It's the **cleanest demonstration of what JAM uniquely enables**: real on-chain order
+  books exist only because JAM removes the compute limit that forced every other DEX
+  into formula-based pricing.
+- The **batch auction is MEV-resistant by construction** — no intra-round speed race —
+  and orders can be **sealed until the batch closes**.
+- We also build the JAM client it runs on (**lasair**), so we understand the whole stack
+  from the matching engine down to the state machine.
 
-Honest caveats (kept in view): JAM mainnet timing isn't ours to control;
-"trustless" carries an asterisk until the order-encryption story is airtight; and
-liquidity cold-start is a real grind. See `docs/PLAN.md` §9.
+**Honest caveats** (kept in view): JAM mainnet timing isn't ours to control; "trustless"
+carries an asterisk in the parts still being hardened (per-order signature checks in
+`refine`, real on-chain custody); and bootstrapping trading liquidity is a real grind.
+See [`docs/PLAN.md`](docs/PLAN.md) §9 and [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ---
 
 ## The abutlabs JAM suite
 
-Three things we built on JAM — an independent client, and two flagship services on
-it — each one-command-runnable and demonstrating something only JAM can do:
+Three things we built on JAM — an independent client, and two flagship services on it —
+each one-command-runnable and demonstrating something only JAM can do:
 
 - **[lasair](https://github.com/abutlabs/lasair)** — an independent OCaml JAM client
   (+ a live multi-node testnet that runs like PolkaJam).
 - **[zk-jam-service](https://github.com/abutlabs/zk-jam-service)** — anonymous,
-  sybil-resistant voting; a real ZK proof verified in `refine`.
+  sybil-resistant voting; a real zero-knowledge proof verified in `refine`.
 - **[jamswap](https://github.com/abutlabs/jamswap)** — this: a frequent-batch-auction
   order-book DEX; matching in `refine`, MEV-resistant, settlement on-chain.

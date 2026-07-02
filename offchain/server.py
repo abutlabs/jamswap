@@ -11,6 +11,8 @@ balance/state reads. Stdlib only (http.server, urllib, struct).
 """
 import hashlib, json, os, secrets, struct, subprocess, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
+from treasury import jamkb_rent, profit_split, max_withdrawable, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN
 
 # service payload tags (must match service/src/lib.rs)
 TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST, TAG_REGISTER, TAG_TREASURY = range(9)
@@ -144,9 +146,39 @@ def api_handle(q):
     return {"handle": handle_of(bytes.fromhex(q["pubkey"]))}
 def api_nonce(q):
     return {"nonce": nonce_of(int(q["handle"]))}
+def footprint_octets():
+    # the service's live state footprint in octets (validator RAM), from the node. 0 if
+    # the node predates the footprint endpoint (rent then reads as 0 — fail-open, honest).
+    try:
+        return int(node(f"/v1/service/{SID}/footprint").get("octets", 0))
+    except Exception:
+        return 0
+def rent_reserve_atomic():
+    # JAMKB the treasury must hold to cover the state rent (1 JAMKB = 1 KB), in atomic units.
+    return jamkb_rent(footprint_octets()) * SCALE
+def treasury_status():
+    # self-funding treasury view: rent (JAMKB) covered FIRST out of fees, only the surplus
+    # is withdrawable profit (to the owner). See treasury.py / docs/REVENUE.md.
+    reserve = rent_reserve_atomic()
+    bals = {a: bal(a, FEE_ACCOUNT) for a in (USDC, DOT, JAMKB)}
+    s = profit_split(bals, reserve)
+    return {"treasury": {a: disp(v) for a, v in bals.items()},
+            "rent_jamkb": disp(reserve), "reserve_held_jamkb": disp(s["reserve_held"]),
+            "shortfall_jamkb": disp(s["shortfall"]), "solvent": s["solvent"],
+            "withdrawable": {a: disp(v) for a, v in s["withdrawable"].items()},
+            "beneficiary": PROFIT_BENEFICIARY, "beneficiary_chain": PROFIT_BENEFICIARY_CHAIN}
+def api_treasury_status(q):
+    return treasury_status()
 def api_treasury(b):
-    # governance fee sweep: relays a GOV-key-signed canon(treasury, asset, amount, dest, nonce)
+    # governance fee sweep: relays a GOV-key-signed canon(treasury, asset, amount, dest, nonce).
+    # OPERATOR POLICY (docs/REVENUE.md): only PROFIT is withdrawable — a sweep that would dip
+    # into the JAMKB rent reserve is refused here (the service must stay solvent for its state).
     asset, amount, dest, nonce = int(b["asset"]), int(b["amount_atomic"]), int(b["dest"]), int(b["nonce"])
+    allowed = max_withdrawable({a: bal(a, FEE_ACCOUNT) for a in (USDC, DOT, JAMKB)}, rent_reserve_atomic(), asset)
+    if amount > allowed:
+        raise ValueError(f"withdrawal exceeds profit: {ASSET_NAME.get(asset, asset)} "
+                         f"{disp(amount)} requested, {disp(allowed)} withdrawable "
+                         f"(the rest covers the JAMKB state rent — see docs/REVENUE.md)")
     submit(bytes([TAG_TREASURY]) + struct.pack("<IQIQ", asset, amount, dest, nonce) + bytes.fromhex(b["sig"]))
     return {"ok": True}
 def api_govnonce(q):
@@ -246,22 +278,41 @@ def prune_expired(m, rest_bytes):
             order_expiry.pop((m, a, oid), None); continue
         out += rest_bytes[i * 17:(i + 1) * 17]
     return out
+def _parse_book(raw):
+    # resting book bytes -> planner order dicts (integer side, atomic price)
+    out = []
+    for i in range(len(raw) // 17):
+        a, oid, side, p, q = struct.unpack_from("<IIBII", raw, i * 17)
+        out.append({"account": a, "oid": oid, "side": side, "price": p, "qty": q, "sealed": False})
+    return out
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
-    with _lock:                        # snapshot + clear atomically so a concurrent
-        pend = pending.get(m, [])      # api_order during submit isn't dropped
-        pending[m] = []
-    sealed = [o for o in pend if o["sealed"]]
-    public = [o for o in pend if not o["sealed"]]
+    now = time.time()
     hdr = struct.pack("<III", m, base, quote)
     raw = storage(b"book" + struct.pack("<I", m))        # the market's on-chain resting book
     rest = prune_expired(m, raw)                          # drop good-till-time orders past expiry
     shrank = len(rest) < len(raw)                         # some resting order expired this round
+    with _lock:                        # snapshot + re-queue atomically so a concurrent
+        pend = pending.get(m, [])      # api_order during submit isn't dropped
+        for o in pend:                 # attach current GTT expiry for the planner
+            o["expiry"] = order_expiry.get((m, o["account"], o["oid"]))
+        # Decide which orders clear now. Sealed orders that DON'T cross current liquidity
+        # rest HIDDEN (carried forward) rather than being immediate-or-cancel — so a sealed
+        # sell placed now can meet a sealed buy placed in a later auction. A sealed order is
+        # revealed only in the round it actually crosses (see round.py + tests).
+        plan = plan_round(pend, _parse_book(rest), now)
+        pending[m] = plan.carry        # non-crossing sealed orders stay hidden for next round
+        for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
+            order_expiry.pop((m, o["account"], o["oid"]), None)
+    sealed, public = plan.reveal, plan.public
     public_bytes = b"".join(order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"]) for o in public)
     if sealed and ENC_MODE:
         # encrypt-until-batch round: the committee decrypts each sealed ciphertext (proving it
         # via Chaum-Pedersen); refine verifies every proof, recovers the orders, and clears them
-        # with the resting book + public orders at ONE uniform price (sealed = immediate-or-cancel).
+        # with the resting book + public orders at ONE uniform price. Only the sealed orders that
+        # CROSS this round are here (the planner keeps non-crossing ones hidden for later), so a
+        # sealed order is decrypted on-chain only in the round it actually trades. Any unfilled
+        # remainder of a revealed order is immediate-or-cancel (never rests publicly exposed).
         # No reveal round — traders needn't be online at match time.
         cts = ",".join(o["ciphertext"] for o in sealed)
         d = committee_run("round", m, base, quote, (rest + public_bytes).hex(), cts)
@@ -269,8 +320,10 @@ def api_round(b):
     elif sealed:
         # UNIFIED sealed round (commit–reveal): the resting book + this round's public orders +
         # the revealed sealed orders all clear together at ONE uniform price (so a sealed order
-        # can cross public/resting liquidity). The node re-checks each reveal's hash ∈ commits;
-        # sealed orders are immediate-or-cancel (their remainder never rests publicly).
+        # can cross public/resting liquidity). Only sealed orders that CROSS this round are
+        # revealed (non-crossing ones stay hidden, carried forward by the planner); the node
+        # re-checks each reveal's hash ∈ commits. Any unfilled remainder of a revealed order is
+        # immediate-or-cancel (never rests publicly exposed).
         commits = b"".join(commitment(o["reveal"]) for o in sealed)
         reveals = b"".join(o["reveal"] for o in sealed)
         submit(bytes([TAG_REVEAL]) + hdr
@@ -284,7 +337,8 @@ def api_round(b):
         # (apply_settlement only updates lp when something actually fills).
         submit(bytes([TAG_MATCH]) + hdr + rest + public_bytes)
     return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
-            "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public)}}
+            "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
+            "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
 def short(a):
     return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a
 def mempool_entry(o, owner=False):
@@ -368,7 +422,7 @@ def ensure_committee():
         print("committee setup failed (falling back to commit-reveal):", e)
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
               "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
-              "/api/govnonce": api_govnonce}
+              "/api/govnonce": api_govnonce, "/api/treasury_status": api_treasury_status}
 
 def has_expired(m):
     now = time.time()

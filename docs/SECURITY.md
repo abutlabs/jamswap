@@ -64,15 +64,24 @@ carries the asterisk noted here.
   order, the fixed blob rejects the round while honest rounds still clear).
   Residual builder power is censorship/ordering within a round, never fabrication.
 - **What sealing does and doesn't hide (precise model).** A sealed order is hidden
-  (only its Blake2s256 commitment is on-chain) **until the auction it clears in**. At
-  that auction it is revealed on-chain to be matched — so the reveal is **transiently
-  public**. Sealed orders are **immediate-or-cancel**: any unmatched remainder expires
-  rather than resting, so a sealed order **never persists in the public book with its
-  terms exposed** (this was a real bug — a revealed sealed order used to rest publicly;
-  fixed by emitting no resting book on the reveal path). The MEV protection is therefore
-  *intra-round* (you can't see or front-run an order before its batch seals).
-  **Persistent privacy across rounds** (an order that rests without ever revealing) needs
-  **threshold/time-lock encryption**.
+  (only its Blake2s256 commitment / ciphertext is on-chain) **until the auction it
+  crosses a counterparty in** — at that auction it is revealed on-chain to be matched, so
+  the reveal is **transiently public**. A sealed order that finds no crossing liquidity
+  **rests hidden** (carried forward by the off-chain builder; only its commitment stays
+  on-chain) and is retried each auction until it crosses or its good-till-time expires —
+  so a sealed sell placed now can match a sealed buy placed rounds later, while both stay
+  private until they clear. *(This fixed a real usability bug: sealed orders used to be
+  immediate-or-cancel and the auction loop drained the pending queue every tick, so
+  orders placed in different 6 s windows never met. The carry-forward planner
+  — `offchain/round.py`, tested in `offchain/tests/test_round_lifecycle.py` — reveals a
+  sealed order only in the round it crosses.)* Any unfilled remainder of a *revealed*
+  order is still immediate-or-cancel, so a sealed order **never persists in the public
+  book with its terms exposed** (an earlier bug where a revealed sealed order rested
+  publicly was fixed by emitting no resting book on the reveal path). **Residual trust:**
+  the builder holds the plaintext to run the crossing check (the same builder role every
+  exchange has, and the check is clearing-neutral — non-crossing orders can't change the
+  uniform price); the matching itself stays fully validator-audited. Builder-independent
+  hidden resting needs the **ZK/MPC matcher (option 1)**.
 - **Encrypt-until-batch (option 2, no reveal round) — BUILT.** Orders are ECIES-encrypted
   to an off-protocol committee key committed on-chain (`ENC_SETUP`, gov-signed; the
   committee uses fresh keys, never validator consensus keys). At batch close the committee

@@ -15,6 +15,13 @@
 //!   4. Fill to volume V on each side by price-time priority (best price first,
 //!      then lowest order id) — the marginal order is partially filled; everyone
 //!      trades at p*.
+//!
+//! # Tests (run `cargo test --release`)
+//! - unit + property tests: the `tests` module at the bottom of this file
+//!   (`clearing_maximizes_volume`, `invariants` — conservation/determinism/settlement).
+//! - multi-round sequence scenarios: `tests/scenarios.rs`.
+//! - signature/auth: `src/auth.rs`.
+//! Full test map across the whole project: `docs/TESTING.md`.
 
 #![cfg_attr(not(test), no_std)]
 

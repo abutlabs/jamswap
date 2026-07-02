@@ -247,9 +247,12 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
 
 ## What this means for jamswap's sealed-order roadmap
 
-1. **Option 3 (current commit–reveal + IOC) is the trust-minimal ceiling for pure
-   on-chain.** Confirmed: no host call, no DA trick, no service-held key can do better
-   without new trust.
+1. **Option 3 (commit–reveal) is the trust-minimal ceiling for pure on-chain.**
+   Confirmed: no host call, no DA trick, no service-held key can do better without new
+   trust. (On-chain, each *revealed* order is immediate-or-cancel per round; sealed
+   orders that don't cross rest hidden via a builder-side carry-forward — see
+   `SEALED_ORDERS.md` — which adds builder trust for the crossing check only, not for
+   the validator-audited matching.)
 2. **Option 2 (threshold encrypt-until-batch) is buildable now as a sidecar — PROVEN**:
    DKG committee off-protocol (fresh keys, not consensus keys), traders encrypt to the
    committee key, batch-close decryption injected through the existing `node_rpc` payload

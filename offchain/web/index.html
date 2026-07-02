@@ -177,7 +177,7 @@
             </div>
             <div>
               <div style="font-size:13px;font-weight:500;color:#f0f0ff;">🔒 Seal order</div>
-              <div id="seal-note" style="font-size:11px;color:rgba(240,240,255,.28);margin-top:2px;">Hidden until it clears · <b style="color:rgba(240,240,255,.5);">fills this auction or expires — it won't rest</b> · MEV-resistant</div>
+              <div id="seal-note" style="font-size:11px;color:rgba(240,240,255,.28);margin-top:2px;">Hidden on-chain · <b style="color:rgba(240,240,255,.5);">rests sealed until a counterparty crosses it</b> · revealed only when it clears · MEV-resistant</div>
             </div>
           </div>
 
@@ -247,6 +247,21 @@
             </div>
           </div>
           <div style="font-size:11px;color:rgba(240,240,255,.2);line-height:1.5;">1 JAMKB = 1 KB of validator-RAM · place orders → grows · 6 s auctions → shrinks</div>
+
+          <!-- self-funding treasury: fees cover the JAMKB rent first; only profit is withdrawable -->
+          <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07);">
+            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;margin-bottom:10px;">Self-funding treasury</div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:5px;">
+              <span>JAMKB rent (locked)</span><span id="tr-rent" class="mono" style="color:#E6007A;">—</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:5px;">
+              <span id="tr-solv-label">Reserve held</span><span id="tr-reserve" class="mono">—</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:8px;">
+              <span>Withdrawable profit</span><span id="tr-profit" class="mono" style="color:#4ADE80;">—</span>
+            </div>
+            <div style="font-size:10px;color:rgba(240,240,255,.2);line-height:1.5;">Fees pay the JAMKB state rent first · only profit is withdrawable, by the owner → <span id="tr-benef" class="mono" style="color:rgba(240,240,255,.4);word-break:break-all;">—</span></div>
+          </div>
         </div>
 
       </div>
@@ -304,7 +319,7 @@ const state = {
   tab:"trade", market:MARKETS[0], side:"buy", otype:"limit", sealed:false, wallet:null, handle:null,
   book:[], lastPrice:null, volume:0, mempool:[], sealedOnchain:0,
   nextIn:6, auctionSecs:6, bals:{0:0,1:0,2:0}, pending:[],
-  fp:{items:0,octets:"—",jamkb:0,available:true}, mempoolOpen:true,
+  fp:{items:0,octets:"—",jamkb:0,available:true}, mempoolOpen:true, tr:null,
   fAsset:"0", runDisabled:false, tif:"0",
 };
 
@@ -474,6 +489,7 @@ async function refreshFp(){
   const f = await api("/api/footprint");
   if (!f || f.available === false) state.fp = {items:0, octets:"—", jamkb:0, available:false};
   else state.fp = {items:f.items||0, octets:(f.octets||0)+" B", jamkb:f.jamkb_required||0, available:true};
+  state.tr = await api("/api/treasury_status");
   renderFp();
 }
 
@@ -496,15 +512,16 @@ async function placeOrder(){
     const body = {market:market.id, base:market.base, quote:market.quote, account:myAcct(),
       address:state.wallet.selected.address, side, qty, type:otype, sealed, sig:hexRaw(sig)};
     if (otype==="limit") body.price = price;
-    if (!sealed) body.ttl = parseInt(state.tif) || 0;   // good-till-cancelled (0) or a timed expiry
+    body.ttl = parseInt(state.tif) || 0;   // good-till-cancelled (0) or a timed expiry (sealed too)
     const r = await api("/api/order", body);
     if (r.error){ toast(r.error, "err"); $("place").disabled=false; return; }
-    const tifLabel = (!sealed && body.ttl) ? " · expires in "+(body.ttl>=3600?body.ttl/3600+"h":body.ttl>=60?body.ttl/60+"m":body.ttl+"s") : "";
+    const tifLabel = body.ttl ? " · expires in "+(body.ttl>=3600?body.ttl/3600+"h":body.ttl>=60?body.ttl/60+"m":body.ttl+"s") : "";
     toast((sealed?"🔒 ":"")+otype+" "+side+" "+qty+(otype==="limit"?" @ "+price:"")+tifLabel+" queued (#"+(r.order_id||"?")+").", "ok");
-    // sealed = immediate-or-cancel: warn if nothing in the book crosses it this round
+    // sealed orders now REST HIDDEN until a counterparty crosses them — reassure the trader
+    // that a non-crossing sealed order isn't lost, it waits (hidden) for a match.
     if (sealed && otype==="limit"){
       const cross = state.book.some(o => side==="buy" ? (o.side==="sell" && o.price<=price) : (o.side==="buy" && o.price>=price));
-      if (!cross) toast("🔒 No resting order crosses your price. A sealed order fills only if a counterparty lands in this same 6 s auction — otherwise it expires (it won't rest). For a resting order, turn Seal off.", "info", 9000);
+      if (!cross) toast("🔒 No counterparty crosses your price yet — your sealed order rests hidden on-chain and will match automatically when one arrives (revealed only when it clears).", "info", 9000);
     }
   } catch { toast("Order failed.", "err"); }
   $("place").disabled = false; refresh(); refreshMine();
@@ -605,8 +622,9 @@ function renderType(){
 function renderSeal(){
   $("seal-track").style.background = state.sealed ? "#E6007A" : "rgba(255,255,255,.12)";
   $("seal-knob").style.left = state.sealed ? "19px" : "3px";
-  // expiry (time-in-force) applies only to non-sealed orders — sealed orders are IOC (never rest)
-  $("tif-block").classList.toggle("hidden", state.sealed);
+  // expiry (time-in-force) applies to sealed orders too now — they rest hidden until they
+  // cross, so a good-till-time bounds how long a sealed order waits before it's dropped.
+  $("tif-block").classList.remove("hidden");
 }
 function renderCTA(){
   const c = isConn(), m = state.market;
@@ -711,6 +729,24 @@ function renderFp(){
   $("fp-badge").style.cssText = state.fp.available
     ? "font-size:9px;padding:2px 8px;background:rgba(74,222,128,.08);color:#4ADE80;border-radius:999px;font-weight:700;letter-spacing:.06em;"
     : "font-size:9px;padding:2px 8px;background:rgba(245,158,11,.1);color:#F59E0B;border-radius:999px;font-weight:700;letter-spacing:.06em;";
+  const t = state.tr;
+  if (t){
+    $("tr-rent").textContent = t.rent_jamkb + " JAMKB";
+    if (t.solvent){
+      $("tr-solv-label").textContent = "Reserve held ✓";
+      $("tr-reserve").textContent = t.reserve_held_jamkb + " JAMKB";
+      $("tr-reserve").style.color = "#4ADE80";
+    } else {
+      $("tr-solv-label").textContent = "Reserve shortfall";
+      $("tr-reserve").textContent = "−" + t.shortfall_jamkb + " JAMKB";
+      $("tr-reserve").style.color = "#F87171";
+    }
+    const w = t.withdrawable || {};
+    const parts = [[0,"USDC"],[1,"DOT"],[2,"JAMKB"]].map(([id,l]) => (w[id]||0)+" "+l).filter(p=>!p.startsWith("0 "));
+    $("tr-profit").textContent = t.solvent ? (parts.length ? parts.join(" · ") : "0") : "0 (rent unfunded)";
+    $("tr-benef").textContent = t.beneficiary ? (t.beneficiary.slice(0,8)+"…"+t.beneficiary.slice(-6)) : "—";
+    $("tr-benef").title = (t.beneficiary||"") + " (" + (t.beneficiary_chain||"") + ")";
+  }
 }
 function renderFaucetTabs(){
   $("fassets").innerHTML = "";

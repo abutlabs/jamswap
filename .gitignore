@@ -5,3 +5,7 @@ Cargo.lock
 # the deployable service blob — committed so `docker compose up` runs from a fresh clone
 !service/jamswap-service.jam
 .DS_Store
+
+# Python bytecode
+__pycache__/
+*.pyc

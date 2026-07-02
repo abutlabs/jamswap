@@ -50,8 +50,15 @@ const GOV_PUBKEY: [u8; 32] = [
 
 // trading fee: a flat fee on matched quote notional (FBA has no maker/taker), paid
 // by both sides into the treasury account (in the market's quote asset). 30 bps.
+// The fee funds the service's JAMKB state rent first; only the surplus is withdrawable
+// profit, and only via a GOV_PUBKEY-signed sweep. See docs/REVENUE.md.
 const FEE_BPS: u32 = 30;
 const FEE_ACCOUNT: u32 = u32::MAX;
+// Owner / beneficiary of withdrawable profit (Polkadot AssetHub). Recorded for
+// documentation: JAM sweeps are authorised by GOV_PUBKEY, and cross-chain payout to
+// AssetHub is deferred (no JAM<->Polkadot bridge in this MVP) — see docs/REVENUE.md.
+#[allow(dead_code)]
+const PROFIT_BENEFICIARY: &str = "15AWQjAZ9Ev9uhcYJdfwQzXA2VRDn2oLgZTkBzRRT7sZNDgs";
 
 // Fixed-point price scale: on-chain prices, quantities, and balances are integer
 // *atomic* units = display × SCALE, so a fractional price like 1.1050 is carried as

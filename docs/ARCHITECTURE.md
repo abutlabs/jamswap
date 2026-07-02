@@ -96,9 +96,13 @@ scales on ingest and de-scales on read, so the UI speaks plain decimals end-to-e
 1. **(optional) Commit** — traders submit `COMMIT H(order‖nonce)`; only hashes go
    on-chain. Orders are hidden.
 2. **Match / Reveal** — the builder assembles the batch: the resting `book` + new
-   orders (plaintext `MATCH`), or the `commits` set + revealed orders (`REVEAL`).
-   `refine` clears the uniform-price auction; partially/un-filled orders become
-   the new resting book.
+   orders (plaintext `MATCH`), or the `commits`/ciphertext set + revealed orders
+   (`REVEAL`/`ENC_ROUND`). Only sealed orders that **cross** the current liquidity are
+   revealed this round; non-crossing sealed orders are carried forward, still sealed
+   on-chain (the pure `offchain/round.py` planner decides this from the plaintext the
+   builder holds — see `docs/SEALED_ORDERS.md` → "How sealed orders rest"). `refine`
+   clears the uniform-price auction; partially/un-filled *public* orders become the new
+   resting book (a revealed sealed order's remainder is immediate-or-cancel).
 3. **Settle** — `accumulate` applies conservation-checked per-account deltas
    (`settle_deltas`: buy = +base/−(quote+fee), sell = −base/+(quote−fee); quote notional
    = `qty·price / SCALE`, buyers rounding up and sellers down so any fixed-point dust
@@ -117,9 +121,11 @@ optimization.
 Two layers, both proven e2e:
 - **Frequent batch auction** — one uniform clearing price per round removes the
   latency race that drives most CEX/AMM MEV. Everyone trades at `p*`.
-- **Sealed orders (commit–reveal)** — orders are hidden (only a hash on-chain)
-  until the batch seals; `refine` admits only committed orders. You cannot see an
-  order in time to front-run it, nor inject one you didn't commit.
+- **Sealed orders** — orders are hidden (only a hash/ciphertext on-chain) and **rest
+  hidden** until the round they cross a counterparty; `refine` admits only committed
+  orders. You cannot see an order in time to front-run it, nor inject one you didn't
+  commit. A sealed order's terms are revealed only in the round it clears (the builder's
+  crossing check carries non-crossing sealed orders forward, still sealed).
 
 **Honest trust boundaries** (the "trustless" asterisk, kept loud):
 - Matching/settlement is fully deterministic + validator-audited — no asterisk.
