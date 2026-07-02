@@ -35,7 +35,7 @@
     <div style="width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 8px rgba(74,222,128,.9);animation:pulse 2s infinite;flex-shrink:0;"></div>
     <span>lasair · localhost</span>
   </div>
-  <button id="connect"><span id="wallet-label">Connect wallet</span></button>
+  <button id="connect"><span id="wallet-label">Create account</span></button>
 </nav>
 
 <!-- BODY -->
@@ -158,6 +158,18 @@
             <span id="summary" style="font-size:12px;color:rgba(240,240,255,.42);">Enter quantity and price to see total</span>
           </div>
 
+          <!-- Time in force (non-sealed orders rest until they fill / expire / are cancelled) -->
+          <div id="tif-block" style="display:flex;align-items:center;justify-content:space-between;padding:0 2px;margin-bottom:14px;">
+            <span style="font-size:12px;color:rgba(240,240,255,.32);">Time in force</span>
+            <select id="tif" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;color:#f0f0ff;font-size:12px;padding:6px 8px;outline:none;cursor:pointer;">
+              <option value="0">Good-till-cancelled</option>
+              <option value="30">Expire in 30 s</option>
+              <option value="60">Expire in 1 min</option>
+              <option value="300">Expire in 5 min</option>
+              <option value="3600">Expire in 1 hour</option>
+            </select>
+          </div>
+
           <!-- Seal toggle -->
           <div id="seal-toggle" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);border-radius:14px;cursor:pointer;margin-bottom:14px;user-select:none;">
             <div id="seal-track" style="width:38px;height:22px;background:rgba(255,255,255,.12);border-radius:11px;position:relative;flex-shrink:0;transition:background .18s;">
@@ -165,7 +177,7 @@
             </div>
             <div>
               <div style="font-size:13px;font-weight:500;color:#f0f0ff;">🔒 Seal order</div>
-              <div style="font-size:11px;color:rgba(240,240,255,.28);margin-top:2px;">Hidden until auction · immediate-or-cancel · MEV-resistant</div>
+              <div id="seal-note" style="font-size:11px;color:rgba(240,240,255,.28);margin-top:2px;">Hidden until it clears · <b style="color:rgba(240,240,255,.5);">fills this auction or expires — it won't rest</b> · MEV-resistant</div>
             </div>
           </div>
 
@@ -176,8 +188,8 @@
           </div>
 
           <!-- CTA -->
-          <button id="place" style="width:100%;">Connect wallet to trade</button>
-          <div style="text-align:center;margin-top:12px;font-size:11px;color:rgba(240,240,255,.2);">Signs in wallet · queues for the next 6 s auction</div>
+          <button id="place" style="width:100%;">Create account to trade</button>
+          <div style="text-align:center;margin-top:12px;font-size:11px;color:rgba(240,240,255,.2);">Signs with your JAM account key · queues for the next 6 s auction</div>
 
         </div>
       </div>
@@ -192,6 +204,19 @@
             <span id="wallet-addr" class="mono" style="font-size:10px;color:rgba(240,240,255,.22);overflow:hidden;max-width:120px;text-overflow:ellipsis;white-space:nowrap;"></span>
           </div>
           <div id="bals"></div>
+          <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;">
+              <span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.28);font-weight:600;">JAM Account</span>
+              <span id="acct-handle" class="mono" style="font-size:10px;color:#4ADE80;"></span>
+            </div>
+            <div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:rgba(240,240,255,.22);margin-bottom:3px;">ed25519 public key</div>
+            <div id="acct-pubkey" class="mono" title="click to copy" style="font-size:10px;color:rgba(240,240,255,.42);word-break:break-all;cursor:pointer;line-height:1.45;">—</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:9px;">
+              <span style="font-size:10px;color:rgba(240,240,255,.28);flex:1;">held in this browser</span>
+              <button id="acct-export" style="padding:3px 9px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.4);border-radius:6px;font-size:10px;cursor:pointer;">export</button>
+              <button id="acct-import" style="padding:3px 9px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.4);border-radius:6px;font-size:10px;cursor:pointer;">import</button>
+            </div>
+          </div>
         </div>
 
         <!-- Pending orders -->
@@ -276,11 +301,11 @@ const MARKETS = [
 ];
 
 const state = {
-  tab:"trade", market:MARKETS[0], side:"buy", otype:"limit", sealed:false, wallet:null,
+  tab:"trade", market:MARKETS[0], side:"buy", otype:"limit", sealed:false, wallet:null, handle:null,
   book:[], lastPrice:null, volume:0, mempool:[], sealedOnchain:0,
   nextIn:6, auctionSecs:6, bals:{0:0,1:0,2:0}, pending:[],
   fp:{items:0,octets:"—",jamkb:0,available:true}, mempoolOpen:true,
-  fAsset:"0", runDisabled:false,
+  fAsset:"0", runDisabled:false, tif:"0",
 };
 
 const $ = id => document.getElementById(id);
@@ -327,33 +352,88 @@ function toast(msg, kind="info", ms=4500){
   if (ms) setTimeout(close, ms);
 }
 
-// ═══════════════════ wallet ═══════════════════
-function fnv32(s){ let h=2166136261>>>0; for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619)>>>0; } return h>>>0; }
-const acctId = a => fnv32(a);
+// ═══════════════════ wallet + signing ═══════════════════
+// An account is a collision-free handle the service assigns to an ed25519 public key at
+// registration; every mutating op is signed with that key and verified in the service. Two
+// signer paths: a connected wallet (signRaw — needs an **ed25519** account, since the service
+// verifies ed25519) or, with no wallet, a browser-held ed25519 key (WebCrypto). The signed
+// message matches canon() in server.py / lib.rs exactly.
 const short = a => a && a.length>14 ? a.slice(0,6)+"…"+a.slice(-6) : (a||"");
 const toHex = s => "0x"+Array.from(new TextEncoder().encode(s)).map(b=>b.toString(16).padStart(2,"0")).join("");
 const isConn = () => !!state.wallet;
-const myAcct = () => state.wallet ? acctId(state.wallet.selected.address) : null;
+const myAcct = () => (state.wallet && state.handle!=null) ? state.handle : null;
+const sleep = ms => new Promise(r=>setTimeout(r,ms));
+const hexRaw = u8 => Array.from(u8).map(b=>b.toString(16).padStart(2,"0")).join("");
+const hexToBytes = h => { h=h.replace(/^0x/,""); const a=new Uint8Array(h.length/2); for(let i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16); return a; };
+const te = new TextEncoder();
+function concatB(...arrs){ let n=arrs.reduce((s,a)=>s+a.length,0),o=new Uint8Array(n),p=0; for(const a of arrs){o.set(a,p);p+=a.length;} return o; }
+function u32le(n){ const b=new Uint8Array(4); new DataView(b.buffer).setUint32(0,n>>>0,true); return b; }
+function u64le(n){ const b=new Uint8Array(8); new DataView(b.buffer).setBigUint64(0,BigInt(n),true); return b; }
+function canonBytes(action, ...parts){ return concatB(te.encode("jamswap:v1:"+action), ...parts); }
+const SCALE = 10000, toAtomic = x => Math.round(parseFloat(x)*SCALE);
 
-async function connectWallet(){
-  const inj = window.injectedWeb3 || {};
-  const key = inj.talisman ? "talisman" : Object.keys(inj)[0];
-  if (!key){ useDemoWallet(); return; }
-  try {
-    const ext = await inj[key].enable("Jamswap");
-    const accounts = await ext.accounts.get();
-    if (!accounts.length){ toast("No accounts in wallet.", "err"); return; }
-    state.wallet = { ext, accounts, selected:accounts[0], demo:false };
-    toast("Connected: "+(state.wallet.selected.name||short(state.wallet.selected.address)), "ok");
-    renderWallet(); refreshBals(); refreshMine();
-  } catch { toast("Wallet connection rejected.", "err"); }
+// The jamswap account key is a browser-held **ed25519** key (WebCrypto), persisted per identity
+// in localStorage. The service verifies ed25519; Talisman's default accounts are sr25519 — a
+// different curve the PVM can't cheaply verify — so we sign with this key and use the wallet for
+// identity/connection. (A wallet ed25519 account signing via signRaw is a straightforward later add.)
+async function loadOrCreateKey(ns){
+  const skHex = localStorage.getItem("jamswap_sk_"+ns), pkHex = localStorage.getItem("jamswap_pk_"+ns);
+  if (skHex && pkHex){
+    const key = await crypto.subtle.importKey("pkcs8", hexToBytes(skHex), {name:"Ed25519"}, true, ["sign"]);
+    return { key, pub: hexToBytes(pkHex) };
+  }
+  const kp = await crypto.subtle.generateKey({name:"Ed25519"}, true, ["sign","verify"]);
+  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
+  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  localStorage.setItem("jamswap_sk_"+ns, hexRaw(pkcs8));
+  localStorage.setItem("jamswap_pk_"+ns, hexRaw(raw));
+  return { key: kp.privateKey, pub: raw };
 }
-function useDemoWallet(){
-  const r = Math.random().toString(36).slice(2,8);
-  const address = ("5Demo"+r+"0".repeat(48)).slice(0,47);
-  state.wallet = { ext:null, accounts:[{address,name:"Demo account"}], selected:{address,name:"Demo account"}, demo:true };
-  toast("Using a demo account (no wallet signatures).", "info");
-  renderWallet(); refreshBals(); refreshMine();
+async function signBytes(msg){
+  return new Uint8Array(await crypto.subtle.sign({name:"Ed25519"}, state.wallet.key, msg));
+}
+// Register the account key → handle (idempotent server-side); polls until accumulate lands.
+async function registerAccount(){
+  const pub = state.wallet.pub, pubhex = hexRaw(pub);
+  const sig = await signBytes(canonBytes("register", pub));
+  await api("/api/register", { pubkey:pubhex, sig:hexRaw(sig) });
+  for (let i=0;i<15;i++){ const r=await api("/api/handle?pubkey="+pubhex); if (r && r.handle!=null){ state.handle=r.handle; return true; } await sleep(500); }
+  return false;
+}
+
+// JAM has no protocol accounts or transactions — services define their own account model
+// (per the JAM designers: "JAM Services all have one account type"). Ours is an ed25519 key
+// this app holds for you: no extension, no sr25519 mismatch, and exactly the per-service model
+// JAM intends. The key is persisted locally and exportable; a future JAM wallet standard
+// (a `jam:` WalletConnect namespace, or wallets signing ed25519 for services) can slot in later.
+async function connectAccount(){
+  try {
+    const kp = await loadOrCreateKey("default");
+    const address = "jam:" + hexRaw(kp.pub).slice(0, 16);
+    state.wallet = { key: kp.key, pub: kp.pub, selected: { address, name: "JAM account" } };
+    if (await registerAccount()) toast("Account ready.", "ok");
+    else toast("Registration pending — click your account again in a moment.", "err");
+    renderWallet(); refreshBals(); refreshMine();
+  } catch(e){ toast("Account setup failed: "+(e && e.message ? e.message : e)+" — this browser needs WebCrypto Ed25519 (Chrome 137+/Safari 17+).", "err"); }
+}
+// Export the account keypair (so it survives a browser wipe / moves to another device).
+function exportAccount(){
+  const sk = localStorage.getItem("jamswap_sk_default"), pk = localStorage.getItem("jamswap_pk_default");
+  if (!sk){ toast("No account yet — create one first.", "err"); return; }
+  const blob = new Blob([JSON.stringify({ v:1, sk, pk })], { type:"application/json" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = "jamswap-account.json"; a.click(); URL.revokeObjectURL(a.href);
+  toast("Account key exported — keep it safe.", "ok");
+}
+async function importAccount(){
+  const txt = prompt("Paste your exported account JSON:");
+  if (!txt) return;
+  try {
+    const { sk, pk } = JSON.parse(txt);
+    if (!sk || !pk) throw new Error("missing sk/pk");
+    localStorage.setItem("jamswap_sk_default", sk); localStorage.setItem("jamswap_pk_default", pk);
+    await connectAccount(); toast("Account imported.", "ok");
+  } catch(e){ toast("Import failed: "+(e && e.message ? e.message : e), "err"); }
 }
 
 // ═══════════════════ data ═══════════════════
@@ -399,23 +479,33 @@ async function refreshFp(){
 
 // ═══════════════════ actions ═══════════════════
 async function placeOrder(){
-  if (!isConn()){ connectWallet(); return; }
+  if (!isConn()){ connectAccount(); return; }
+  if (myAcct()==null){ toast("Account not registered yet — reconnect.", "err"); return; }
   const qty = parseFloat($("qty-in").value), price = parseFloat($("price-in").value);
-  const {market, side, otype, sealed, wallet} = state;
+  const {market, side, otype, sealed} = state;
   if (!qty || (otype==="limit" && !price)){ toast("Enter "+(otype==="limit"?"a price and ":"")+"a quantity.", "err"); return; }
-  const msg = "Jamswap "+(sealed?"(sealed) ":"")+otype.toUpperCase()+" "+side.toUpperCase()+" "+qty+" "+market.name+(otype==="limit"?" @ "+price:"");
   $("place").disabled = true;
-  if (!wallet.demo){
-    try { toast("Confirm in your wallet…", "info", 2500);
-      await wallet.ext.signer.signRaw({address:wallet.selected.address, data:toHex(msg), type:"bytes"}); }
-    catch { $("place").disabled=false; toast("Signature rejected — order not placed.", "err"); return; }
-  }
+  // sign the order intent (market price is server-derived, so signed as 0) — matches api_order
+  const signedPrice = otype==="market" ? 0 : toAtomic(price);
+  const msg = canonBytes("order", u32le(myAcct()), u32le(market.id), new Uint8Array([side==="buy"?0:1]),
+    u32le(toAtomic(qty)), new Uint8Array([otype==="market"?1:0]), new Uint8Array([sealed?1:0]), u32le(signedPrice));
+  let sig;
+  try { toast("Confirm in your wallet…", "info", 2500); sig = await signBytes(msg); }
+  catch { $("place").disabled=false; toast("Signature rejected — order not placed.", "err"); return; }
   try {
     const body = {market:market.id, base:market.base, quote:market.quote, account:myAcct(),
-      address:wallet.selected.address, side, qty, type:otype, sealed};
+      address:state.wallet.selected.address, side, qty, type:otype, sealed, sig:hexRaw(sig)};
     if (otype==="limit") body.price = price;
+    if (!sealed) body.ttl = parseInt(state.tif) || 0;   // good-till-cancelled (0) or a timed expiry
     const r = await api("/api/order", body);
-    toast((sealed?"🔒 ":"")+otype+" "+side+" "+qty+(otype==="limit"?" @ "+price:"")+" queued (#"+(r.order_id||"?")+").", "ok");
+    if (r.error){ toast(r.error, "err"); $("place").disabled=false; return; }
+    const tifLabel = (!sealed && body.ttl) ? " · expires in "+(body.ttl>=3600?body.ttl/3600+"h":body.ttl>=60?body.ttl/60+"m":body.ttl+"s") : "";
+    toast((sealed?"🔒 ":"")+otype+" "+side+" "+qty+(otype==="limit"?" @ "+price:"")+tifLabel+" queued (#"+(r.order_id||"?")+").", "ok");
+    // sealed = immediate-or-cancel: warn if nothing in the book crosses it this round
+    if (sealed && otype==="limit"){
+      const cross = state.book.some(o => side==="buy" ? (o.side==="sell" && o.price<=price) : (o.side==="buy" && o.price>=price));
+      if (!cross) toast("🔒 No resting order crosses your price. A sealed order fills only if a counterparty lands in this same 6 s auction — otherwise it expires (it won't rest). For a resting order, turn Seal off.", "info", 9000);
+    }
   } catch { toast("Order failed.", "err"); }
   $("place").disabled = false; refresh(); refreshMine();
 }
@@ -436,12 +526,26 @@ async function cancelOrder(oid){
   refreshMine(); refresh();
 }
 async function faucet(kind){
-  if (!isConn()){ toast("Connect a wallet first.", "err"); return; }
+  if (!isConn()){ toast("Create an account first.", "err"); return; }
+  if (myAcct()==null){ toast("Account not registered yet.", "err"); return; }
   const amount = parseFloat($("famt").value);
   if (!amount){ toast("Enter an amount.", "err"); return; }
-  try { await api("/api/"+kind, {account:myAcct(), address:state.wallet.selected.address, asset:+state.fAsset, amount});
-    toast((kind==="deposit"?"Deposited ":"Withdrew ")+amount+" "+ASSETS[+state.fAsset]+".", "ok"); }
-  catch { toast(kind+" failed.", "err"); }
+  const asset = +state.fAsset;
+  try {
+    if (kind==="deposit"){                 // faucet funding is permissionless
+      await api("/api/deposit", {account:myAcct(), address:state.wallet.selected.address, asset, amount});
+      toast("Deposited "+amount+" "+ASSETS[asset]+".", "ok");
+    } else {                               // withdraw is signed + nonce'd (verified in the service)
+      const amt = toAtomic(amount);
+      const nr = await api("/api/nonce?handle="+myAcct()); const nonce = (nr && nr.nonce) || 0;
+      const msg = canonBytes("withdraw", u32le(myAcct()), u32le(asset), u64le(amt), u64le(nonce));
+      toast("Confirm withdrawal in your wallet…", "info", 2500);
+      const sig = await signBytes(msg);
+      const r = await api("/api/withdraw", {account:myAcct(), asset, amount_atomic:amt, nonce, sig:hexRaw(sig)});
+      if (r.error){ toast(r.error, "err"); return; }
+      toast("Withdrew "+amount+" "+ASSETS[asset]+".", "ok");
+    }
+  } catch { toast(kind+" failed.", "err"); }
   refreshBals();
 }
 function switchMarket(m){ state.market = m; renderMarketTabs(); renderMarketDeps(); subscribe(); refresh(); }
@@ -456,9 +560,12 @@ function renderTabs(){
 }
 function renderWallet(){
   const c = isConn();
-  $("wallet-label").textContent = c ? (state.wallet.selected.name || short(state.wallet.selected.address)) : "Connect wallet";
+  $("wallet-label").textContent = c ? (state.handle!=null ? "handle #"+state.handle : short(state.wallet.selected.address)) : "Create account";
   $("connect").style.cssText = WALLET(c);
   $("wallet-addr").textContent = c ? short(state.wallet.selected.address) : "";
+  // account readout: on-chain handle + full ed25519 public key
+  $("acct-handle").textContent = c ? (state.handle!=null ? "handle #"+state.handle : "registering…") : "";
+  $("acct-pubkey").textContent = c ? ("0x"+hexRaw(state.wallet.pub)) : "—";
   renderCTA();
   renderFaucetBtns();
 }
@@ -498,10 +605,12 @@ function renderType(){
 function renderSeal(){
   $("seal-track").style.background = state.sealed ? "#E6007A" : "rgba(255,255,255,.12)";
   $("seal-knob").style.left = state.sealed ? "19px" : "3px";
+  // expiry (time-in-force) applies only to non-sealed orders — sealed orders are IOC (never rest)
+  $("tif-block").classList.toggle("hidden", state.sealed);
 }
 function renderCTA(){
   const c = isConn(), m = state.market;
-  $("place").textContent = c ? (state.side==="buy" ? "Buy "+m.baseLabel : "Sell "+m.baseLabel) : "Connect wallet to trade";
+  $("place").textContent = c ? (state.side==="buy" ? "Buy "+m.baseLabel : "Sell "+m.baseLabel) : "Create account to trade";
   $("place").style.cssText = CTA(c, state.side);
 }
 function renderSummaryFee(){
@@ -573,7 +682,7 @@ function balRow(id, big){
 }
 function renderBals(){
   if (!isConn()){
-    $("bals").innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);padding:4px 0;">Connect wallet to view balances</div>';
+    $("bals").innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);padding:4px 0;">Create an account to view balances</div>';
   } else {
     $("bals").innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;">'+[0,1,2].map(id=>balRow(id,false)).join("")+'</div>';
   }
@@ -627,12 +736,16 @@ function tickClock(){
 // ═══════════════════ boot ═══════════════════
 $("nav-trade").onclick  = () => { state.tab="trade"; renderTabs(); };
 $("nav-faucet").onclick = () => { state.tab="faucet"; renderTabs(); };
-$("connect").onclick    = connectWallet;
+$("connect").onclick    = connectAccount;
+$("acct-export").onclick = exportAccount;
+$("acct-import").onclick = importAccount;
+$("acct-pubkey").onclick = () => { if (state.wallet){ (navigator.clipboard && navigator.clipboard.writeText("0x"+hexRaw(state.wallet.pub))); toast("Public key copied.", "ok"); } };
 $("sbuy").onclick   = () => { state.side="buy";  renderSide(); };
 $("ssell").onclick  = () => { state.side="sell"; renderSide(); };
 $("tlimit").onclick = () => { state.otype="limit";  renderType(); };
 $("tmarket").onclick= () => { state.otype="market"; renderType(); };
 $("seal-toggle").onclick = () => { state.sealed = !state.sealed; renderSeal(); };
+$("tif").onchange = (e) => { state.tif = e.target.value; };
 $("place").onclick  = placeOrder;
 $("run").onclick    = runRound;
 $("mem-toggle").onclick = () => { state.mempoolOpen = !state.mempoolOpen; renderMempool(); };
@@ -652,7 +765,7 @@ subscribe(); refresh(); refreshFp();
 setInterval(tickClock, 250);
 setInterval(() => { refreshBals(); refreshMine(); }, 6000);
 setInterval(refreshFp, 2000);
-if (window.injectedWeb3 && Object.keys(window.injectedWeb3).length) setTimeout(connectWallet, 500);
+if (localStorage.getItem("jamswap_sk_default")) setTimeout(connectAccount, 300);  // auto-load a saved account
 </script>
 </body>
 </html>

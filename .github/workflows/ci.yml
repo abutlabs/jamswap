@@ -2,7 +2,8 @@ name: CI
 
 # The determinism/conservation gate (PLAN.md §5): the matching engine's property
 # tests — value conservation, byte-identical determinism, per-order bounds, and
-# settlement Σ-deltas == 0 — must pass on every push. Never regress.
+# settlement Σ-deltas == 0 — plus the auth (ed25519 + canonical-message) unit tests
+# must pass on every push. The service must also always compile. Never regress.
 
 on:
   push:
@@ -14,6 +15,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Test the matching engine (incl. property tests)
+      - name: Test the matching engine + auth (incl. property tests)
         run: cargo test --release
         working-directory: crates/match-engine
+
+  service-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile the JAM service (settlement, sealed rounds, signed ops)
+        run: cargo build --release
+        working-directory: service
+
+  offchain-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Syntax-check the off-chain builder + demo
+        run: |
+          python3 -m py_compile offchain/server.py offchain/deploy.py sim/demo.py

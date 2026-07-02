@@ -21,6 +21,7 @@
 extern crate alloc;
 use alloc::vec::Vec;
 
+pub mod auth;
 pub mod wire;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

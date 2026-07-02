@@ -13,7 +13,19 @@ import hashlib, json, os, secrets, struct, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # service payload tags (must match service/src/lib.rs)
-TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST = range(7)
+TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST, TAG_REGISTER, TAG_TREASURY = range(9)
+FEE_ACCOUNT = 0xFFFFFFFF               # treasury handle (matches FEE_ACCOUNT in the service)
+# Optional off-chain order-signature verification (the trustless in-refine version is the
+# documented upgrade; the builder is a trusted role in the current model). Needs PyNaCl —
+# if it's absent we degrade to accepting orders unsigned (withdraw/cancel stay trustless in
+# the service regardless). Set REQUIRE_ORDER_SIG=0 to disable even when PyNaCl is present.
+try:
+    from nacl.signing import VerifyKey
+    from nacl.exceptions import BadSignatureError
+    HAVE_NACL = True
+except Exception:
+    HAVE_NACL = False
+REQUIRE_ORDER_SIG = HAVE_NACL and os.environ.get("REQUIRE_ORDER_SIG", "1") == "1"
 
 # assets + the six markets are config; the service itself is asset-agnostic.
 USDC, DOT, JAMKB = 0, 1, 2
@@ -47,6 +59,10 @@ BUY, SELL = 0, 1
 # front-runner watching the chain would see it. The terms are revealed at round time.
 pending = {}
 next_oid = [1000]
+# good-till-time expiry (builder-enforced; the trustless on-chain version would carry an
+# expiry field + a round counter in the service). (market, account, oid) -> unix expiry.
+# When a round rewrites a market's book, resting orders past their expiry are dropped.
+order_expiry = {}
 
 def commitment(reveal_bytes):     # must match service commitment(): Blake2s256, 32B
     return hashlib.blake2s(reveal_bytes, digest_size=32).digest()
@@ -64,6 +80,12 @@ def storage(key):
     return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
 def bal(asset, acct):
     return int.from_bytes(storage(b"b" + struct.pack("<II", asset, acct)) or b"\0", "little")
+def handle_of(pubkey):                 # b"h"+pubkey(32) -> account handle (or None)
+    v = storage(b"h" + pubkey); return int.from_bytes(v, "little") if v else None
+def nonce_of(handle):                  # b"nc"+handle(4) -> per-account nonce
+    v = storage(b"nc" + struct.pack("<I", handle)); return int.from_bytes(v, "little") if v else 0
+def canon(action, *parts):             # must match canon() in service/src/lib.rs
+    return b"jamswap:v1:" + action + b"".join(parts)
 def mstate(prefix, m):
     v = storage(prefix + struct.pack("<I", m)); return int.from_bytes(v, "little") if v else 0
 def book_of(m):
@@ -79,23 +101,98 @@ def api_deposit(b):
     submit(bytes([1]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), to_atomic(b["amount"])))
     return {"ok": True}
 def api_withdraw(b):
-    submit(bytes([5]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), to_atomic(b["amount"])))
-    return {"ok": True, "balance": disp(bal(int(b["asset"]), int(b["account"])))}
+    # signed + replay-proof: the client signs canon(withdraw, handle, asset, amount, nonce)
+    # with its account key; the SERVICE verifies (trustless). We just relay the bytes.
+    handle, asset, nonce = int(b["account"]), int(b["asset"]), int(b["nonce"])
+    amount = int(b["amount_atomic"])   # client scales + signs the atomic amount
+    sig = bytes.fromhex(b["sig"])
+    submit(bytes([TAG_WITHDRAW]) + struct.pack("<IIQQ", handle, asset, amount, nonce) + sig)
+    return {"ok": True, "balance": disp(bal(asset, handle))}
+def api_cancel(b):
+    # signed cancel of a RESTING (on-chain) order: canon(cancel, handle, market, oid, nonce)
+    handle, market, oid, nonce = int(b["account"]), int(b["market"]), int(b["order_id"]), int(b["nonce"])
+    sig = bytes.fromhex(b["sig"])
+    submit(bytes([TAG_CANCEL]) + struct.pack("<IIIQ", handle, market, oid, nonce) + sig)
+    return {"ok": True}
+def api_register(b):
+    # bind an ed25519 pubkey to an account handle: canon(register, pubkey) signed by that key
+    pubkey, sig = bytes.fromhex(b["pubkey"]), bytes.fromhex(b["sig"])
+    submit(bytes([TAG_REGISTER]) + pubkey + sig)
+    return {"ok": True, "handle": handle_of(pubkey)}   # None until accumulate lands
+def api_handle(q):
+    return {"handle": handle_of(bytes.fromhex(q["pubkey"]))}
+def api_nonce(q):
+    return {"nonce": nonce_of(int(q["handle"]))}
+def api_treasury(b):
+    # governance fee sweep: relays a GOV-key-signed canon(treasury, asset, amount, dest, nonce)
+    asset, amount, dest, nonce = int(b["asset"]), int(b["amount_atomic"]), int(b["dest"]), int(b["nonce"])
+    submit(bytes([TAG_TREASURY]) + struct.pack("<IQIQ", asset, amount, dest, nonce) + bytes.fromhex(b["sig"]))
+    return {"ok": True}
+def api_govnonce(q):
+    v = storage(b"govnonce"); return {"nonce": int.from_bytes(v, "little") if v else 0,
+                                      "treasury": {a: disp(bal(a, FEE_ACCOUNT)) for a in (USDC, DOT, JAMKB)}}
 def api_list(b):
     submit(bytes([6]) + struct.pack("<III", int(b["market"]), int(b["base"]), int(b["quote"])))
     return {"ok": True}
-# a market order is just a limit order priced to always cross at the uniform price:
-# a market BUY bids very high, a market SELL asks very low. Price discovery still comes
-# from the resting/limit orders in the batch.
-MARKET_BUY_PRICE, MARKET_SELL_PRICE = 2_000_000_000, 1
+def pubkey_of_handle(handle):          # b"pk"+handle(4) -> the registered 32-byte key
+    v = storage(b"pk" + struct.pack("<I", handle)); return v if len(v) >= 32 else None
+def verify_order_sig(pubkey, msg, sig):
+    if not HAVE_NACL:
+        return True
+    for m in (msg, b"<Bytes>" + msg + b"</Bytes>"):   # accept wallet <Bytes> framing too
+        try:
+            VerifyKey(pubkey).verify(m, sig); return True
+        except BadSignatureError:
+            continue
+    return False
+ASSET_NAME = {0: "USDC", 1: "DOT", 2: "JAMKB"}
+# A market order is a *marketable limit* with a slippage guard: instead of an unbounded
+# sentinel (which, in a thin book, would clear at an absurd uniform price), it crosses only
+# within MARKET_BAND of the last clearing price. With no last price yet (cold market) a
+# market order is refused — there's no reference to bound it, so use a limit order.
+MARKET_BAND = 0.10                     # ±10% of the last price
 def api_order(b):
-    m = int(b["market"]); oid = next_oid[0]; next_oid[0] += 1
+    m = int(b["market"])
     side = BUY if b["side"] == "buy" else SELL
     otype = b.get("type", "limit")
-    # atomic units on-chain: qty and limit price scale by SCALE. Market prices are
-    # sentinels (already atomic-domain), so they cross everything without scaling.
+    # atomic units on-chain: qty and limit price scale by SCALE.
     acct, qty = int(b["account"]), to_atomic(b["qty"])
-    price = (MARKET_BUY_PRICE if side == BUY else MARKET_SELL_PRICE) if otype == "market" else to_atomic(b["price"])
+    base, quote = int(b.get("base", -1)), int(b.get("quote", -1))
+    if otype == "market":
+        lp = mstate(b"lp", m)          # atomic last clearing price
+        if lp <= 0:
+            raise ValueError("no reference price yet on this market — place a limit order")
+        price = int(round(lp * (1 + MARKET_BAND))) if side == BUY else max(1, int(round(lp * (1 - MARKET_BAND))))
+    else:
+        price = to_atomic(b["price"])
+    # Order authentication (builder-side; the trustless in-refine check is the documented
+    # upgrade): the client signs its intent with the account key. Market price is server-derived,
+    # so it's signed as 0 (the band is applied here). Refuse if unregistered or the sig is bad.
+    if REQUIRE_ORDER_SIG:
+        pub = pubkey_of_handle(acct)
+        if not pub:
+            raise ValueError("account not registered — connect a wallet and register first")
+        signed_price = 0 if otype == "market" else price
+        msg = canon(b"order", struct.pack("<I", acct), struct.pack("<I", m), bytes([side]),
+                    struct.pack("<I", qty), bytes([1 if otype == "market" else 0]),
+                    bytes([1 if b.get("sealed") else 0]), struct.pack("<I", signed_price))
+        if not verify_order_sig(pub, msg, bytes.fromhex(b.get("sig", ""))):
+            raise ValueError("bad order signature")
+    # Collateral guard (best-effort; on-chain escrow is the trustless version): refuse an
+    # order the account can't currently fund. A buy needs qty·price/SCALE of the quote asset;
+    # a sell needs qty of the base asset. Note: this checks the current on-chain balance only,
+    # not funds already committed by other pending orders.
+    if base >= 0 and quote >= 0:
+        if side == BUY:
+            need = (qty * price + SCALE - 1) // SCALE
+            if bal(quote, acct) < need:
+                raise ValueError(f"insufficient {ASSET_NAME.get(quote, quote)} to fund this buy (need {disp(need)})")
+        elif bal(base, acct) < qty:
+            raise ValueError(f"insufficient {ASSET_NAME.get(base, base)} to fund this sell (need {disp(qty)})")
+    oid = next_oid[0]; next_oid[0] += 1
+    ttl = float(b.get("ttl", 0) or 0)      # seconds; 0 = good-till-cancelled
+    if ttl > 0:
+        order_expiry[(m, acct, oid)] = time.time() + ttl
     o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty, "type": otype,
          "sealed": bool(b.get("sealed")), "address": b.get("address", "")}
     if o["sealed"]:
@@ -107,6 +204,17 @@ def api_order(b):
         pending.setdefault(m, []).append(o)
         n = len(pending[m])
     return {"ok": True, "order_id": oid, "sealed": o["sealed"], "type": otype, "pending": n}
+def prune_expired(m, rest_bytes):
+    # remove resting orders whose good-till-time has passed (they don't get re-included in the
+    # rewritten book, so the round effectively cancels them). GTC orders (no expiry) are kept.
+    now, out = time.time(), b""
+    for i in range(len(rest_bytes) // 17):
+        a, oid, side, p, q = struct.unpack_from("<IIBII", rest_bytes, i * 17)
+        exp = order_expiry.get((m, a, oid))
+        if exp and exp <= now:
+            order_expiry.pop((m, a, oid), None); continue
+        out += rest_bytes[i * 17:(i + 1) * 17]
+    return out
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
     with _lock:                        # snapshot + clear atomically so a concurrent
@@ -115,19 +223,27 @@ def api_round(b):
     sealed = [o for o in pend if o["sealed"]]
     public = [o for o in pend if not o["sealed"]]
     hdr = struct.pack("<III", m, base, quote)
-    # sealed batch: REVEAL the committed orders (the node re-checks each hash ∈ commits)
+    raw = storage(b"book" + struct.pack("<I", m))        # the market's on-chain resting book
+    rest = prune_expired(m, raw)                          # drop good-till-time orders past expiry
+    shrank = len(rest) < len(raw)                         # some resting order expired this round
+    public_bytes = b"".join(order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"]) for o in public)
     if sealed:
+        # UNIFIED sealed round: the resting book + this round's public orders + the revealed
+        # sealed orders all clear together at ONE uniform price (so a sealed order can cross
+        # public/resting liquidity). The node re-checks each reveal's hash ∈ commits; sealed
+        # orders are immediate-or-cancel (their remainder never rests publicly).
         commits = b"".join(commitment(o["reveal"]) for o in sealed)
         reveals = b"".join(o["reveal"] for o in sealed)
-        submit(bytes([TAG_REVEAL]) + hdr + struct.pack("<I", len(commits)) + commits + reveals)
-    # public batch: resting book (from chain) + this round's public orders -> MATCH.
-    # Only when there are new public orders — an empty match would re-clear the resting
-    # book to volume 0 / price 0 and wipe the last clearing price (e.g. "clear now" on an
-    # idle market). Resting orders don't cross on their own, so skipping is a safe no-op.
-    if public:
-        rest = storage(b"book" + struct.pack("<I", m))
-        body = b"".join(order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"]) for o in public)
-        submit(bytes([TAG_MATCH]) + hdr + rest + body)
+        submit(bytes([TAG_REVEAL]) + hdr
+               + struct.pack("<I", len(commits)) + commits
+               + struct.pack("<I", len(reveals)) + reveals
+               + rest + public_bytes)
+    elif public or shrank:
+        # plaintext round: resting book + this round's public orders -> MATCH. Also runs on
+        # `shrank` (an order expired) with no new orders, to rewrite the book without the
+        # expired one — an empty cross conserves value and leaves the last price untouched
+        # (apply_settlement only updates lp when something actually fills).
+        submit(bytes([TAG_MATCH]) + hdr + rest + public_bytes)
     return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
             "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public)}}
 def short(a):
@@ -182,7 +298,8 @@ def api_footprint(q):
 
 ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
                "/api/list": api_list, "/api/order": api_order, "/api/round": api_round,
-               "/api/cancel_pending": api_cancel_pending}
+               "/api/cancel_pending": api_cancel_pending, "/api/register": api_register,
+               "/api/cancel": api_cancel, "/api/treasury": api_treasury}
 
 # the markets the UI shows; listed once at startup so they're tradable.
 # every combination of the three assets: (market_id, base, quote)
@@ -192,17 +309,21 @@ def ensure_markets():
         try: api_list({"market": m, "base": base, "quote": quote})
         except Exception as e: print("list failed", m, e)
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
-              "/api/footprint": api_footprint}
+              "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
+              "/api/govnonce": api_govnonce}
 
+def has_expired(m):
+    now = time.time()
+    return any(mid == m and exp <= now for (mid, _a, _o), exp in list(order_expiry.items()))
 def auction_loop():
-    # clear every market every AUCTION_SECS, mirroring JAM's 6s block cadence. Only
-    # submits a round where orders are queued (idle markets just tick the countdown).
+    # clear every market every AUCTION_SECS, mirroring JAM's 6s block cadence. Runs a round
+    # when orders are queued OR a resting order has expired (to prune it); otherwise idle.
     _next_auction[0] = time.time() + AUCTION_SECS
     while True:
         time.sleep(max(0.0, _next_auction[0] - time.time()))
         _next_auction[0] = time.time() + AUCTION_SECS
         for m, base, quote in DEFAULT_MARKETS:
-            if pending.get(m):
+            if pending.get(m) or has_expired(m):
                 try: api_round({"market": m, "base": base, "quote": quote})
                 except Exception as e: print("auction round failed", m, e)
 

@@ -6,6 +6,7 @@ license = "Apache-2.0"
 description = "Jamswap frequent-batch-auction uniform-price matching engine (no_std, integer-only, deterministic)"
 
 [dependencies]
+ed25519-compact = { version = "2", default-features = false }
 
 [dev-dependencies]
 # property testing for the clearing invariants

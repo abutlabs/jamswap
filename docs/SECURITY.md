@@ -13,24 +13,41 @@ carries the asterisk noted here.
   bug. **Fixed:** `settle_deltas` now computes in `i128` end-to-end (holds any
   `u32·u32` with room), and the service applies the deltas to `u64` balances with a
   clamp to `[0, u64::MAX]`. Conservation is property-tested over the `i128` path.
+- **Operation authentication (withdraw / cancel / treasury).** An account is now a
+  collision-free `u32` **handle bound to an ed25519 public key** via a signed
+  `TAG_REGISTER` (sequential handles — no birthday collisions, and the id is a
+  commitment to a signable key, not a public hash of the address). **Withdraw**,
+  **cancel** (of a resting order), and the **treasury sweep** are verified *in the
+  service* (`ed25519-compact`, `verify_strict`-equivalent, `<Bytes>`-framing aware) —
+  a forged or wrong-key operation is rejected. Verified e2e on the 6-validator testnet
+  and unit-tested in `match-engine/src/auth.rs` (accept-valid / reject-tampered /
+  reject-wrong-key / `<Bytes>`-wrapped). ed25519 verify traps on the PVM without a
+  larger stack — `min_stack_size!(1 MiB)` fixes it (as the sibling zk-jam-service does
+  for pairing).
+- **Replay protection.** Each account carries an on-chain **nonce**; withdraw and cancel
+  bind their signed message to it and it advances on every authorised op, so a captured
+  operation can't be replayed. The treasury sweep uses a dedicated governance nonce.
+- **Order collateralization (guard).** Order submission now refuses an order the account
+  can't currently fund (a buy needs `qty·price` of quote, a sell needs `qty` of base) —
+  see "still open" below for the trustless version.
 
 ## Accepted / documented (production hardening needed)
 
-- **No operation authentication.** The operator RPC accepts any work-item; nothing
-  binds an order / cancel / withdraw to its `account` by signature — so a submitter
-  could cancel or withdraw against an account that isn't theirs. The MVP runs in a
-  single-operator/demo trust model. **Production:** each operation must be signed by
-  the account's key and verified (in the service or an authenticated relay). This is
-  the single most important gap before any multi-user deployment.
-- **Work-item replay.** A `DEPOSIT`/`MATCH` work-item re-submitted is applied again
-  (e.g. a deposit credits twice). On a real JAM chain, work-packages are unique by
-  hash and included once; the service itself has no per-operation nonce. **Production:**
-  a nonce per account, or reliance on chain-level inclusion uniqueness.
-- **Collateralization / underflow.** Matching does not check that a trader can fund
-  a fill; settlement clamps balances at 0, so an over-matched order would lose value
-  (breaking storage conservation, though the *delta math* conserves). **Production:**
-  reserve funds at order submission so every matched order is covered. The demos fund
-  amply; the economic sim funds all traders.
+- **Order-placement authentication is builder-side, not yet in-`refine`.** Orders are
+  signed by the account key and verified at the **off-chain builder** (a role SECURITY.md
+  already treats as trusted), not yet re-verified trustlessly inside `refine`. So a
+  malicious *builder* could still place an order on your behalf (it can't extract funds —
+  withdraw is trustless-authenticated). **Production:** carry each order's `pubkey+sig`
+  into the batch and verify per-order in `refine` (the research-blessed path; ed25519
+  verify is cheap in refine's gas budget). The primitive (`match_engine::auth`) is in place.
+- **Order collateralization is a guard, not an escrow.** The submission check reads the
+  *current* balance; it doesn't reserve funds across multiple pending orders, and the
+  settlement clamp at 0 still means an over-matched order could lose value on-chain.
+  **Production:** reserve/escrow funds at submission so every matched order is covered.
+- **Work-item replay (non-signed paths).** A `DEPOSIT`/`MATCH` work-item re-submitted is
+  applied again. Deposits are a permissionless faucet (additive, no theft); the signed
+  paths are nonce-protected. **Production:** chain-level inclusion uniqueness, or extend
+  nonces to the match path.
 - **Commit–reveal griefing + builder trust.** A committer who never reveals wastes
   their slot (non-reveal griefing) — threshold/time-lock encryption removes the
   reveal round and this vector. The off-chain **builder** assembles work-packages

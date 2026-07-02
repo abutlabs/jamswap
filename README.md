@@ -71,9 +71,17 @@ Full thesis, business plan, architecture, and phased roadmap: [`docs/PLAN.md`](d
 - ✅ **Market registry** — markets are *listed* with canonical assets before
   trading; an unlisted or asset-mismatched market is rejected (verified e2e). A
   discoverable market index backs market listing.
-- ◻️ Then: real `on_transfer` custody, round sequencing via historical-lookup,
-  threshold-encryption upgrade, indexer + WebSocket feeds, wallet/signing in the UI,
-  a W3F grant application.
+- ✅ **Signed operations** — an account is a collision-free `u32` handle **bound to an
+  ed25519 key** by a signed `TAG_REGISTER`; **withdraw / cancel / treasury-sweep are
+  verified in the service** (ed25519, replay-nonce'd), order placement is signed +
+  builder-verified. Forged/replayed/tampered ops are rejected (verified e2e on the
+  6-validator testnet; auth unit-tested in CI). A flat **fee treasury** with a
+  governance-key sweep, a **market-order slippage band** (±10%), an order-submission
+  **collateral guard**, and **good-till-time order expiry** round out the trading layer.
+- ◻️ Then: trustless per-order signature check in `refine` (not just at the builder),
+  fund escrow at submission, real `on_transfer` custody, round sequencing via
+  historical-lookup, threshold-encryption upgrade, indexer + WebSocket feeds, a W3F
+  grant application.
 
 CI (`.github/workflows/ci.yml`) runs the matching-engine property tests
 (conservation, determinism, settlement Σ-deltas == 0) on every push — the
@@ -139,15 +147,18 @@ Full architecture: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## How Jamswap Prototype works (the trading UI)
 
-The UI at `:8080` (`offchain/`) is wallet-native. The flow:
+The UI at `:8080` (`offchain/`) is self-custodial with a JAM-native account. The flow:
 
-1. **Connect Talisman** (or any injected Polkadot wallet) — your real accounts, not
-   `Account 1`. The on-chain account id is derived from your address.
+1. **Create account** — JAM has no protocol-level accounts or wallets (services define
+   their own model — see the wallet note below), so your account is an **ed25519 keypair
+   this app holds** (WebCrypto, persisted locally, **exportable/importable**). A signed
+   registration binds it to a collision-free on-chain handle. No extension required; a
+   future JAM wallet standard can slot in later.
 2. **Fund** in the Faucet tab — assets are **USDC, DOT, JAMKB**, tradable across all
    three pairs (**DOT/USDC, JAMKB/USDC, JAMKB/DOT**).
 3. **Place an order** — **Buy/Sell**, **Limit** (you set the price) or **Market**
-   (takes the clearing price). Each order pops a **wallet confirmation** (`signRaw`)
-   before it joins the batch. Tick **🔒 Seal** to hide it.
+   (a marketable-limit within a ±10% band of the last price). Each order is **signed by
+   your account key** and the signature travels with it. Tick **🔒 Seal** to hide it.
 4. **Auctions clear every 6 seconds**, mirroring JAM's block cadence — a live countdown
    shows the next one; queued orders clear automatically (no button).
 5. **Watch the mempool** — a toggle shows *the data sitting in the service*: each queued
@@ -175,12 +186,21 @@ protocol-economics decision for the community, not one a single client should ba
 The full understanding + that proposal (for discussion, not unilateral implementation)
 is in **[`docs/JAMKB.md`](docs/JAMKB.md)**.
 
-> **Honest note on the wallet:** lasair is a JAM node, not a Substrate chain, so
-> Talisman can't add it as an RPC "network" (JAM ≠ Substrate). What's real and works:
-> Talisman supplies your accounts and signs each order (a genuine wallet confirmation).
-> Verifying those signatures **in the service** (signed operations) is the next step —
-> see [`docs/SECURITY.md`](docs/SECURITY.md). Market orders take the uniform clearing
-> price, which is well-behaved with a populated book and extreme in a thin one.
+> **Honest note on the account model (why no Talisman).** JAM is not Substrate, so no
+> Polkadot wallet can add lasair as an RPC "network" — and that won't change: JAM has *no
+> protocol-level accounts or transactions* ("there is no transaction in JAM chain; users only
+> interact with services", per the JAM designers), so **each service defines its own account
+> model**. A Substrate wallet like Talisman would only hand us an **sr25519** signature — a
+> curve too costly to verify in the PVM — so it buys us nothing here. Instead the service owns
+> its scheme: an account is a collision-free handle **bound to an ed25519 key** by a signed
+> registration, and the browser holds that key (WebCrypto, exportable). **Withdraw, cancel, and
+> the treasury sweep are verified in the service** (replay-nonce'd) — forged/replayed ops are
+> rejected (verified e2e on the 6-validator testnet; unit-tested in `match-engine/src/auth.rs`).
+> Order placement is signed and verified at the (trusted) off-chain builder; the trustless
+> in-`refine` order check is the documented next step. Market orders are now **marketable-limit
+> with a ±10% slippage band**. A future JAM wallet standard (a `jam:` WalletConnect namespace,
+> or wallets signing ed25519 for services) can slot in without changing the model. See
+> [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ## The matching engine
 
