@@ -250,12 +250,20 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
 1. **Option 3 (current commit–reveal + IOC) is the trust-minimal ceiling for pure
    on-chain.** Confirmed: no host call, no DA trick, no service-held key can do better
    without new trust.
-2. **Option 2 (threshold encrypt-until-batch) is buildable now as a sidecar**: DKG
-   committee off-protocol (fresh keys, not consensus keys), traders encrypt to the
-   committee key, batch-close decryption injected through the existing
-   `node_rpc` payload seam (later: hash-committed extrinsics once
-   `rc_extrinsics` wiring lands). Removes the reveal round and non-reveal griefing;
-   adds honest-majority committee trust. No lasair consensus change, no GP violation.
+2. **Option 2 (threshold encrypt-until-batch) is buildable now as a sidecar — PROVEN**:
+   DKG committee off-protocol (fresh keys, not consensus keys), traders encrypt to the
+   committee key, batch-close decryption injected through the existing `node_rpc` payload
+   seam (later: hash-committed extrinsics once `rc_extrinsics` wiring lands). Removes the
+   reveal round and non-reveal griefing; adds honest-majority committee trust. No lasair
+   consensus change, no GP violation. **Constructively demonstrated** 2026-07-02 in
+   zk-jam-service `spikes/vdec-gas/`: ECIES to an additive n-of-n committee over BN254 G1,
+   each member's partial decryption carrying a Chaum-Pedersen DDH proof; refine verifies
+   every proof against the committed committee keys and recovers the order **without any
+   secret**. Measured e2e on a lasair-node: **~n × 5.6M gas/order** (n=1 5.34M … n=5
+   27.5M); honest rounds decrypt, tampered proofs rejected. Cost bounds a per-order-
+   verified batch to **~880/n orders** (refine-gas-bound), so above ~10–20 orders a single
+   batch ZK proof wins — the convergence with option 1. t-of-n is a drop-in (same proof,
+   same refine cost).
 3. **Option 1 (ZK dark-pool matcher) is verify-side cheap** (~56M gas, 1.1% of full
    G_R, measured) — the hard part is circuit/prover engineering and the
    relayer-liveness model, not the chain.
