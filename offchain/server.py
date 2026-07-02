@@ -287,6 +287,39 @@ ASSET_NAME = {0: "USDC", 1: "DOT", 2: "JAMKB"}
 # within MARKET_BAND of the last clearing price. With no last price yet (cold market) a
 # market order is refused — there's no reference to bound it, so use a limit order.
 MARKET_BAND = 0.10                     # ±10% of the last price
+
+# ---- anti-bloat: no order rests forever (rent-funded expiry) ---------------
+# A resting order occupies validator RAM continuously → it consumes JAMKB state rent whether
+# or not it ever trades. "Good-till-cancelled forever" is therefore a griefing vector: spam the
+# book with far-from-market orders that never fill, never expire, and bloat the footprint (and
+# the matching engine's per-round work) indefinitely. Defense: EVERY order — including GTC — gets
+# an automatic expiry funded by the min profit of its fee. An order rests only as long as that
+# fee can subsidize the rent it accrues; a bigger on-chain footprint burns the budget faster, so
+# **sealed orders (32 B commitment) expire sooner than public ones (17 B)** — a direct tie to
+# "sealed costs more JAMKB". A hard cap and a per-account order limit backstop it.
+FOOTPRINT_PUBLIC = 17                   # bytes a resting public order occupies on-chain
+FOOTPRINT_SEALED = 32                   # bytes a sealed commitment occupies on-chain
+# KB·seconds of state rent the per-order min-profit is willing to fund. Policy parameter (like
+# JAMKB_SUPPLY) — default sizes a public order's GTC life to ~1 h, a sealed one's to ~32 min.
+ORDER_RENT_BUDGET_KBS = float(os.environ.get("ORDER_RENT_BUDGET_KBS", "60") or 0)
+MAX_RESTING_SECS = float(os.environ.get("MAX_RESTING_SECS", "86400") or 0)      # hard cap: 24 h, no order rests longer
+MAX_OPEN_ORDERS = int(os.environ.get("MAX_OPEN_ORDERS", "50") or 0)             # per account per market (0 = unlimited)
+def order_lifetime_secs(sealed):
+    # rent-funded max resting time = budget / footprint. Bigger footprint (sealed) → shorter life.
+    # Capped at MAX_RESTING_SECS so nothing ever rests indefinitely.
+    fp_kb = (FOOTPRINT_SEALED if sealed else FOOTPRINT_PUBLIC) / 1024.0
+    life = ORDER_RENT_BUDGET_KBS / fp_kb if ORDER_RENT_BUDGET_KBS > 0 else MAX_RESTING_SECS
+    return min(life, MAX_RESTING_SECS)
+def open_order_count(m, acct):
+    # how many live orders this account already has on this market: queued (mempool) + resting
+    # (on-chain book). Bounds one actor's ability to bloat the book.
+    n = sum(1 for o in pending.get(m, []) if o["account"] == acct)
+    raw = storage(b"book" + struct.pack("<I", m))
+    for i in range(len(raw) // 17):
+        a, _oid, _side, _p, _q = struct.unpack_from("<IIBII", raw, i * 17)
+        if a == acct:
+            n += 1
+    return n
 def api_order(b):
     m = int(b["market"])
     side = BUY if b["side"] == "buy" else SELL
@@ -335,12 +368,21 @@ def api_order(b):
                 raise ValueError(f"insufficient {ASSET_NAME.get(quote, quote)} to fund this buy (need {disp(need)})")
         elif bal(base, acct) < qty:
             raise ValueError(f"insufficient {ASSET_NAME.get(base, base)} to fund this sell (need {disp(qty)})")
+    # anti-spam: cap how many live orders one account can rest on a market at once.
+    if MAX_OPEN_ORDERS > 0 and open_order_count(m, acct) >= MAX_OPEN_ORDERS:
+        raise ValueError(f"open-order limit reached ({MAX_OPEN_ORDERS} per market) — "
+                         f"cancel or let some clear before placing more")
     oid = next_oid[0]; next_oid[0] += 1
-    ttl = float(b.get("ttl", 0) or 0)      # seconds; 0 = good-till-cancelled
-    if ttl > 0:
-        order_expiry[(m, acct, oid)] = time.time() + ttl
+    sealed = bool(b.get("sealed"))
+    # EVERY order gets an automatic expiry — there is no rest-forever GTC. A user-supplied TTL may
+    # only make it SHORTER, never longer than the rent-funded lifetime (so spam self-expires and the
+    # JAMKB it consumes is always reclaimed). "GTC" (ttl=0) means "rest until the rent budget runs out".
+    life = order_lifetime_secs(sealed)
+    user_ttl = float(b.get("ttl", 0) or 0)
+    eff_ttl = min(user_ttl, life) if user_ttl > 0 else life
+    order_expiry[(m, acct, oid)] = time.time() + eff_ttl
     o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty, "type": otype,
-         "sealed": bool(b.get("sealed")), "address": b.get("address", "")}
+         "sealed": sealed, "address": b.get("address", "")}
     if o["sealed"]:
         if ENC_MODE:
             # encrypt-until-batch: ECIES-encrypt the order to the committee key and post the
@@ -457,15 +499,23 @@ def api_state(q):
     return {"price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)), "book": book_of(m),
             "pending": len(pending.get(m, [])), "mempool": mempool, "sealed_onchain": onchain_sealed,
             "seal_mode": "encrypt-until-batch" if ENC_MODE else "commit-reveal",
-            "next_auction_in": round(max(0.0, _next_auction[0] - time.time()), 1), "auction_secs": AUCTION_SECS}
+            "next_auction_in": round(max(0.0, _next_auction[0] - time.time()), 1), "auction_secs": AUCTION_SECS,
+            # anti-bloat policy so the UI can tell traders orders auto-expire (no rest-forever GTC)
+            "order_life": {"public_secs": round(order_lifetime_secs(False)),
+                           "sealed_secs": round(order_lifetime_secs(True)),
+                           "max_secs": round(MAX_RESTING_SECS), "max_open": MAX_OPEN_ORDERS}}
 def api_mine(q):
     # a trader's own queued orders, across all markets — sealed terms DECRYPTED for them
     acct = int(q["account"])
+    now = time.time()
     out = []
     for mid, orders in pending.items():
         for o in orders:
             if o["account"] == acct:
-                e = mempool_entry(o, owner=True); e["market"] = mid; out.append(e)
+                e = mempool_entry(o, owner=True); e["market"] = mid
+                exp = order_expiry.get((mid, acct, o["oid"]))   # every order now has a bounded expiry
+                e["expires_in"] = round(max(0.0, exp - now)) if exp else None
+                out.append(e)
     return {"orders": out}
 def api_cancel_pending(b):
     # remove an un-processed (not yet cleared) order from the mempool, owner-checked

@@ -162,15 +162,18 @@
           </div>
 
           <!-- Time in force (non-sealed orders rest until they fill / expire / are cancelled) -->
-          <div id="tif-block" style="display:flex;align-items:center;justify-content:space-between;padding:0 2px;margin-bottom:14px;">
-            <span style="font-size:12px;color:rgba(240,240,255,.32);">Time in force</span>
-            <select id="tif" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;color:#f0f0ff;font-size:12px;padding:6px 8px;outline:none;cursor:pointer;">
-              <option value="0">Good-till-cancelled</option>
-              <option value="30">Expire in 30 s</option>
-              <option value="60">Expire in 1 min</option>
-              <option value="300">Expire in 5 min</option>
-              <option value="3600">Expire in 1 hour</option>
-            </select>
+          <div id="tif-block" style="padding:0 2px;margin-bottom:14px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;">
+              <span style="font-size:12px;color:rgba(240,240,255,.32);">Time in force</span>
+              <select id="tif" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;color:#f0f0ff;font-size:12px;padding:6px 8px;outline:none;cursor:pointer;">
+                <option value="0">Good-till-cancelled</option>
+                <option value="30">Expire in 30 s</option>
+                <option value="60">Expire in 1 min</option>
+                <option value="300">Expire in 5 min</option>
+                <option value="3600">Expire in 1 hour</option>
+              </select>
+            </div>
+            <div id="tif-note" style="font-size:10px;color:rgba(240,240,255,.28);margin-top:6px;line-height:1.4;">No order rests forever — even GTC auto-expires once the fee stops covering its JAMKB state rent.</div>
           </div>
 
           <!-- Seal toggle -->
@@ -505,6 +508,13 @@ function applyState(s){
   state.volume = s.volume || 0;
   state.mempool = s.mempool || [];
   state.sealedOnchain = s.sealed_onchain || 0;
+  if (s.order_life){
+    state.orderLife = s.order_life;
+    const ol = s.order_life, note = $("tif-note");
+    if (note) note.textContent = "No order rests forever — even GTC auto-expires once its fee stops covering JAMKB rent (≈ "
+      + fmtDur(ol.public_secs) + " public · " + fmtDur(ol.sealed_secs) + " sealed, max " + fmtDur(ol.max_secs)
+      + (ol.max_open ? "; up to " + ol.max_open + " open orders/market" : "") + ").";
+  }
   renderBook(); renderMempool();
   $("last-price").textContent = state.lastPrice !== null ? String(state.lastPrice) : "—";
   $("vol").textContent = state.volume;
@@ -794,9 +804,12 @@ function renderMine(){
     const mname = (MARKETS.find(m=>m.id===o.market)||{}).name || ("mkt "+o.market);
     const sideColor = o.side==="buy" ? "#4ADE80" : "#F87171";
     const priceDisplay = o.type==="market" ? "market" : String(o.price);
+    const exp = (o.expires_in != null)
+      ? '<span style="font-size:9px;color:'+(o.expires_in<60?"#FB923C":"rgba(240,240,255,.3)")+';flex-shrink:0;" title="auto-expires (rent-funded)">⌛'+fmtDur(o.expires_in)+'</span>' : '';
     return '<div style="display:flex;align-items:center;gap:7px;padding:9px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;">'
       + '<span style="font-size:12px;font-weight:700;color:'+sideColor+';flex-shrink:0;">'+(o.side||"").toUpperCase()+'</span>'
       + '<span class="mono" style="font-size:11px;color:rgba(240,240,255,.5);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+o.qty+' @ '+priceDisplay+'</span>'
+      + exp
       + '<span style="font-size:10px;color:rgba(240,240,255,.28);flex-shrink:0;">'+mname+'</span>'
       + '<button data-cancel="'+o.oid+'" style="padding:3px 8px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.4);border-radius:6px;font-size:11px;cursor:pointer;flex-shrink:0;">✕</button></div>';
   }).join("") + '</div>';
@@ -934,6 +947,13 @@ function agoLabel(ts){
   if (s < 60) return s+"s ago";
   if (s < 3600) return Math.floor(s/60)+"m ago";
   return Math.floor(s/3600)+"h ago";
+}
+function fmtDur(s){
+  s = Math.max(0, Math.round(s));
+  if (s < 60) return s+"s";
+  if (s < 3600) return Math.round(s/60)+"m";
+  if (s < 86400) return Math.round(s/3600)+"h";
+  return Math.round(s/86400)+"d";
 }
 async function refreshTrades(){
   const r = await api("/api/trades?market="+state.market.id);

@@ -185,6 +185,35 @@ This is what makes the matching engine's behaviour legible in real time — and 
 common misread that a 500-buy filled "100 @ 1.10 + 100 @ 1.20" when it in fact filled **200 @
 one uniform price**.
 
+## Order lifetime — rent-funded expiry (anti-bloat)
+
+A resting order occupies validator RAM, so it **accrues JAMKB state rent continuously**,
+whether or not it ever trades. An unbounded good-till-cancelled order is therefore a
+griefing vector: spam far-from-market orders that never fill, never expire, and grow the
+footprint (and every round's matching work) forever. Jamswap's rule: **no order rests
+forever.** Every order gets an automatic expiry, and the existing reclaim path
+(`prune_expired` for public orders, `plan_round.expired` for carried sealed ones) frees the
+state when it lapses.
+
+```
+footprint_bytes   = 32 (sealed commitment)  | 17 (public resting order)
+lifetime_secs     = ORDER_RENT_BUDGET_KBS / (footprint_bytes / 1024)   # rent the fee's min-profit funds
+effective_expiry  = now + min(user_ttl or ∞, lifetime_secs, MAX_RESTING_SECS)
+```
+
+- **Fee-funded.** `ORDER_RENT_BUDGET_KBS` is the KB·seconds of state rent an order's minimum
+  profit is willing to subsidize; lifetime is `budget ÷ footprint`, so a bigger footprint
+  runs out sooner → **sealed (32 B) expires before public (17 B)**. (A policy constant, like
+  `JAMKB_SUPPLY` — the community calibrates the real rate.)
+- **Hard cap.** `MAX_RESTING_SECS` bounds the maximum resting time unconditionally.
+- **Shorten-only.** A user TTL can pull the expiry *earlier*, never later than the rent cap.
+- **Per-account cap.** `MAX_OPEN_ORDERS` limits live orders (mempool + resting book) per
+  account per market, bounding one actor's instantaneous bloat.
+
+The book is thus **self-pruning**: JAMKB usage from resting orders is always bounded and
+reclaimed. `/api/state.order_life` surfaces the policy and `/api/mine[].expires_in` the
+per-order countdown for the UI. Tested in `offchain/tests/test_order_lifetime.py`.
+
 ## MEV-resistance
 
 Two layers, both proven e2e:

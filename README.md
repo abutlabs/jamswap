@@ -153,6 +153,35 @@ deliberately **do not enforce** JAMKB in the node. Pricing JAM's state is a prot
 economic decision for the community, not something one client should impose. The full
 understanding and the proposal-for-discussion are in [`docs/JAMKB.md`](docs/JAMKB.md).
 
+### No order rests forever — orders pay rent to stay alive
+
+Because every resting order sits in validator RAM, it **costs JAMKB state rent for as long
+as it rests** — whether or not it ever trades. That makes an unbounded *good-till-cancelled*
+order a spam/griefing vector: flood the book with far-from-market orders that never fill,
+never expire, and bloat the footprint (and every auction's matching work) **forever**,
+driving JAMKB usage up indefinitely for free.
+
+So in Jamswap **there is no rest-forever order**. Every order — even "GTC" — is given an
+**automatic, rent-funded expiry**:
+
+- **Its fee funds its lifetime.** An order rests only as long as the minimum profit from its
+  fee can subsidize the state rent it accrues. When that budget is exhausted, the order
+  **auto-expires and its state is reclaimed** (the JAMKB it held is freed).
+- **Bigger footprint dies sooner.** A sealed order's on-chain commitment (32 B) costs more
+  RAM than a public order (17 B), so it burns its budget faster — **sealed orders expire
+  sooner than public ones**, a direct consequence of "sealed costs more JAMKB."
+- **A hard cap** bounds the maximum resting time no matter what (so nothing lingers), and a
+  **per-account open-order limit** stops any single actor from stuffing the book at once.
+- **You can only shorten, never extend.** Picking a TTL sets an *earlier* expiry; you can
+  never rest longer than the rent-funded lifetime.
+
+The result: the book is **self-pruning**. Spam and stale liquidity clear themselves, and
+JAMKB usage from resting orders is always bounded and reclaimed — the state you occupy is
+state you're paying for. The knobs (`ORDER_RENT_BUDGET_KBS`, `MAX_RESTING_SECS`,
+`MAX_OPEN_ORDERS`) are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the
+guards are tested in `offchain/tests/test_order_lifetime.py`. The live UI shows each order's
+countdown and the current policy under **Time in force**.
+
 ---
 
 ## Try it in one command
