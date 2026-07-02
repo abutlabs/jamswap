@@ -106,15 +106,62 @@ scales on ingest and de-scales on read, so the UI speaks plain decimals end-to-e
 3. **Settle** — `accumulate` applies conservation-checked per-account deltas
    (`settle_deltas`: buy = +base/−(quote+fee), sell = −base/+(quote−fee); quote notional
    = `qty·price / SCALE`, buyers rounding up and sellers down so any fixed-point dust
-   flows to the treasury — exact when quantities are whole units), routes a **flat
-   trading fee** (30 bps on each side's quote notional) to the treasury account,
-   persists the new `book`, clears `commits`, and bumps stats. **Σ = 0 per asset
-   including the treasury** — fees (and rounding dust) are moved, not minted.
+   flows to the treasury — exact when quantities are whole units), routes a **flat,
+   cost-based trading fee in the base asset** (per filled order, capped at the fill) to
+   the treasury account, persists the new `book`, clears `commits`, and bumps stats.
+   **Σ = 0 per asset including the treasury** — fees (and rounding dust) are moved, not
+   minted.
 
 The "builder" (the party that reads on-chain `book`/`commits` and assembles the
 next payload) is, in the MVP, the test/off-chain caller. The plan's alternative —
 `refine` reading the prior finalized book via historical-lookup — is a later
 optimization.
+
+## How the clearing price is chosen (`clear()` in `match-engine`)
+
+Every order in a batch clears at **one uniform price `p*`**. The engine considers only
+the **distinct submitted limit prices** as candidates (the optimum always sits on one of
+them), and for each candidate `p` computes:
+
+- **demand** `D(p)` = Σ quantity of buys with limit **≥ p**, and
+- **supply** `S(p)` = Σ quantity of sells with limit **≤ p**.
+
+It picks the `p` that **maximizes matched volume** `min(D, S)`; ties are broken by
+**minimal imbalance** `|D − S|`, then by lowest price (deterministic). Eligible orders
+then fill to that volume by **price-time priority** (best price first, then order id),
+so a marginal order may be partially filled but never over-filled.
+
+**Consequence — you pay the equilibrium price, not your limit.** A limit price is the
+*worst* price you'll accept, never the price you pay. The clearing price lands where
+supply meets demand, and every fill in the batch gets it.
+
+### Worked example (buy lands between resting asks)
+
+Resting asks: `100@1.10`, `100@1.20`, `100@1.30`. A new **buy `100@1.25`** arrives.
+
+| candidate `p` | `D(p)` | `S(p)` | volume | imbalance |
+|---|---|---|---|---|
+| **1.10** | 100 | 100 | **100** | **0** |
+| 1.20 | 100 | 200 | 100 | 100 |
+| 1.25 | 100 | 200 | 100 | 100 |
+| 1.30 | 0 | 300 | 0 | — |
+
+Any price in `[1.10, 1.25]` clears the same 100 units, so volume ties at 100. The
+tie-break picks **1.10** — the unique price where `D == S` (zero imbalance), the true
+competitive equilibrium. At 1.20/1.25 supply *exceeds* demand (200 offered vs 100
+wanted), so those aren't equilibrium prices.
+
+**Result:** all **100 DOT trade at `1.10`**, filled entirely against the cheapest ask;
+the buyer gets **0.15 × 100 = 15 quote** of price improvement over their 1.25 limit, and
+the `1.20`/`1.30` asks don't trade (demand was exhausted by cheaper liquidity). This is
+locked in as the regression test `buy_between_asks_clears_at_the_marginal_ask_only`.
+
+> **Design note.** Jamswap clears at the competitive-equilibrium price (the
+> buyer-favorable end of the feasible band here), *not* a midpoint that splits the
+> surplus. This is deterministic and principled — the price never sits where supply
+> exceeds demand — but in a one-sided batch the resting side captures none of the
+> surplus. A surplus-splitting (midpoint) rule is a one-line tie-break change if the
+> community prefers it.
 
 ## MEV-resistance
 

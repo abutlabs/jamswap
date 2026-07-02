@@ -191,6 +191,20 @@ mod tests {
     }
 
     #[test]
+    fn buy_between_asks_clears_at_the_marginal_ask_only() {
+        // asks 100@110, 100@120, 100@130; a buy 100@125. Demand (100) is met by the
+        // single cheapest ask, so it clears at 110 (supply==demand, zero imbalance) — the
+        // buyer gets price improvement from 125→110, and the 120/130 asks don't trade.
+        let c = clear(&[sell(1, 110, 100), sell(2, 120, 100), sell(3, 130, 100), buy(4, 125, 100)]);
+        assert_eq!(c.price, 110, "clears at the competitive-equilibrium ask, not the buyer's limit");
+        assert_eq!(c.volume, 100);
+        // exactly the 110 ask and the buyer fill; the 120 and 130 asks are untouched.
+        assert!(c.fills.iter().any(|f| f.id == 1 && f.qty == 100));
+        assert!(c.fills.iter().any(|f| f.id == 4 && f.qty == 100));
+        assert!(!c.fills.iter().any(|f| f.id == 2 || f.id == 3));
+    }
+
+    #[test]
     fn marginal_rationing_is_price_time_deterministic() {
         // demand 15 @≥100, supply 10 @100 → V=10; buys rationed: id1 (5) full,
         // id2 (10) gets the remaining 5. (both at price 100 → time priority by id)
