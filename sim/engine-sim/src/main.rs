@@ -2,7 +2,7 @@
 //!
 //! Drives the real `match-engine` with random, realistic order flow over many
 //! rounds — orders rest and carry, fills settle through `settle_deltas` (with the
-//! 30 bps fee), against an in-memory ledger. It reports market-quality metrics and,
+//! flat base-asset fee), against an in-memory ledger. It reports market-quality metrics and,
 //! crucially, **asserts the safety invariants hold at scale**: value conservation
 //! every round (Σ balances per asset constant incl. the treasury) and no clearing
 //! anomaly. This is the economic stress test behind the "production-ready" claim.
@@ -19,7 +19,7 @@ use rand::{rngs::StdRng, Rng, SeedableRng};
 const BASE: u32 = 1;
 const QUOTE: u32 = 0;
 const TREASURY: u32 = u32::MAX;
-const FEE_BPS: u32 = 30;
+const FEE_FLAT: u64 = 1;   // flat cost-based fee per filled order, in BASE units (scale-1 sim)
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();
@@ -75,7 +75,7 @@ fn main() {
             .filter_map(|f| orders.iter().find(|o| o.id == f.id).map(|o| SettleEntry { account: o.account, side: o.side, qty: f.qty }))
             .collect();
         // scale 1: this stress test works in the raw integer domain (no fixed-point display)
-        for (acct, db, dq) in settle_deltas(c.price, &entries, FEE_BPS, TREASURY, 1) {
+        for (acct, db, dq) in settle_deltas(c.price, &entries, FEE_FLAT, TREASURY, 1) {
             *bal.entry((BASE, acct)).or_insert(0) += db;
             *bal.entry((QUOTE, acct)).or_insert(0) += dq;
         }
@@ -94,7 +94,7 @@ fn main() {
     let var = if prices.len() > 1 {
         prices.iter().map(|&p| (p as f64 - mean_price).powi(2)).sum::<f64>() / prices.len() as f64
     } else { 0.0 };
-    let fee_revenue = *bal.get(&(QUOTE, TREASURY)).unwrap_or(&0);
+    let fee_revenue = *bal.get(&(BASE, TREASURY)).unwrap_or(&0);   // flat fee accrues in BASE now
 
     println!("== Jamswap economic simulation ==");
     println!("  rounds            : {rounds}   traders: {traders}   seed: {seed}");
@@ -103,6 +103,6 @@ fn main() {
     println!("  rounds that cleared: {priced_rounds}/{rounds}");
     println!("  mean clearing price: {mean_price:.1}   price stddev: {:.1}", var.sqrt());
     println!("  resting book (end) : {} orders", book.len());
-    println!("  fee revenue (30bps): {fee_revenue} quote units");
+    println!("  fee revenue (flat) : {fee_revenue} base units");
     println!("  VALUE CONSERVED every round (base & quote, incl. treasury): OK");
 }

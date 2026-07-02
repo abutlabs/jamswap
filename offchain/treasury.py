@@ -75,3 +75,12 @@ def max_withdrawable(treasury, rent_reserve, asset):
     """The most of `asset` the owner may withdraw as profit right now (0 if
     under-reserved). Used to gate the sweep relay."""
     return profit_split(treasury, rent_reserve)["withdrawable"].get(asset, 0)
+
+
+def solvency(jamkb_held, rent_reserve):
+    """Is the service's state footprint backed? Returns (solvent, shortfall) — the
+    JAMKB-standard invariant `held ≥ obligation`. When under-reserved the service should
+    apply backpressure (refuse new state growth) until topped up or state is freed.
+    See docs/JAMKB_STANDARD.md."""
+    shortfall = max(0, rent_reserve - jamkb_held)
+    return (shortfall == 0, shortfall)

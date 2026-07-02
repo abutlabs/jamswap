@@ -49,7 +49,7 @@
       <div id="mtabs" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"></div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:11px;color:rgba(240,240,255,.28);letter-spacing:.02em;">
         <span>Frequent batch auctions</span><span style="opacity:.5;">·</span>
-        <span>30 bps fee</span><span style="opacity:.5;">·</span>
+        <span>flat cost-based fee</span><span style="opacity:.5;">·</span>
         <span>MEV-resistant</span>
       </div>
     </div>
@@ -82,22 +82,6 @@
           <div id="bids"></div>
         </div>
 
-        <!-- Auction countdown -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Next Auction</span>
-            <button id="run">clear now</button>
-          </div>
-          <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:12px;">
-            <span id="auction-sec" class="mono" style="font-size:44px;font-weight:700;color:#E6007A;line-height:1;">6</span>
-            <span style="font-size:14px;color:rgba(240,240,255,.28);">sec</span>
-            <span style="font-size:11px;color:rgba(240,240,255,.2);margin-left:6px;">· JAM block cadence</span>
-          </div>
-          <div style="height:3px;background:rgba(255,255,255,.06);border-radius:2px;overflow:hidden;">
-            <div id="auction-bar" style="height:100%;background:linear-gradient(90deg,#E6007A,rgba(230,0,122,.55));border-radius:2px;width:100%;transition:width .22s linear;"></div>
-          </div>
-        </div>
-
         <!-- Mempool -->
         <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
@@ -108,6 +92,25 @@
             <div id="mempool"></div>
             <div id="seal-summary" style="font-size:11px;color:#F59E0B;margin-top:8px;"></div>
           </div>
+        </div>
+
+        <!-- Recent trades (the active pair's tape) -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Recent Trades · <span id="trades-pair">DOT/USDC</span></span>
+            <span style="font-size:9px;padding:2px 8px;background:rgba(96,165,250,.08);color:#60A5FA;border-radius:999px;font-weight:700;letter-spacing:.06em;">6 s AUCTIONS</span>
+          </div>
+          <!-- volume metrics -->
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;">
+            <div><div id="tm-last" class="mono" style="font-size:15px;font-weight:700;color:#f0f0ff;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">last</div></div>
+            <div><div id="tm-vol" class="mono" style="font-size:15px;font-weight:700;color:#f0f0ff;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">volume</div></div>
+            <div><div id="tm-high" class="mono" style="font-size:15px;font-weight:700;color:#4ADE80;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">high</div></div>
+            <div><div id="tm-low" class="mono" style="font-size:15px;font-weight:700;color:#F87171;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">low</div></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:rgba(240,240,255,.25);padding:0 2px 6px;border-bottom:1px solid rgba(255,255,255,.05);">
+            <span>price</span><span style="flex:1;text-align:right;padding-right:14px;">size</span><span>time</span>
+          </div>
+          <div id="trades" style="max-height:260px;overflow-y:auto;margin-top:4px;"></div>
         </div>
 
       </div>
@@ -183,8 +186,8 @@
 
           <!-- Fee -->
           <div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px;margin-bottom:16px;">
-            <span style="font-size:12px;color:rgba(240,240,255,.28);">Fee (30 bps)</span>
-            <span class="mono" style="font-size:12px;color:rgba(240,240,255,.48);"><span id="fee">—</span> <span id="fee-quote">USDC</span></span>
+            <span style="font-size:12px;color:rgba(240,240,255,.28);">Fee (flat, per order)</span>
+            <span class="mono" style="font-size:12px;color:rgba(240,240,255,.48);"><span id="fee">—</span> <span id="fee-quote">DOT</span></span>
           </div>
 
           <!-- CTA -->
@@ -251,6 +254,8 @@
           <!-- self-funding treasury: fees cover the JAMKB rent first; only profit is withdrawable -->
           <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07);">
             <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;margin-bottom:10px;">Self-funding treasury</div>
+            <!-- JAMKB-standard backpressure badge: shown only when the service is under-reserved -->
+            <div id="tr-backpressure" style="display:none;font-size:10px;background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.35);color:#F87171;border-radius:6px;padding:6px 8px;margin-bottom:10px;line-height:1.4;">⚠ Under-reserved — new orders paused until the JAMKB reserve covers the state footprint. Top up below or let auctions clear the book.</div>
             <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:5px;">
               <span>JAMKB rent (locked)</span><span id="tr-rent" class="mono" style="color:#E6007A;">—</span>
             </div>
@@ -261,6 +266,14 @@
               <span>Withdrawable profit</span><span id="tr-profit" class="mono" style="color:#4ADE80;">—</span>
             </div>
             <div style="font-size:10px;color:rgba(240,240,255,.2);line-height:1.5;">Fees pay the JAMKB state rent first · only profit is withdrawable, by the owner → <span id="tr-benef" class="mono" style="color:rgba(240,240,255,.4);word-break:break-all;">—</span></div>
+            <!-- beneficiary top-up: inject JAMKB into the reserve (the runway/backstop inflow) -->
+            <div style="margin-top:10px;display:flex;gap:6px;align-items:center;">
+              <input id="tr-topup-amt" class="mono" type="number" min="0" step="1" placeholder="JAMKB"
+                     style="flex:1;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.1);color:#eee;border-radius:6px;padding:6px 8px;font-size:11px;">
+              <button id="tr-topup-btn" style="background:rgba(230,0,122,.15);border:1px solid rgba(230,0,122,.4);color:#E6007A;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Top up reserve</button>
+            </div>
+            <!-- beneficiary access: sweep profit to your account, then swap on the DEX -->
+            <div id="tr-sweep" style="margin-top:10px;"></div>
           </div>
         </div>
 
@@ -306,6 +319,7 @@
 
 <script>
 // ═══════════════════ config ═══════════════════
+const FEE_FLAT = 0.03;   // flat cost-based fee per filled order, in BASE units (matches FEE_FLAT=300 atomic in the service)
 const ASSETS = {0:"USDC",1:"DOT",2:"JAMKB"};
 const DOT_COLORS = ["#60A5FA","#E6007A","#F59E0B"];            // USDC, DOT, JAMKB
 const DOT_BG     = ["rgba(96,165,250,.13)","rgba(230,0,122,.13)","rgba(245,158,11,.13)"];
@@ -318,9 +332,10 @@ const MARKETS = [
 const state = {
   tab:"trade", market:MARKETS[0], side:"buy", otype:"limit", sealed:false, wallet:null, handle:null,
   book:[], lastPrice:null, volume:0, mempool:[], sealedOnchain:0,
-  nextIn:6, auctionSecs:6, bals:{0:0,1:0,2:0}, pending:[],
+  bals:{0:0,1:0,2:0}, pending:[],
   fp:{items:0,octets:"—",jamkb:0,available:true}, mempoolOpen:true, tr:null,
-  fAsset:"0", runDisabled:false, tif:"0",
+  trades:{list:[],metrics:null},
+  fAsset:"0", tif:"0",
 };
 
 const $ = id => document.getElementById(id);
@@ -468,8 +483,6 @@ function applyState(s){
   state.volume = s.volume || 0;
   state.mempool = s.mempool || [];
   state.sealedOnchain = s.sealed_onchain || 0;
-  state.auctionSecs = s.auction_secs || 6;
-  if (typeof s.next_auction_in === "number") state.nextIn = s.next_auction_in;
   renderBook(); renderMempool();
   $("last-price").textContent = state.lastPrice !== null ? String(state.lastPrice) : "—";
   $("vol").textContent = state.volume;
@@ -506,8 +519,8 @@ async function placeOrder(){
   const msg = canonBytes("order", u32le(myAcct()), u32le(market.id), new Uint8Array([side==="buy"?0:1]),
     u32le(toAtomic(qty)), new Uint8Array([otype==="market"?1:0]), new Uint8Array([sealed?1:0]), u32le(signedPrice));
   let sig;
-  try { toast("Confirm in your wallet…", "info", 2500); sig = await signBytes(msg); }
-  catch { $("place").disabled=false; toast("Signature rejected — order not placed.", "err"); return; }
+  try { sig = await signBytes(msg); }   // signs with the browser-held ed25519 key (no wallet/extension)
+  catch { $("place").disabled=false; toast("Signing failed — order not placed.", "err"); return; }
   try {
     const body = {market:market.id, base:market.base, quote:market.quote, account:myAcct(),
       address:state.wallet.selected.address, side, qty, type:otype, sealed, sig:hexRaw(sig)};
@@ -525,16 +538,6 @@ async function placeOrder(){
     }
   } catch { toast("Order failed.", "err"); }
   $("place").disabled = false; refresh(); refreshMine();
-}
-async function runRound(){
-  state.runDisabled = true; $("run").style.cssText = RUN(true);
-  try {
-    const r = await api("/api/round", {market:state.market.id, base:state.market.base, quote:state.market.quote});
-    const c = r.cleared || {};
-    toast("Cleared at "+r.price+" · vol "+r.volume+" · "+(c.public||0)+" public, "+(c.sealed||0)+" sealed.", "ok");
-  } catch { toast("Round failed.", "err"); }
-  setTimeout(() => { state.runDisabled=false; $("run").style.cssText = RUN(false); }, 1200);
-  refresh(); refreshBals(); refreshMine();
 }
 async function cancelOrder(oid){
   try { const r = await api("/api/cancel_pending", {account:myAcct(), order_id:oid});
@@ -556,8 +559,7 @@ async function faucet(kind){
       const amt = toAtomic(amount);
       const nr = await api("/api/nonce?handle="+myAcct()); const nonce = (nr && nr.nonce) || 0;
       const msg = canonBytes("withdraw", u32le(myAcct()), u32le(asset), u64le(amt), u64le(nonce));
-      toast("Confirm withdrawal in your wallet…", "info", 2500);
-      const sig = await signBytes(msg);
+      const sig = await signBytes(msg);   // browser-held ed25519 key
       const r = await api("/api/withdraw", {account:myAcct(), asset, amount_atomic:amt, nonce, sig:hexRaw(sig)});
       if (r.error){ toast(r.error, "err"); return; }
       toast("Withdrew "+amount+" "+ASSETS[asset]+".", "ok");
@@ -565,7 +567,7 @@ async function faucet(kind){
   } catch { toast(kind+" failed.", "err"); }
   refreshBals();
 }
-function switchMarket(m){ state.market = m; renderMarketTabs(); renderMarketDeps(); subscribe(); refresh(); }
+function switchMarket(m){ state.market = m; renderMarketTabs(); renderMarketDeps(); renderTrades(); subscribe(); refresh(); refreshTrades(); }
 
 // ═══════════════════ render ═══════════════════
 function renderTabs(){
@@ -600,7 +602,7 @@ function renderMarketDeps(){
   $("ob-market").textContent = "Order Book · "+m.name;
   $("base-label").textContent = m.baseLabel;
   $("quote-label").textContent = m.quoteLabel;
-  $("fee-quote").textContent = m.quoteLabel;
+  $("fee-quote").textContent = m.baseLabel;   // flat fee is charged in the BASE asset
   $("base-chip").style.background = DOT_BG[m.base];   $("base-dot").style.background = DOT_COLORS[m.base];
   $("quote-chip").style.background = DOT_BG[m.quote];  $("quote-dot").style.background = DOT_COLORS[m.quote];
   renderSide(); renderSummaryFee();
@@ -634,11 +636,14 @@ function renderCTA(){
 function renderSummaryFee(){
   const qty = parseFloat($("qty-in").value) || 0;
   const price = parseFloat($("price-in").value) || 0;
-  const notional = qty*price, fee = notional*0.003;
-  const q = state.market.quoteLabel;
+  const notional = qty*price;
+  const q = state.market.quoteLabel, b = state.market.baseLabel;
+  const fee = qty>0 ? Math.min(FEE_FLAT, qty) : 0;   // flat cost-based fee in BASE units, capped at the fill
   let summary;
   if (state.otype==="market") summary = "Market order · takes the uniform clearing price";
-  else if (notional>0) summary = state.side==="buy" ? "You pay ~"+notional.toFixed(2)+" "+q : "You receive ~"+(notional*0.997).toFixed(2)+" "+q;
+  else if (notional>0) summary = state.side==="buy"
+      ? "You pay ~"+notional.toFixed(2)+" "+q+" · receive ~"+(qty-fee).toFixed(2)+" "+b
+      : "You deliver ~"+(qty+fee).toFixed(2)+" "+b+" · receive ~"+notional.toFixed(2)+" "+q;
   else summary = "Enter quantity and price to see total";
   $("summary").textContent = summary;
   $("fee").textContent = fee>0 ? fee.toFixed(4) : "—";
@@ -746,7 +751,50 @@ function renderFp(){
     $("tr-profit").textContent = t.solvent ? (parts.length ? parts.join(" · ") : "0") : "0 (rent unfunded)";
     $("tr-benef").textContent = t.beneficiary ? (t.beneficiary.slice(0,8)+"…"+t.beneficiary.slice(-6)) : "—";
     $("tr-benef").title = (t.beneficiary||"") + " (" + (t.beneficiary_chain||"") + ")";
+    // JAMKB-standard backpressure badge: visible only when new state growth is paused
+    $("tr-backpressure").style.display = t.backpressure ? "block" : "none";
   }
+  renderSweep(t);
+}
+// beneficiary top-up: inject JAMKB into the state-rent reserve (the runway/backstop inflow)
+async function reserveTopup(){
+  const amt = +($("tr-topup-amt").value || 0);
+  if (!(amt > 0)){ toast("Enter a JAMKB amount to top up.", "err"); return; }
+  try {
+    const r = await api("/api/reserve_topup", {amount: amt});
+    if (r.error){ toast(r.error, "err"); return; }
+    toast("Reserve topped up → "+r.reserve_jamkb+" JAMKB held.", "ok");
+    $("tr-topup-amt").value = "";
+    refresh();
+  } catch { toast("Top-up failed.", "err"); }
+}
+// beneficiary access: sweep withdrawable profit to your account, then swap it on the DEX
+function renderSweep(t){
+  const el = $("tr-sweep");
+  const w = (t && t.withdrawable) || {};
+  const assets = [[2,"JAMKB"],[1,"DOT"],[0,"USDC"]].filter(([id]) => (w[id]||0) > 0);
+  if (!t || !t.sweep_enabled){
+    el.innerHTML = assets.length
+      ? '<div style="font-size:10px;color:rgba(240,240,255,.28);">Profit sweep is operator-gated (set BENEFICIARY_SWEEP=1). Once swept, swap JAMKB/DOT/USDC on the DEX.</div>' : '';
+    return;
+  }
+  if (!isConn()){ el.innerHTML = '<div style="font-size:10px;color:rgba(240,240,255,.28);">Connect your account to sweep profit to it.</div>'; return; }
+  if (!assets.length){ el.innerHTML = '<div style="font-size:10px;color:rgba(240,240,255,.28);">No withdrawable profit yet.</div>'; return; }
+  el.innerHTML = '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:rgba(240,240,255,.28);margin-bottom:6px;">Beneficiary · sweep profit → your account</div>'
+    + '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + assets.map(([id,l]) =>
+        '<button data-sweep="'+id+'" data-amt="'+w[id]+'" style="padding:5px 10px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);color:#4ADE80;border-radius:8px;font-size:11px;cursor:pointer;">Sweep '+w[id]+' '+l+'</button>'
+      ).join("") + '</div>'
+    + '<div style="font-size:10px;color:rgba(240,240,255,.2);margin-top:6px;">Then swap JAMKB/DOT/USDC on the DEX above.</div>';
+  el.querySelectorAll("[data-sweep]").forEach(b => b.onclick = () => beneficiarySweep(+b.dataset.sweep, +b.dataset.amt));
+}
+async function beneficiarySweep(asset, amount){
+  if (!isConn()){ toast("Connect an account first.", "err"); return; }
+  try {
+    const r = await api("/api/beneficiary_sweep", {asset, amount, dest: myAcct()});
+    if (r.error){ toast(r.error, "err"); return; }
+    toast("Swept "+r.swept+" "+r.asset+" → your account. Now swap it on the DEX.", "ok");
+  } catch { toast("Sweep failed.", "err"); }
+  refreshBals(); refreshFp();
 }
 function renderFaucetTabs(){
   $("fassets").innerHTML = "";
@@ -762,11 +810,39 @@ function renderFaucetBtns(){
   $("withdraw").style.cssText = FBTN("withdraw", c);
 }
 
-// auction clock (targeted — must not re-render focused inputs)
-function tickClock(){
-  state.nextIn = Math.max(0, state.nextIn - 0.25);
-  $("auction-sec").textContent = Math.ceil(state.nextIn);
-  $("auction-bar").style.width = (100 * state.nextIn / (state.auctionSecs||6)) + "%";
+// recent trades (the active pair's tape) + volume metrics
+function agoLabel(ts){
+  const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
+  if (s < 60) return s+"s ago";
+  if (s < 3600) return Math.floor(s/60)+"m ago";
+  return Math.floor(s/3600)+"h ago";
+}
+async function refreshTrades(){
+  const r = await api("/api/trades?market="+state.market.id);
+  state.trades = r && r.trades ? {list:r.trades, metrics:r.metrics} : {list:[], metrics:null};
+  renderTrades();
+}
+function renderTrades(){
+  $("trades-pair").textContent = state.market.name;
+  const m = state.trades.metrics || {};
+  $("tm-last").textContent = m.last != null ? m.last : "—";
+  $("tm-vol").textContent  = m.volume != null ? m.volume : "—";
+  $("tm-high").textContent = m.high != null ? m.high : "—";
+  $("tm-low").textContent  = m.low != null ? m.low : "—";
+  const el = $("trades");
+  const rows = state.trades.list || [];
+  if (!rows.length){
+    el.innerHTML = '<div style="font-size:12px;color:rgba(240,240,255,.22);padding:8px 0;">No trades yet on this pair</div>';
+    return;
+  }
+  const color = d => d==="up" ? "#4ADE80" : d==="down" ? "#F87171" : "rgba(240,240,255,.6)";
+  const arrow = d => d==="up" ? "▲" : d==="down" ? "▼" : "·";
+  el.innerHTML = rows.map(t =>
+    '<div style="display:flex;align-items:center;font-size:11px;padding:4px 2px;border-bottom:1px solid rgba(255,255,255,.03);">'
+    + '<span class="mono" style="color:'+color(t.dir)+';min-width:64px;">'+arrow(t.dir)+' '+t.price+'</span>'
+    + '<span class="mono" style="flex:1;text-align:right;padding-right:14px;color:rgba(240,240,255,.55);">'+t.volume+'</span>'
+    + '<span style="color:rgba(240,240,255,.28);min-width:56px;text-align:right;">'+agoLabel(t.ts)+'</span></div>'
+  ).join("");
 }
 
 // ═══════════════════ boot ═══════════════════
@@ -783,24 +859,23 @@ $("tmarket").onclick= () => { state.otype="market"; renderType(); };
 $("seal-toggle").onclick = () => { state.sealed = !state.sealed; renderSeal(); };
 $("tif").onchange = (e) => { state.tif = e.target.value; };
 $("place").onclick  = placeOrder;
-$("run").onclick    = runRound;
 $("mem-toggle").onclick = () => { state.mempoolOpen = !state.mempoolOpen; renderMempool(); };
 $("deposit").onclick  = () => faucet("deposit");
 $("withdraw").onclick = () => faucet("withdraw");
+$("tr-topup-btn").onclick = reserveTopup;
 $("qty-in").oninput   = renderSummaryFee;
 $("price-in").oninput = renderSummaryFee;
 
 // initial paint
 renderTabs(); renderWallet(); renderMarketTabs(); renderMarketDeps();
-renderSide(); renderType(); renderSeal(); renderBook(); renderMempool();
+renderSide(); renderType(); renderSeal(); renderBook(); renderMempool(); renderTrades();
 renderBals(); renderMine(); renderFp(); renderFaucetTabs();
-$("run").style.cssText = RUN(false);
 
 // live feeds
-subscribe(); refresh(); refreshFp();
-setInterval(tickClock, 250);
+subscribe(); refresh(); refreshFp(); refreshTrades();
 setInterval(() => { refreshBals(); refreshMine(); }, 6000);
 setInterval(refreshFp, 2000);
+setInterval(refreshTrades, 3000);
 if (localStorage.getItem("jamswap_sk_default")) setTimeout(connectAccount, 300);  // auto-load a saved account
 </script>
 </body>

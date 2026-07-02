@@ -39,6 +39,6 @@ jobs:
           python-version: '3.11'
       - name: Syntax-check the off-chain builder + demo
         run: |
-          python3 -m py_compile offchain/server.py offchain/round.py offchain/deploy.py sim/demo.py
+          python3 -m py_compile offchain/server.py offchain/round.py offchain/treasury.py offchain/deploy.py sim/demo.py
       - name: Round-lifecycle tests (sealed-order carry-forward / reveal-on-cross)
         run: python3 -m unittest discover -s offchain/tests -v

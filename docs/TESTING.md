@@ -10,6 +10,7 @@ every push.
 | **2. Engine scenarios** | `crates/match-engine/tests/scenarios.rs` | order **sequences** across rounds — the continuous book (rest → later cross → fill) | Rust |
 | **3. Round lifecycle** | `offchain/tests/test_round_lifecycle.py` | the **sealed-order lifecycle** — which orders clear now, rest hidden, or expire | Python (stdlib) |
 | **3b. Treasury** | `offchain/tests/test_treasury.py` | the **self-funding treasury** — fees cover JAMKB rent first, only surplus is withdrawable profit | Python (stdlib) |
+| **3c. Trade tape** | `offchain/tests/test_trade_tape.py` | the **recent-trades feed** — clearing prints recorded from cumulative-volume deltas, metrics, tick direction | Python (stdlib) |
 | **4. End-to-end** | `offchain/test_enc_round.py`, `offchain/test_sealed_resting_e2e.py` | the real service on a live node: honest settles, tampered/injected rejected, sealed orders rest & cross across rounds | Docker + node |
 
 ## Why layer 3 exists (the bug it caught)

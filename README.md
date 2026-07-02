@@ -131,14 +131,25 @@ real market price**. The DEX trades the very token that would pay for the DEX's 
 It even surfaces a genuine tradeoff: **sealed (private) orders cost more state** than
 plain ones, so privacy has a measurable JAMKB price.
 
-**The exchange even pays its own rent.** The 30 bps trading fee funds a treasury that
-must first cover the service's JAMKB state rent (`ceil(footprint ÷ 1 KB)` JAMKB); only
-the **surplus** is withdrawable profit, and only by the owner. So the DEX earns fees,
+**The exchange even pays its own rent.** A small, cost-based trading fee funds a treasury
+that must first cover the service's JAMKB state rent (`ceil(footprint ÷ 1 KB)` JAMKB);
+only the **surplus** is withdrawable profit, and only by the owner. So the DEX earns fees,
 buys the JAMKB that pays for its own RAM, and hands the rest to its operator — a complete
 self-funding loop. Details: [`docs/REVENUE.md`](docs/REVENUE.md).
 
-We built the **measurement** and the worked example — a live footprint→JAMKB meter — but
-we deliberately **do not enforce** it in the node. Pricing JAM's state is a protocol-wide
+**How does a service actually get and keep its JAMKB?** That's the practical question the
+proposal leaves open, so we wrote it down as a standard. A service is **deployed with an
+endowment** (so it's solvent from block zero), then **self-funds through use** (fees refill
+the reserve — the steady-state target), with **beneficiary top-ups** as the runway/backstop
+for early life and growth. When a service holds more state than its JAMKB covers, the
+standard applies **backpressure** — it refuses to grow state further until usage frees it or
+the reserve is topped up. Jamswap implements all of this at the service level (endowment,
+self-funding fee, `Top up reserve` control, solvency backpressure, a live footprint→JAMKB
+meter). The full thesis and the day-to-day mechanics are in
+[`docs/JAMKB_STANDARD.md`](docs/JAMKB_STANDARD.md).
+
+We built the **measurement**, the worked example, and the service-level standard — but we
+deliberately **do not enforce** JAMKB in the node. Pricing JAM's state is a protocol-wide
 economic decision for the community, not something one client should impose. The full
 understanding and the proposal-for-discussion are in [`docs/JAMKB.md`](docs/JAMKB.md).
 
@@ -211,6 +222,7 @@ uncomment `ENC_MODE: "0"` under the `dex` service in `docker-compose.yml`.
 |-----|--------------|
 | [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md) | The three order-hiding approaches, ELI5 — what each protects and its state today |
 | [`docs/JAMKB.md`](docs/JAMKB.md) | JAMKB explained + how Jamswap is a live worked example of it |
+| [`docs/JAMKB_STANDARD.md`](docs/JAMKB_STANDARD.md) | The standard — how a service receives, holds, tops up, and is held accountable for its JAMKB |
 | [`docs/REVENUE.md`](docs/REVENUE.md) | The self-funding treasury — fees pay the JAMKB rent, owner takes the profit |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | The full technical build: state machine, wire formats, round lifecycle |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Honest self-assessment — what's fixed, what carries an asterisk |

@@ -10,9 +10,10 @@ balance/state reads. Stdlib only (http.server, urllib, struct).
   LASAIR_RPC=http://localhost:19900 PORT=8080 python3 offchain/server.py
 """
 import hashlib, json, os, secrets, struct, subprocess, threading, time, urllib.request
+from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
-from treasury import jamkb_rent, profit_split, max_withdrawable, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN
+from treasury import jamkb_rent, profit_split, max_withdrawable, solvency, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN
 
 # service payload tags (must match service/src/lib.rs)
 TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST, TAG_REGISTER, TAG_TREASURY = range(9)
@@ -30,12 +31,31 @@ ENC_MODE = bool(COMMITTEE_BIN) and os.environ.get("ENC_MODE", "1") == "1"
 # if it's absent we degrade to accepting orders unsigned (withdraw/cancel stay trustless in
 # the service regardless). Set REQUIRE_ORDER_SIG=0 to disable even when PyNaCl is present.
 try:
-    from nacl.signing import VerifyKey
+    from nacl.signing import VerifyKey, SigningKey
     from nacl.exceptions import BadSignatureError
     HAVE_NACL = True
 except Exception:
     HAVE_NACL = False
 REQUIRE_ORDER_SIG = HAVE_NACL and os.environ.get("REQUIRE_ORDER_SIG", "1") == "1"
+
+# --- self-funding treasury bootstrap + beneficiary access ---
+# Deploy the service with a starting JAMKB state-rent reserve so it's solvent before fees
+# accrue (0 = don't seed). The operator can raise it via env.
+INITIAL_JAMKB_RESERVE = float(os.environ.get("INITIAL_JAMKB_RESERVE", "100") or 0)
+# The demo governance seed (derives the service's GOV_PUBKEY — verified). When
+# BENEFICIARY_SWEEP=1 the server holds this key so the OWNER can sweep profit to a
+# beneficiary account over the API. PROTOTYPE-ONLY: it means anyone who can reach this
+# server can move treasury profit — run it only where operator == owner. Default OFF; when
+# off, sweeps must be gov-signed out-of-band (crates/committee). See docs/REVENUE.md.
+GOV_SEED = (os.environ.get("GOV_SEED", "jamswap:demo:governance:key:v1!!")).encode()
+BENEFICIARY_SWEEP = HAVE_NACL and os.environ.get("BENEFICIARY_SWEEP", "0") == "1"
+def gov_sign(msg):                     # ed25519 signature by the governance key (matches GOV_PUBKEY)
+    return bytes(SigningKey(GOV_SEED).sign(msg).signature)
+# JAMKB standard: when the service holds less JAMKB than its state footprint requires, refuse
+# to GROW state (new orders) until it's topped up or auctions free state. Degrades to a no-op
+# on a node without the /footprint endpoint (obligation reads 0 → always solvent). Default ON.
+# See docs/JAMKB_STANDARD.md.
+JAMKB_BACKPRESSURE = os.environ.get("JAMKB_BACKPRESSURE", "1") == "1"
 
 # assets + the six markets are config; the service itself is asset-agnostic.
 USDC, DOT, JAMKB = 0, 1, 2
@@ -156,9 +176,13 @@ def footprint_octets():
 def rent_reserve_atomic():
     # JAMKB the treasury must hold to cover the state rent (1 JAMKB = 1 KB), in atomic units.
     return jamkb_rent(footprint_octets()) * SCALE
+def jamkb_solvency():
+    # JAMKB-standard invariant: held JAMKB reserve ≥ state footprint obligation.
+    # Returns (solvent, shortfall_atomic). See docs/JAMKB_STANDARD.md.
+    return solvency(bal(JAMKB, FEE_ACCOUNT), rent_reserve_atomic())
 def treasury_status():
     # self-funding treasury view: rent (JAMKB) covered FIRST out of fees, only the surplus
-    # is withdrawable profit (to the owner). See treasury.py / docs/REVENUE.md.
+    # is withdrawable profit (to the owner). See treasury.py / docs/REVENUE.md + JAMKB_STANDARD.md.
     reserve = rent_reserve_atomic()
     bals = {a: bal(a, FEE_ACCOUNT) for a in (USDC, DOT, JAMKB)}
     s = profit_split(bals, reserve)
@@ -166,9 +190,44 @@ def treasury_status():
             "rent_jamkb": disp(reserve), "reserve_held_jamkb": disp(s["reserve_held"]),
             "shortfall_jamkb": disp(s["shortfall"]), "solvent": s["solvent"],
             "withdrawable": {a: disp(v) for a, v in s["withdrawable"].items()},
-            "beneficiary": PROFIT_BENEFICIARY, "beneficiary_chain": PROFIT_BENEFICIARY_CHAIN}
+            "beneficiary": PROFIT_BENEFICIARY, "beneficiary_chain": PROFIT_BENEFICIARY_CHAIN,
+            "sweep_enabled": BENEFICIARY_SWEEP,   # can the owner sweep profit over the API (prototype)
+            "backpressure": JAMKB_BACKPRESSURE and not s["solvent"],   # is new state growth blocked?
+            "endowment_jamkb": INITIAL_JAMKB_RESERVE}   # the deploy-time reserve seeded
+def api_reserve_topup(b):
+    # Beneficiary top-up: add JAMKB to the treasury's state-rent reserve (deposit to
+    # FEE_ACCOUNT). This is the "runway/backstop" inflow of the JAMKB standard — used when
+    # usage doesn't yet cover the footprint, or to hold more state than fees fund.
+    # (Prototype: a permissionless faucet-style credit; production = a signed transfer from
+    # the beneficiary's own JAMKB holdings. See docs/JAMKB_STANDARD.md.)
+    amount = to_atomic(b["amount"])
+    if amount <= 0:
+        raise ValueError("top-up amount must be positive")
+    submit(bytes([TAG_DEPOSIT]) + struct.pack("<IIQ", FEE_ACCOUNT, JAMKB, amount))
+    return {"ok": True, "reserve_jamkb": disp(bal(JAMKB, FEE_ACCOUNT))}
 def api_treasury_status(q):
     return treasury_status()
+def api_beneficiary_sweep(b):
+    # Beneficiary access: sweep withdrawable PROFIT (any asset) from the treasury to a
+    # destination account (the owner's trading account), from which they can swap
+    # JAMKB/DOT/USDC on the DEX normally. Server-side gov-signed (prototype) — gated on
+    # BENEFICIARY_SWEEP. Only profit is sweepable; the JAMKB rent reserve is never touched.
+    if not BENEFICIARY_SWEEP:
+        raise ValueError("beneficiary sweep is disabled — run with BENEFICIARY_SWEEP=1 "
+                         "(prototype: server holds the demo gov key), or sweep out-of-band "
+                         "with the committee CLI. See docs/REVENUE.md")
+    asset, dest = int(b["asset"]), int(b["dest"])
+    amount = to_atomic(b["amount"])
+    allowed = max_withdrawable({a: bal(a, FEE_ACCOUNT) for a in (USDC, DOT, JAMKB)}, rent_reserve_atomic(), asset)
+    if amount > allowed:
+        raise ValueError(f"exceeds withdrawable profit: {disp(amount)} requested, "
+                         f"{disp(allowed)} {ASSET_NAME.get(asset, asset)} available "
+                         f"(the rest covers the JAMKB state rent)")
+    nonce = int.from_bytes(storage(b"govnonce") or b"\0", "little")
+    msg = canon(b"treasury", struct.pack("<I", asset), struct.pack("<Q", amount),
+                struct.pack("<I", dest), struct.pack("<Q", nonce))
+    submit(bytes([TAG_TREASURY]) + struct.pack("<IQIQ", asset, amount, dest, nonce) + gov_sign(msg))
+    return {"ok": True, "swept": disp(amount), "asset": ASSET_NAME.get(asset, asset), "dest": dest}
 def api_treasury(b):
     # governance fee sweep: relays a GOV-key-signed canon(treasury, asset, amount, dest, nonce).
     # OPERATOR POLICY (docs/REVENUE.md): only PROFIT is withdrawable — a sweep that would dip
@@ -208,6 +267,16 @@ def api_order(b):
     m = int(b["market"])
     side = BUY if b["side"] == "buy" else SELL
     otype = b.get("type", "limit")
+    # JAMKB-standard backpressure: a new order grows service state (a resting order and/or a
+    # sealed commitment). If the treasury is under-reserved — holding more RAM than its JAMKB
+    # covers — refuse to grow further until it's topped up or auctions free state. Cancels and
+    # the auctions that clear the book are never blocked, so a service can always recover.
+    # No-op on a node that doesn't expose /footprint (obligation reads 0 → always solvent).
+    if JAMKB_BACKPRESSURE:
+        solvent, shortfall = jamkb_solvency()
+        if not solvent:
+            raise ValueError(f"service under-reserved on JAMKB (short {disp(shortfall)} KB) — "
+                             f"top up the reserve before placing new orders")
     # atomic units on-chain: qty and limit price scale by SCALE.
     acct, qty = int(b["account"]), to_atomic(b["qty"])
     base, quote = int(b.get("base", -1)), int(b.get("quote", -1))
@@ -396,7 +465,9 @@ def api_footprint(q):
 ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
                "/api/list": api_list, "/api/order": api_order, "/api/round": api_round,
                "/api/cancel_pending": api_cancel_pending, "/api/register": api_register,
-               "/api/cancel": api_cancel, "/api/treasury": api_treasury}
+               "/api/cancel": api_cancel, "/api/treasury": api_treasury,
+               "/api/beneficiary_sweep": api_beneficiary_sweep,
+               "/api/reserve_topup": api_reserve_topup}
 
 # the markets the UI shows; listed once at startup so they're tradable.
 # every combination of the three assets: (market_id, base, quote)
@@ -405,6 +476,21 @@ def ensure_markets():
     for m, base, quote in DEFAULT_MARKETS:
         try: api_list({"market": m, "base": base, "quote": quote})
         except Exception as e: print("list failed", m, e)
+
+def ensure_reserve():
+    # deploy with a starting JAMKB state-rent reserve so the treasury is solvent before any
+    # fees accrue. Tops up to INITIAL_JAMKB_RESERVE if under it; idempotent across restarts.
+    if INITIAL_JAMKB_RESERVE <= 0:
+        return
+    try:
+        target = to_atomic(INITIAL_JAMKB_RESERVE)
+        held = bal(JAMKB, FEE_ACCOUNT)
+        if held >= target:
+            print(f"treasury JAMKB reserve already funded: {disp(held)} JAMKB"); return
+        submit(bytes([TAG_DEPOSIT]) + struct.pack("<IIQ", FEE_ACCOUNT, JAMKB, target - held))
+        print(f"seeded treasury JAMKB reserve -> {disp(bal(JAMKB, FEE_ACCOUNT))} JAMKB")
+    except Exception as e:
+        print("reserve seeding skipped:", e)
 
 def ensure_committee():
     # encrypt-until-batch: commit the off-protocol committee keys on-chain (gov-signed), once.
@@ -420,9 +506,77 @@ def ensure_committee():
         print(f"encrypt-until-batch ENABLED — committee committed on-chain: {ok}")
     except Exception as e:
         print("committee setup failed (falling back to commit-reveal):", e)
+# ---- trade tape (per-market recent-fills history) -------------------------
+# A clearing print is recorded whenever a market's on-chain CUMULATIVE volume grows.
+# This is robust for both the immediate single-node path and the slot-delayed testnet
+# path (cv is cumulative, so a settlement is caught on a later tick even if it lands a
+# block or two after the round). Prints are kept for TRADE_TTL (24h) OR up to
+# TRADE_HISTORY entries, whichever is hit first — then the oldest roll off. The tape is
+# persisted to disk so it survives a server restart (set TRADES_FILE to a mounted path
+# for cross-container persistence; the default /tmp path survives a process restart).
+TRADE_HISTORY = 500                    # hard count cap per market (deque maxlen)
+TRADE_TTL = 24 * 3600                  # keep clearing prints for 24h, then roll off
+TRADES_FILE = os.environ.get("TRADES_FILE", "/tmp/jamswap_trades.json")
+trades = {}                            # market_id -> deque[{ts, price, volume, dir}]
+_last_cv = {}                          # market_id -> last-seen cumulative volume (atomic)
+def _prune_trades(m, now):
+    dq = trades.get(m)
+    if not dq:
+        return
+    cutoff = now - TRADE_TTL           # drop prints older than 24h
+    while dq and dq[0]["ts"] < cutoff:
+        dq.popleft()
+def _save_trades():
+    try:
+        with open(TRADES_FILE, "w") as fh:
+            json.dump({str(m): list(dq) for m, dq in trades.items()}, fh)
+    except Exception:
+        pass                           # read-only FS or similar — tape just won't persist
+def load_trades():
+    try:
+        with open(TRADES_FILE) as fh:
+            data = json.load(fh)
+        now = time.time()
+        for k, lst in data.items():
+            dq = deque([t for t in lst if t.get("ts", 0) >= now - TRADE_TTL], maxlen=TRADE_HISTORY)
+            if dq:
+                trades[int(k)] = dq
+        if trades:
+            print(f"loaded trade tape: {sum(len(d) for d in trades.values())} recent prints")
+    except Exception:
+        pass                           # no prior tape — start fresh
+def record_trade(m):
+    cv = mstate(b"cv", m)              # atomic cumulative base volume settled on this market
+    prev = _last_cv.get(m)
+    if prev is None:                   # first sight — seed without emitting (don't dump prior cv)
+        _last_cv[m] = cv; return
+    if cv > prev:
+        now = time.time()
+        price = disp(mstate(b"lp", m))
+        dq = trades.setdefault(m, deque(maxlen=TRADE_HISTORY))
+        prev_price = dq[-1]["price"] if dq else None
+        direction = "flat" if prev_price is None or price == prev_price else ("up" if price > prev_price else "down")
+        dq.append({"ts": now, "price": price, "volume": disp(cv - prev), "dir": direction})
+        _last_cv[m] = cv
+        _prune_trades(m, now)
+        _save_trades()
+def api_trades(q):
+    # recent cleared trades + volume metrics for one market (the active pair).
+    m = int(q.get("market", "1"))
+    _prune_trades(m, time.time())      # roll off anything older than 24h even without a new trade
+    dq = list(trades.get(m, ()))
+    prices = [t["price"] for t in dq]
+    return {"trades": list(reversed(dq))[:100],   # most-recent first, last ~100 prints
+            "metrics": {"last": disp(mstate(b"lp", m)),
+                        "volume": round(sum(t["volume"] for t in dq), 4),   # base traded, 24h window
+                        "trades": len(dq),
+                        "high": max(prices) if prices else None,
+                        "low": min(prices) if prices else None,
+                        "window_hours": 24}}
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
               "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
-              "/api/govnonce": api_govnonce, "/api/treasury_status": api_treasury_status}
+              "/api/govnonce": api_govnonce, "/api/treasury_status": api_treasury_status,
+              "/api/trades": api_trades}
 
 def has_expired(m):
     now = time.time()
@@ -438,11 +592,20 @@ def auction_loop():
             if pending.get(m) or has_expired(m):
                 try: api_round({"market": m, "base": base, "quote": quote})
                 except Exception as e: print("auction round failed", m, e)
+            # record a clearing print if this market's cumulative volume grew (works even
+            # when settlement lands a slot later than the round, e.g. on the testnet).
+            try: record_trade(m)
+            except Exception as e: print("trade record failed", m, e)
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", no_cache=False):
         self.send_response(code); self.send_header("Content-Type", ctype)
+        # the UI (index.html/JS) is served from a live volume mount and changes often —
+        # tell the browser never to cache it, so a redeploy is always picked up on refresh
+        # (a stale cached UI calling new/old endpoints was a real footgun).
+        if no_cache:
+            self.send_header("Cache-Control", "no-store, must-revalidate")
         self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
     def do_GET(self):
         path = self.path.split("?")[0]
@@ -468,7 +631,7 @@ class H(BaseHTTPRequestHandler):
             try:
                 data = open(os.path.join(WEB, fn), "rb").read()
                 ctype = "text/html" if fn.endswith(".html") else "application/javascript"
-                self._send(200, data, ctype)
+                self._send(200, data, ctype, no_cache=True)
             except FileNotFoundError:
                 self._send(404, b"not found", "text/plain")
     def do_POST(self):
@@ -501,7 +664,8 @@ if __name__ == "__main__":
     elif SID is None:
         SID = 1729                              # last-resort default (first deploy on a fresh node)
     print(f"jamswap off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
-    try: ensure_markets(); print("listed default markets:", DEFAULT_MARKETS)
+    load_trades()
+    try: ensure_markets(); ensure_reserve(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)
     ensure_committee()
     threading.Thread(target=auction_loop, daemon=True).start()

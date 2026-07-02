@@ -48,11 +48,13 @@ const GOV_PUBKEY: [u8; 32] = [
     0xae, 0x2c, 0x14, 0x56, 0xc9, 0x28, 0x0f, 0xe5, 0x2e, 0xaa, 0x4f, 0x22, 0x54, 0xf7, 0xe6, 0xca,
 ];
 
-// trading fee: a flat fee on matched quote notional (FBA has no maker/taker), paid
-// by both sides into the treasury account (in the market's quote asset). 30 bps.
-// The fee funds the service's JAMKB state rent first; only the surplus is withdrawable
-// profit, and only via a GOV_PUBKEY-signed sweep. See docs/REVENUE.md.
-const FEE_BPS: u32 = 30;
+// trading fee: a flat, cost-based fee charged per filled order in the market's BASE
+// asset (FBA has no maker/taker), routed to the treasury account. 0.03 base units
+// (300 atomic at SCALE 10000) — approximates the per-order execution + state cost rather
+// than a size-proportional trading fee. Base-asset collection means DOT/USDC pays fees in
+// DOT and JAMKB/* pays directly in JAMKB, funding the service's JAMKB state-rent reserve;
+// only the surplus is withdrawable profit, via a GOV_PUBKEY-signed sweep. See docs/REVENUE.md.
+const FEE_FLAT: u64 = 300;
 const FEE_ACCOUNT: u32 = u32::MAX;
 // Owner / beneficiary of withdrawable profit (Polkadot AssetHub). Recorded for
 // documentation: JAM sweeps are authorised by GOV_PUBKEY, and cross-chain payout to
@@ -294,7 +296,7 @@ fn apply_settlement(base: u32, quote: u32, market: u32, settle: &[u8]) {
     if entries.is_empty() {
         return;
     }
-    for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_BPS, FEE_ACCOUNT, SCALE) {
+    for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_FLAT, FEE_ACCOUNT, SCALE) {
         let apply = |bal: u64, d: i128| -> u64 { (bal as i128 + d).clamp(0, u64::MAX as i128) as u64 };
         set_bal(base, account, apply(get_bal(base, account), db));
         set_bal(quote, account, apply(get_bal(quote, account), dq));

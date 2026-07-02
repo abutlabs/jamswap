@@ -121,8 +121,14 @@ pub fn decode_settlement(data: &[u8]) -> Option<(u32, Vec<SettleEntry>)> {
 }
 
 /// Per-account balance deltas from a cleared batch, at the uniform price: a buy
-/// is +qty base / −(qty·price/scale) quote, a sell the reverse. Each side also pays
-/// a flat fee of `fee_bps` basis points on its quote notional, routed to `treasury`.
+/// is +qty base / −(qty·price/scale) quote, a sell the reverse. Each filled order also
+/// pays a **flat fee** `fee_flat` (atomic units of the BASE asset), routed to `treasury`
+/// — a cost-based fee that approximates the per-order execution + state cost, rather than
+/// a size-proportional trading fee. Collecting it in the base asset means a DOT/USDC
+/// market pays fees in DOT and a JAMKB/* market pays fees directly in JAMKB (which funds
+/// the service's JAMKB state-rent reserve). The buyer receives `qty − fee` base, the
+/// seller delivers `qty + fee` base, and the treasury accrues `fee` per filled order; the
+/// fee is capped at the fill (`min(fee, qty)`) so a buyer's base can never go negative.
 ///
 /// `scale` is the fixed-point price scale: prices and quantities are integer *atomic*
 /// units (display × scale), so a fractional display price like 1.1 is the integer
@@ -138,9 +144,10 @@ pub fn decode_settlement(data: &[u8]) -> Option<(u32, Vec<SettleEntry>)> {
 /// accounts, it never creates or destroys it (settlement's safety property; property-tested).
 // i128 throughout: qty·price can exceed i64 for large orders (a real overflow that
 // wraps silently in release) — i128 holds any u32·u32 with room to spare.
-pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury: u32, scale: u32) -> Vec<(u32, i128, i128)> {
+pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_flat: u64, treasury: u32, scale: u32) -> Vec<(u32, i128, i128)> {
     let p = price as i128;
     let s = scale.max(1) as i128;
+    let f = fee_flat as i128;
     let mut out: Vec<(u32, i128, i128)> = Vec::new();
     let add = |out: &mut Vec<(u32, i128, i128)>, acct: u32, db: i128, dq: i128| {
         match out.iter_mut().find(|(a, _, _)| *a == acct) {
@@ -151,21 +158,27 @@ pub fn settle_deltas(price: u32, entries: &[SettleEntry], fee_bps: u32, treasury
     for e in entries {
         let q = e.qty as i128;
         let gross = q * p;
-        // buyers round up, sellers round down → residual ≥ 0 (to treasury); exact when
-        // gross is a multiple of scale (whole-unit quantities), so ceil == floor.
+        // buyers round up, sellers round down → quote residual ≥ 0 (to treasury); exact
+        // when gross is a multiple of scale (whole-unit quantities), so ceil == floor.
         let notional = match e.side {
             Side::Buy => (gross + s - 1) / s,
             Side::Sell => gross / s,
         };
-        let fee = notional * fee_bps as i128 / 10_000;
+        // flat cost-based fee in the BASE asset, capped at the fill so a buyer's base
+        // can never go negative on a tiny fill.
+        let fee = f.min(q);
         let (db, dq) = match e.side {
-            Side::Buy => (q, -(notional + fee)),   // buyer pays notional + fee
-            Side::Sell => (-q, notional - fee),    // seller receives notional − fee
+            Side::Buy => (q - fee, -notional),      // buyer receives qty − fee base, pays notional
+            Side::Sell => (-(q + fee), notional),   // seller delivers qty + fee base, receives notional
         };
         add(&mut out, e.account, db, dq);
+        if fee > 0 {
+            add(&mut out, treasury, fee, 0);        // treasury accrues the flat fee in BASE
+        }
     }
-    // Treasury absorbs fees + any rounding residual so Σ quote deltas == 0 exactly.
-    // (Σ base deltas == 0 already: buys +q, sells −q, and matched buy qty == sell qty.)
+    // Treasury also absorbs any quote rounding residual so Σ quote deltas == 0 exactly.
+    // (Σ base deltas == 0 already: each order's base fee is added to the treasury and
+    // removed from that order, and matched buy qty == sell qty.)
     let resid: i128 = out.iter().map(|(_, _, dq)| *dq).sum();
     if resid != 0 {
         add(&mut out, treasury, 0, -resid);
@@ -221,19 +234,43 @@ mod tests {
 
     #[test]
     fn scaled_settlement_conserves_with_rounding_dust() {
-        // qty NOT a multiple of scale → the ceil/floor split leaves a residual, which
-        // the treasury absorbs so value is still conserved exactly.
+        // qty NOT a multiple of scale → the ceil/floor split leaves a quote residual, and
+        // a flat base fee is charged per order; the treasury absorbs both so value is still
+        // conserved exactly (Σ base == 0 and Σ quote == 0, treasury never overdrawn).
         let entries = [
             SettleEntry { account: 1, side: Side::Buy, qty: 3 },
             SettleEntry { account: 2, side: Side::Sell, qty: 1 },
             SettleEntry { account: 3, side: Side::Sell, qty: 2 },
         ];
-        let d = settle_deltas(7, &entries, 30, u32::MAX, 10_000);
+        let d = settle_deltas(7, &entries, 1, u32::MAX, 10_000);   // flat fee 1 (atomic base) per order
         assert_eq!(d.iter().map(|x| x.1).sum::<i128>(), 0);
         assert_eq!(d.iter().map(|x| x.2).sum::<i128>(), 0);
-        // treasury only ever receives (never overdrawn)
+        // treasury only ever receives (never overdrawn), in both base and quote
         if let Some(t) = d.iter().find(|(a, _, _)| *a == u32::MAX) {
+            assert!(t.1 >= 0);
             assert!(t.2 >= 0);
         }
+    }
+
+    #[test]
+    fn flat_fee_charged_in_base_and_conserves() {
+        // buy 10 vs sell 10 @ price 1.0 (scale 10000), flat fee 300 atomic base (0.03 units)
+        // per filled order. Buyer receives 10−0.03 base, seller delivers 10+0.03, treasury
+        // accrues 0.03 + 0.03 = 0.06 base. No quote fee. Conservation holds in both assets.
+        let scale = 10_000u32;
+        let entries = [
+            SettleEntry { account: 1, side: Side::Buy, qty: 10 * scale },
+            SettleEntry { account: 2, side: Side::Sell, qty: 10 * scale },
+        ];
+        let d = settle_deltas(1 * scale, &entries, 300, u32::MAX, scale);
+        let buyer = d.iter().find(|(a, _, _)| *a == 1).unwrap();
+        let seller = d.iter().find(|(a, _, _)| *a == 2).unwrap();
+        let treasury = d.iter().find(|(a, _, _)| *a == u32::MAX).unwrap();
+        assert_eq!(buyer.1, 10 * scale as i128 - 300);      // +9.97 base
+        assert_eq!(seller.1, -(10 * scale as i128 + 300));  // −10.03 base
+        assert_eq!(treasury.1, 600);                        // +0.06 base fee
+        assert_eq!(treasury.2, 0);                          // no quote fee, no rounding dust
+        assert_eq!(d.iter().map(|x| x.1).sum::<i128>(), 0); // Σ base conserved
+        assert_eq!(d.iter().map(|x| x.2).sum::<i128>(), 0); // Σ quote conserved
     }
 }

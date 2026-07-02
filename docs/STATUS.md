@@ -92,9 +92,15 @@ resting orders, sealing, and the trading layer on top.
   revealed only in the round it crosses. Fixes the "sealed sells then later sealed buys
   never match" bug. Pure planner `offchain/round.py`, regression-tested in
   `offchain/tests/test_round_lifecycle.py`. See [`SEALED_ORDERS.md`](SEALED_ORDERS.md).
+- ✅ **Recent-trades tape** — the trading UI shows a per-pair trade history (last ~100
+  clearing prints) with volume metrics (last / volume / high / low), fed by
+  `GET /api/trades`. The server records a print whenever a market's on-chain cumulative
+  volume grows (robust to slot-delayed testnet settlement). The developer-only "next
+  auction" countdown + manual "clear now" were removed from the end-user view (auctions
+  run automatically every 6 s). Tested in `offchain/tests/test_trade_tape.py`.
 - ✅ **Test layers** — matching-engine property + scenario tests (Rust), the sealed-order
-  round-lifecycle tests (Python, in CI), and an e2e suite on a live node. Map:
-  [`TESTING.md`](TESTING.md).
+  round-lifecycle / treasury / trade-tape tests (Python, in CI), and an e2e suite on a
+  live node. Map: [`TESTING.md`](TESTING.md).
 
 ## Next
 
