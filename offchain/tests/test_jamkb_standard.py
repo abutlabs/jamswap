@@ -73,6 +73,22 @@ class JamkbBackpressure(unittest.TestCase):
         with self.assertRaises(ValueError):
             server.api_reserve_topup({"amount": 0})
 
+    def test_topup_is_capped_at_target_no_hoarding(self):
+        # obligation 8 KB + buffer → a finite target; a top-up beyond it is refused, because
+        # holding more JAMKB than you occupy is idle RAM rights denied to other services.
+        self._hold(8)                       # already at the obligation
+        target = server.reserve_target_atomic() / S
+        with self.assertRaises(ValueError):
+            server.api_reserve_topup({"amount": target + 100})   # over the target → rejected
+        self.assertEqual(self._sent, [], "no unbounded mint")
+
+    def test_status_reports_over_reserved_and_finite_supply(self):
+        self._hold(1000)                    # holding 1000 JAMKB vs an 8 KB obligation → hoarding
+        st = server.treasury_status()
+        self.assertGreater(st["over_reserved_jamkb"], 0, "excess is flagged, not counted as profit")
+        self.assertEqual(st["withdrawable"][server.JAMKB], 0, "JAMKB is never withdrawable profit")
+        self.assertEqual(st["supply_jamkb"], server.JAMKB_SUPPLY)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

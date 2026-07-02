@@ -13,7 +13,8 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from treasury import jamkb_rent, profit_split, max_withdrawable, USDC, DOT, JAMKB  # noqa: E402
+from treasury import (jamkb_rent, profit_split, max_withdrawable, reserve_target,  # noqa: E402
+                      JAMKB_SUPPLY, USDC, DOT, JAMKB)
 
 
 class Rent(unittest.TestCase):
@@ -36,25 +37,30 @@ class ProfitSplit(unittest.TestCase):
         self.assertEqual(s["reserve_held"], 4)
         self.assertEqual(s["withdrawable"], {JAMKB: 0, USDC: 0, DOT: 0})
 
-    def test_exactly_reserved_other_assets_are_profit(self):
-        # holds exactly the rent in JAMKB -> JAMKB profit 0, but USDC/DOT fees withdrawable.
+    def test_exactly_reserved_fees_are_profit_jamkb_is_not(self):
+        # holds exactly the obligation in JAMKB -> USDC/DOT fees withdrawable, JAMKB never is.
         t = {JAMKB: 10, USDC: 1000, DOT: 50}
         s = profit_split(t, rent_reserve=10)
         self.assertTrue(s["solvent"])
         self.assertEqual(s["shortfall"], 0)
+        self.assertEqual(s["over_reserved"], 0)
         self.assertEqual(s["withdrawable"], {JAMKB: 0, USDC: 1000, DOT: 50})
 
-    def test_over_reserved_excess_jamkb_is_profit(self):
+    def test_over_reserved_excess_jamkb_is_NOT_profit(self):
+        # excess JAMKB above the obligation is idle RAM rights to RELEASE, never withdrawable
+        # wealth — the core correction: you can't hoard a finite RAM-right as profit.
         t = {JAMKB: 15, USDC: 1000, DOT: 50}
         s = profit_split(t, rent_reserve=10)
         self.assertEqual(s["reserve_held"], 10)
-        self.assertEqual(s["withdrawable"], {JAMKB: 5, USDC: 1000, DOT: 50})
+        self.assertEqual(s["over_reserved"], 5)
+        self.assertEqual(s["withdrawable"], {JAMKB: 0, USDC: 1000, DOT: 50})
 
-    def test_zero_rent_everything_is_profit(self):
+    def test_zero_rent_only_fees_are_profit(self):
         t = {JAMKB: 3, USDC: 100}
         s = profit_split(t, rent_reserve=0)
         self.assertTrue(s["solvent"])
-        self.assertEqual(s["withdrawable"], {JAMKB: 3, USDC: 100})
+        self.assertEqual(s["over_reserved"], 3)       # all 3 JAMKB idle (no footprint) → release
+        self.assertEqual(s["withdrawable"], {JAMKB: 0, USDC: 100})
 
     def test_does_not_mutate_input(self):
         t = {JAMKB: 15, USDC: 1000}
@@ -63,10 +69,22 @@ class ProfitSplit(unittest.TestCase):
         self.assertEqual(t, before)
 
 
+class ReserveTarget(unittest.TestCase):
+    def test_obligation_plus_buffer(self):
+        self.assertEqual(reserve_target(obligation=10, buffer_kb=8), 18)
+
+    def test_capped_at_finite_supply(self):
+        # you can never target more RAM rights than exist in the whole pool.
+        self.assertEqual(reserve_target(obligation=JAMKB_SUPPLY, buffer_kb=100), JAMKB_SUPPLY)
+
+    def test_zero_obligation_is_just_the_buffer(self):
+        self.assertEqual(reserve_target(obligation=0, buffer_kb=8), 8)
+
+
 class MaxWithdrawable(unittest.TestCase):
-    def test_gate_matches_split(self):
+    def test_gate_matches_split_jamkb_never_withdrawable(self):
         t = {JAMKB: 15, USDC: 1000, DOT: 50}
-        self.assertEqual(max_withdrawable(t, 10, JAMKB), 5)
+        self.assertEqual(max_withdrawable(t, 10, JAMKB), 0)     # excess JAMKB is not profit
         self.assertEqual(max_withdrawable(t, 10, USDC), 1000)
         self.assertEqual(max_withdrawable(t, 10, DOT), 50)
 

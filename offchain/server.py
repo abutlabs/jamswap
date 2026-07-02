@@ -14,7 +14,8 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
 from clearing import clear        # builder-side clearing (mirrors refine); for per-order fill receipts
-from treasury import jamkb_rent, profit_split, max_withdrawable, solvency, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN
+from treasury import (jamkb_rent, profit_split, max_withdrawable, solvency, reserve_target,
+                      JAMKB_SUPPLY, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN)
 
 # service payload tags (must match service/src/lib.rs)
 TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST, TAG_REGISTER, TAG_TREASURY = range(9)
@@ -40,9 +41,12 @@ except Exception:
 REQUIRE_ORDER_SIG = HAVE_NACL and os.environ.get("REQUIRE_ORDER_SIG", "1") == "1"
 
 # --- self-funding treasury bootstrap + beneficiary access ---
-# Deploy the service with a starting JAMKB state-rent reserve so it's solvent before fees
-# accrue (0 = don't seed). The operator can raise it via env.
-INITIAL_JAMKB_RESERVE = float(os.environ.get("INITIAL_JAMKB_RESERVE", "100") or 0)
+# JAMKB is FINITE (see treasury.JAMKB_SUPPLY). A service holds only enough to back its
+# footprint plus a small operational buffer — never a hoard — because every JAMKB it holds
+# is RAM some other service can't use. This buffer (KB of headroom above the live obligation)
+# is the ONLY slack the reserve targets; the endowment and top-ups are capped at
+# obligation+buffer. (Was `INITIAL_JAMKB_RESERVE`, a flat mint that could balloon meaninglessly.)
+RESERVE_BUFFER_KB = int(os.environ.get("JAMKB_RESERVE_BUFFER", "8") or 0)
 # The demo governance seed (derives the service's GOV_PUBKEY — verified). When
 # BENEFICIARY_SWEEP=1 the server holds this key so the OWNER can sweep profit to a
 # beneficiary account over the API. PROTOTYPE-ONLY: it means anyone who can reach this
@@ -175,37 +179,56 @@ def footprint_octets():
     except Exception:
         return 0
 def rent_reserve_atomic():
-    # JAMKB the treasury must hold to cover the state rent (1 JAMKB = 1 KB), in atomic units.
+    # JAMKB the treasury MUST hold to back its footprint = the obligation (1 JAMKB = 1 KB).
     return jamkb_rent(footprint_octets()) * SCALE
+def reserve_target_atomic():
+    # JAMKB the treasury should AIM to hold = obligation + a small buffer, capped at the finite
+    # supply. This is the anti-hoarding ceiling the endowment and top-ups obey — a service never
+    # acquires RAM rights beyond what it needs (they'd be idle, denying other services).
+    return reserve_target(jamkb_rent(footprint_octets()), RESERVE_BUFFER_KB) * SCALE
 def jamkb_solvency():
     # JAMKB-standard invariant: held JAMKB reserve ≥ state footprint obligation.
     # Returns (solvent, shortfall_atomic). See docs/JAMKB_STANDARD.md.
     return solvency(bal(JAMKB, FEE_ACCOUNT), rent_reserve_atomic())
 def treasury_status():
-    # self-funding treasury view: rent (JAMKB) covered FIRST out of fees, only the surplus
-    # is withdrawable profit (to the owner). See treasury.py / docs/REVENUE.md + JAMKB_STANDARD.md.
+    # self-funding treasury view: the obligation (JAMKB) is covered FIRST out of fees; profit is
+    # the leftover FEE revenue (USDC/DOT) — JAMKB itself is a working reserve, never a hoard.
+    # See treasury.py / docs/REVENUE.md + JAMKB_STANDARD.md.
     reserve = rent_reserve_atomic()
     bals = {a: bal(a, FEE_ACCOUNT) for a in (USDC, DOT, JAMKB)}
     s = profit_split(bals, reserve)
+    held = bals[JAMKB]
     return {"treasury": {a: disp(v) for a, v in bals.items()},
             "rent_jamkb": disp(reserve), "reserve_held_jamkb": disp(s["reserve_held"]),
-            "shortfall_jamkb": disp(s["shortfall"]), "solvent": s["solvent"],
+            "shortfall_jamkb": disp(s["shortfall"]), "over_reserved_jamkb": disp(s["over_reserved"]),
+            "solvent": s["solvent"],
             "withdrawable": {a: disp(v) for a, v in s["withdrawable"].items()},
             "beneficiary": PROFIT_BENEFICIARY, "beneficiary_chain": PROFIT_BENEFICIARY_CHAIN,
             "sweep_enabled": BENEFICIARY_SWEEP,   # can the owner sweep profit over the API (prototype)
             "backpressure": JAMKB_BACKPRESSURE and not s["solvent"],   # is new state growth blocked?
-            "endowment_jamkb": INITIAL_JAMKB_RESERVE}   # the deploy-time reserve seeded
+            "reserve_target_jamkb": disp(reserve_target_atomic()),    # obligation + buffer (the cap)
+            "held_jamkb": disp(held),                                 # what the treasury actually holds
+            "supply_jamkb": JAMKB_SUPPLY}                             # finite testnet-wide pool
 def api_reserve_topup(b):
-    # Beneficiary top-up: add JAMKB to the treasury's state-rent reserve (deposit to
-    # FEE_ACCOUNT). This is the "runway/backstop" inflow of the JAMKB standard — used when
-    # usage doesn't yet cover the footprint, or to hold more state than fees fund.
-    # (Prototype: a permissionless faucet-style credit; production = a signed transfer from
-    # the beneficiary's own JAMKB holdings. See docs/JAMKB_STANDARD.md.)
+    # Beneficiary top-up = ACQUIRE scarce JAMKB (from the finite pool) into the reserve, up to
+    # the target (obligation + buffer). You cannot acquire beyond what you need — the excess would
+    # be idle RAM rights denied to other services. Refuses over-target and over-supply requests.
+    # (Prototype: a mock draw from the pool — like the mock USDC/DOT custody; production = a signed
+    # transfer of real, already-minted JAMKB the beneficiary holds. See docs/JAMKB_STANDARD.md.)
     amount = to_atomic(b["amount"])
     if amount <= 0:
         raise ValueError("top-up amount must be positive")
+    held = bal(JAMKB, FEE_ACCOUNT)
+    target = reserve_target_atomic()
+    room = target - held
+    if room <= 0:
+        raise ValueError(f"reserve already at target ({disp(target)} JAMKB = obligation + buffer) — "
+                         f"holding more would be idle RAM rights; nothing to acquire")
+    if amount > room:
+        raise ValueError(f"top-up capped at {disp(room)} JAMKB (target {disp(target)}); "
+                         f"a service holds only what it occupies, not a hoard")
     submit(bytes([TAG_DEPOSIT]) + struct.pack("<IIQ", FEE_ACCOUNT, JAMKB, amount))
-    return {"ok": True, "reserve_jamkb": disp(bal(JAMKB, FEE_ACCOUNT))}
+    return {"ok": True, "reserve_jamkb": disp(bal(JAMKB, FEE_ACCOUNT)), "target_jamkb": disp(target)}
 def api_treasury_status(q):
     return treasury_status()
 def api_beneficiary_sweep(b):
@@ -484,17 +507,16 @@ def ensure_markets():
         except Exception as e: print("list failed", m, e)
 
 def ensure_reserve():
-    # deploy with a starting JAMKB state-rent reserve so the treasury is solvent before any
-    # fees accrue. Tops up to INITIAL_JAMKB_RESERVE if under it; idempotent across restarts.
-    if INITIAL_JAMKB_RESERVE <= 0:
-        return
+    # deploy with a JAMKB reserve sized to the genesis footprint (obligation + a small buffer),
+    # so the service is solvent before any fees accrue — NOT a flat mint. Only tops UP to the
+    # target; never seeds a hoard. Idempotent across restarts.
     try:
-        target = to_atomic(INITIAL_JAMKB_RESERVE)
+        target = reserve_target_atomic()          # obligation + buffer, capped at the finite supply
         held = bal(JAMKB, FEE_ACCOUNT)
         if held >= target:
-            print(f"treasury JAMKB reserve already funded: {disp(held)} JAMKB"); return
+            print(f"treasury JAMKB reserve funded: {disp(held)} JAMKB (target {disp(target)})"); return
         submit(bytes([TAG_DEPOSIT]) + struct.pack("<IIQ", FEE_ACCOUNT, JAMKB, target - held))
-        print(f"seeded treasury JAMKB reserve -> {disp(bal(JAMKB, FEE_ACCOUNT))} JAMKB")
+        print(f"seeded treasury JAMKB reserve -> {disp(bal(JAMKB, FEE_ACCOUNT))} JAMKB (target {disp(target)})")
     except Exception as e:
         print("reserve seeding skipped:", e)
 

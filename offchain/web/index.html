@@ -256,7 +256,15 @@
               <div style="font-size:10px;color:rgba(240,240,255,.28);margin-top:4px;">JAMKB</div>
             </div>
           </div>
-          <div style="font-size:11px;color:rgba(240,240,255,.2);line-height:1.5;">1 JAMKB = 1 KB of validator-RAM · place orders → grows · 6 s auctions → shrinks</div>
+          <!-- live footprint sparkline: the state "breathing" block-to-block (grows on orders, shrinks on auctions) -->
+          <div style="display:flex;align-items:center;gap:8px;margin:6px 0 6px;">
+            <svg id="fp-spark" width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none" style="flex:1;overflow:visible;">
+              <polygon id="fp-spark-area" fill="rgba(230,0,122,.12)" points=""></polygon>
+              <polyline id="fp-spark-line" fill="none" stroke="#E6007A" stroke-width="1.5" points=""></polyline>
+            </svg>
+            <span id="fp-delta" class="mono" style="font-size:11px;min-width:56px;text-align:right;color:rgba(240,240,255,.4);">—</span>
+          </div>
+          <div style="font-size:11px;color:rgba(240,240,255,.2);line-height:1.5;">1 JAMKB = 1 KB of validator-RAM · place orders → grows · 6 s auctions → shrinks. <span style="color:rgba(240,240,255,.34);">Footprint is <b>state</b> (priced in JAMKB, held); each block's matching is <b>compute</b> (priced in gas, spent per run).</span></div>
 
           <!-- self-funding treasury: fees cover the JAMKB rent first; only profit is withdrawable -->
           <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07);">
@@ -269,15 +277,22 @@
             <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:5px;">
               <span id="tr-solv-label">Reserve held</span><span id="tr-reserve" class="mono">—</span>
             </div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:8px;">
-              <span>Withdrawable profit</span><span id="tr-profit" class="mono" style="color:#4ADE80;">—</span>
+            <!-- reserve-coverage gauge: how much of the held JAMKB reserve the live footprint obligation consumes -->
+            <div style="margin:6px 0 9px;">
+              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:999px;overflow:hidden;">
+                <div id="tr-gauge" style="height:100%;width:0%;background:#4ADE80;transition:width .4s ease,background .4s ease;"></div>
+              </div>
+              <div id="tr-gauge-label" style="font-size:9px;color:rgba(240,240,255,.28);margin-top:4px;">state obligation vs JAMKB reserve</div>
             </div>
-            <div style="font-size:10px;color:rgba(240,240,255,.2);line-height:1.5;">Fees pay the JAMKB state rent first · only profit is withdrawable, by the owner → <span id="tr-benef" class="mono" style="color:rgba(240,240,255,.4);word-break:break-all;">—</span></div>
-            <!-- beneficiary top-up: inject JAMKB into the reserve (the runway/backstop inflow) -->
+            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:8px;">
+              <span>Withdrawable profit (fees)</span><span id="tr-profit" class="mono" style="color:#4ADE80;">—</span>
+            </div>
+            <div style="font-size:10px;color:rgba(240,240,255,.2);line-height:1.5;">JAMKB is a <b>finite</b> RAM-right (<span id="tr-supply" class="mono">—</span> total). The reserve holds only what the footprint needs; <b>profit is the leftover fee revenue</b> (USDC/DOT), swept by the owner → <span id="tr-benef" class="mono" style="color:rgba(240,240,255,.4);word-break:break-all;">—</span></div>
+            <!-- beneficiary top-up: ACQUIRE JAMKB from the finite pool, capped at obligation+buffer -->
             <div style="margin-top:10px;display:flex;gap:6px;align-items:center;">
               <input id="tr-topup-amt" class="mono" type="number" min="0" step="1" placeholder="JAMKB"
                      style="flex:1;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.1);color:#eee;border-radius:6px;padding:6px 8px;font-size:11px;">
-              <button id="tr-topup-btn" style="background:rgba(230,0,122,.15);border:1px solid rgba(230,0,122,.4);color:#E6007A;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Top up reserve</button>
+              <button id="tr-topup-btn" style="background:rgba(230,0,122,.15);border:1px solid rgba(230,0,122,.4);color:#E6007A;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Acquire to target</button>
             </div>
             <!-- beneficiary access: sweep profit to your account, then swap on the DEX -->
             <div id="tr-sweep" style="margin-top:10px;"></div>
@@ -507,10 +522,64 @@ async function refreshMine(){
 }
 async function refreshFp(){
   const f = await api("/api/footprint");
-  if (!f || f.available === false) state.fp = {items:0, octets:"—", jamkb:0, available:false};
-  else state.fp = {items:f.items||0, octets:(f.octets||0)+" B", jamkb:f.jamkb_required||0, available:true};
+  if (!f || f.available === false) state.fp = {items:0, octets:"—", octetsNum:null, jamkb:0, available:false};
+  else state.fp = {items:f.items||0, octets:(f.octets||0)+" B", octetsNum:f.octets||0, jamkb:f.jamkb_required||0, available:true};
+  // sample the live footprint into a rolling buffer so it visibly "breathes" block-to-block
+  if (state.fp.available){
+    state.fpHist = (state.fpHist || []);
+    state.fpHist.push(state.fp.octetsNum);
+    if (state.fpHist.length > 80) state.fpHist.shift();
+  }
   state.tr = await api("/api/treasury_status");
   renderFp();
+}
+function renderSpark(){
+  const line = $("fp-spark-line"), area = $("fp-spark-area");
+  if (!line) return;
+  const h = state.fpHist || [];
+  if (h.length < 2){ line.setAttribute("points",""); area.setAttribute("points",""); return; }
+  const W = 200, H = 30, n = h.length;
+  const min = Math.min(...h), max = Math.max(...h), span = (max - min) || 1;
+  const pts = h.map((v, i) => {
+    const x = (i / (n - 1)) * W;
+    const y = (H - 3) - ((v - min) / span) * (H - 6);   // 3px padding top/bottom
+    return x.toFixed(1) + "," + y.toFixed(1);
+  });
+  line.setAttribute("points", pts.join(" "));
+  area.setAttribute("points", "0," + H + " " + pts.join(" ") + " " + W + "," + H);
+}
+function renderFpDelta(){
+  const el = $("fp-delta");
+  if (!el) return;
+  if (!state.fp.available){ el.textContent = "—"; el.style.color = "rgba(240,240,255,.4)"; return; }
+  const cur = state.fp.octetsNum, prev = state.fpPrev;
+  state.fpPrev = cur;
+  if (prev == null || cur === prev){ el.textContent = "steady"; el.style.color = "rgba(240,240,255,.4)"; return; }
+  const d = cur - prev;
+  el.textContent = (d > 0 ? "▲ +" : "▼ ") + d + " B";
+  el.style.color = d > 0 ? "#F87171" : "#4ADE80";   // growth costs JAMKB (red); a clear frees it (green)
+}
+function renderReserveGauge(t){
+  const bar = $("tr-gauge"), label = $("tr-gauge-label");
+  if (!bar || !t) return;
+  const held   = +t.held_jamkb || 0;            // JAMKB the treasury actually holds
+  const oblig  = +t.rent_jamkb || 0;            // KB the live footprint must back (the obligation)
+  const target = +t.reserve_target_jamkb || 0;  // obligation + buffer — the anti-hoard cap
+  const over   = +t.over_reserved_jamkb || 0;   // idle RAM rights above the obligation
+  let pct, color, note;
+  if (!t.solvent){                              // held < obligation
+    pct = target > 0 ? held / target * 100 : 0;
+    color = "#F87171"; note = "shortfall · short " + t.shortfall_jamkb + " JAMKB — backpressure on";
+  } else if (over > 0 && held > target){        // holding more RAM rights than needed
+    pct = 100; color = "#FBBF24";
+    note = "over-reserved · " + over + " idle JAMKB to release (holding " + held + ", target " + target + ")";
+  } else {                                      // obligation ≤ held ≤ target — right-sized
+    pct = target > 0 ? Math.min(100, held / target * 100) : 0;
+    color = "#4ADE80"; note = "right-sized · held " + held + " / target " + target + " JAMKB (obligation " + oblig + ")";
+  }
+  bar.style.width = Math.max(pct, held > 0 ? 3 : 0) + "%";
+  bar.style.background = color;
+  label.textContent = note;
 }
 
 // ═══════════════════ actions ═══════════════════
@@ -776,6 +845,7 @@ function renderFp(){
   $("fp-items").textContent = state.fp.items;
   $("fp-octets").textContent = state.fp.octets;
   $("fp-jamkb").textContent = state.fp.jamkb;
+  renderSpark(); renderFpDelta();
   $("fp-badge").textContent = state.fp.available ? "READ-ONLY" : "NODE UPGRADE";
   $("fp-badge").style.cssText = state.fp.available
     ? "font-size:9px;padding:2px 8px;background:rgba(74,222,128,.08);color:#4ADE80;border-radius:999px;font-weight:700;letter-spacing:.06em;"
@@ -797,8 +867,10 @@ function renderFp(){
     $("tr-profit").textContent = t.solvent ? (parts.length ? parts.join(" · ") : "0") : "0 (rent unfunded)";
     $("tr-benef").textContent = t.beneficiary ? (t.beneficiary.slice(0,8)+"…"+t.beneficiary.slice(-6)) : "—";
     $("tr-benef").title = (t.beneficiary||"") + " (" + (t.beneficiary_chain||"") + ")";
+    if (t.supply_jamkb != null) $("tr-supply").textContent = Number(t.supply_jamkb).toLocaleString() + " JAMKB";
     // JAMKB-standard backpressure badge: visible only when new state growth is paused
     $("tr-backpressure").style.display = t.backpressure ? "block" : "none";
+    renderReserveGauge(t);
   }
   renderSweep(t);
 }
@@ -809,9 +881,9 @@ async function reserveTopup(){
   try {
     const r = await api("/api/reserve_topup", {amount: amt});
     if (r.error){ toast(r.error, "err"); return; }
-    toast("Reserve topped up → "+r.reserve_jamkb+" JAMKB held.", "ok");
+    toast("Acquired JAMKB → "+r.reserve_jamkb+" / "+r.target_jamkb+" JAMKB (obligation + buffer).", "ok");
     $("tr-topup-amt").value = "";
-    refresh();
+    refresh(); refreshFp();
   } catch { toast("Top-up failed.", "err"); }
 }
 // beneficiary access: sweep withdrawable profit to your account, then swap it on the DEX

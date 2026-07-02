@@ -1,8 +1,10 @@
 # Revenue model — the self-funding treasury
 
-Jamswap earns a trading fee, uses it to **pay its own JAM state rent (in JAMKB)**, and
-lets the owner withdraw only the **surplus (profit)**. This ties the fee model directly
-to the JAMKB thesis: *the exchange buys the very token that pays for its own RAM.*
+Jamswap earns a trading fee, uses it to **buy the finite JAMKB that backs its own state
+footprint** (holding only as much as it occupies), and lets the owner withdraw only the
+**leftover fee revenue** — never the JAMKB itself. This ties the fee model directly to the
+JAMKB thesis: *the exchange buys the very (scarce, non-mintable) token that pays for its
+own RAM, and holds no more than it needs.*
 
 ## The fee (where revenue comes from)
 
@@ -43,18 +45,25 @@ The treasury must hold a **JAMKB reserve ≥ rent**. Two things fund it:
    trading the `JAMKB/DOT` book — a normal DEX trade. The DEX literally earns its keep in
    the token that prices its own footprint.
 
-## Profit = surplus above the rent reserve
+## Profit = leftover fee revenue (never JAMKB)
 
 ```
-solvent   = treasury.JAMKB ≥ rent
-profit    = if solvent: { JAMKB above rent, all USDC, all DOT }
-            else:       nothing               # rent is covered FIRST
+solvent   = treasury.JAMKB ≥ obligation
+profit    = if solvent: { all USDC, all DOT }   # fee revenue only
+            else:       nothing                 # obligation is covered FIRST
+over_reserved = max(0, treasury.JAMKB − obligation)   # idle RAM rights to RELEASE, not profit
 ```
 
-**Rent is covered before any profit is taken.** While the JAMKB reserve is below the
-rent, the treasury is entirely committed to closing that shortfall — there is no
-withdrawable profit in any asset until the service is solvent. Once solvent, the JAMKB
-above the reserve plus all other-asset fees are profit.
+**JAMKB is a finite RAM-right, not a profit store.** Holding a JAMKB is the right to occupy
+1 KB of shared validator RAM; it cannot be minted. So the treasury holds **only enough to
+back the footprint** (obligation + a small buffer) and **JAMKB is never withdrawable
+profit** — any excess is `over_reserved`, idle rights the service should sell back to the
+pool. Profit is the **fee revenue (USDC/DOT)** earned above solvency.
+
+**The obligation is covered before any profit is taken.** While the JAMKB reserve is below
+the obligation, the treasury is committed to closing that shortfall — no profit is
+withdrawable in any asset until solvent. Once solvent, the accumulated USDC/DOT fees are
+profit.
 
 The pure logic is `offchain/treasury.py` (`jamkb_rent`, `profit_split`), unit-tested in
 `offchain/tests/test_treasury.py`. The live split is exposed at
