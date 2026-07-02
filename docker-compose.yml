@@ -13,7 +13,8 @@
 # trading UI: place orders, run an auction round, watch the uniform-price clearing +
 # balances. See docs/ARCHITECTURE.md.
 #
-# Pin a version instead of :latest with  LASAIR_NODE_TAG=node-v0.3.0 docker compose up
+# Pin a version instead of :latest with  LASAIR_NODE_TAG=0.4.2 docker compose up
+# (GHCR image tags strip the git-tag prefix: lasair tag node-v0.4.2 -> image tag 0.4.2)
 
 services:
   lasair-node:                        # the JAM client, pulled (not built) — any arch

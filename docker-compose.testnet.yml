@@ -19,7 +19,8 @@
 #               read storage) — the same HTTP API the single-node harness exposes.
 #
 # The dex points at validator v0's RPC; v0 is the only node that publishes a port.
-# Pin a version with  LASAIR_NODE_TAG=node-v0.4.0 docker compose -f docker-compose.testnet.yml up
+# Pin a version with  LASAIR_NODE_TAG=0.2.1 docker compose -f docker-compose.testnet.yml up
+# (GHCR image tags strip the git-tag prefix: lasair tag testnet-v0.2.1 -> image tag 0.2.1)
 
 x-nodes: &nodes "v0:20000,v1:20000,v2:20000,v3:20000,v4:20000,v5:20000"
 

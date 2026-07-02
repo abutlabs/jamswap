@@ -239,7 +239,8 @@ byte-identically; settlement lands a slot or two later at the real 6-second cade
 ### Options
 
 ```sh
-LASAIR_NODE_TAG=node-v0.3.0 docker compose up   # pin a node version instead of :latest
+LASAIR_NODE_TAG=0.4.2 docker compose up         # pin a node version instead of :latest
+                                                # (GHCR tags strip the git-tag prefix: node-v0.4.2 -> 0.4.2)
 docker compose --profile demo run --rm demo     # run the narrated CLI walkthrough (see sim/demo.py)
 ```
 
