@@ -229,6 +229,13 @@
           <div style="margin-top:10px;font-size:11px;color:rgba(240,240,255,.2);">Sealed orders decrypted for you (you hold the nonce)</div>
         </div>
 
+        <!-- Execution report: per-order fill receipts (what the matching engine actually did) -->
+        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;display:block;margin-bottom:14px;">Execution report</span>
+          <div id="execs"></div>
+          <div style="margin-top:10px;font-size:11px;color:rgba(240,240,255,.2);line-height:1.5;">What each of your orders did at clearing — filled qty at the <b>uniform</b> price, plus any remainder that <b>rested</b> (limit) or was <b>cancelled</b> (sealed / no supply at your limit).</div>
+        </div>
+
         <!-- JAMKB footprint -->
         <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
@@ -443,7 +450,7 @@ async function connectAccount(){
     state.wallet = { key: kp.key, pub: kp.pub, selected: { address, name: "JAM account" } };
     if (await registerAccount()) toast("Account ready.", "ok");
     else toast("Registration pending — click your account again in a moment.", "err");
-    renderWallet(); refreshBals(); refreshMine();
+    renderWallet(); refreshBals(); refreshMine(); refreshExecs();
   } catch(e){ toast("Account setup failed: "+(e && e.message ? e.message : e)+" — this browser needs WebCrypto Ed25519 (Chrome 137+/Safari 17+).", "err"); }
 }
 // Export the account keypair (so it survives a browser wipe / moves to another device).
@@ -726,6 +733,45 @@ function renderMine(){
   }).join("") + '</div>';
   mine.querySelectorAll("[data-cancel]").forEach(b => b.onclick = () => cancelOrder(+b.dataset.cancel));
 }
+// per-order fill receipts — what the matching engine actually did with each of your orders
+const EXEC_DISPO = {
+  "filled":            {label:"filled",             color:"#4ADE80", note:o=>""},
+  "partial-resting":   {label:"partial · rested",   color:"#FBBF24", note:o=>o.remainder+" resting"},
+  "partial-cancelled": {label:"partial · cancelled",color:"#FB923C", note:o=>o.remainder+" cancelled"},
+  "resting":           {label:"resting",            color:"#93C5FD", note:o=>o.qty+" resting"},
+  "cancelled":         {label:"cancelled",          color:"#F87171", note:o=>"no supply at your limit"},
+};
+function renderExecs(){
+  const el = $("execs");
+  const list = state.execs || [];
+  if (!isConn()){ el.innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);">Connect an account to see your fills</div>'; return; }
+  if (!list.length){ el.innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);">No fills yet — place an order and watch it clear</div>'; return; }
+  el.innerHTML = '<div style="display:flex;flex-direction:column;gap:6px;">' + list.map(e => {
+    const mkt = MARKETS.find(m=>m.id===e.market) || {name:"mkt "+e.market, baseLabel:"base", quoteLabel:""};
+    const isBuy = e.side === 0;
+    const d = EXEC_DISPO[e.disposition] || {label:e.disposition, color:"rgba(240,240,255,.5)", note:_=>""};
+    const noteTxt = d.note(e);
+    return '<div style="display:flex;flex-direction:column;gap:3px;padding:9px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;">'
+      + '<div style="display:flex;align-items:center;gap:7px;">'
+      +   '<span style="font-size:12px;font-weight:700;color:'+(isBuy?"#4ADE80":"#F87171")+';">'+(isBuy?"BUY":"SELL")+'</span>'
+      +   '<span class="mono" style="font-size:11px;color:rgba(240,240,255,.5);flex:1;">'+e.qty+' '+mkt.baseLabel+'</span>'
+      +   '<span style="font-size:10px;color:rgba(240,240,255,.28);">'+mkt.name+'</span>'
+      + '</div>'
+      + '<div style="display:flex;align-items:center;gap:7px;font-size:11px;">'
+      +   '<span class="mono" style="color:'+d.color+';">'+d.label+'</span>'
+      +   '<span class="mono" style="color:rgba(240,240,255,.5);flex:1;">'
+      +     (e.filled>0 ? ('filled '+e.filled+' @ '+e.price+' '+mkt.quoteLabel) : '')
+      +     (noteTxt ? (e.filled>0?' · ':'')+noteTxt : '')
+      +   '</span>'
+      +   '<span style="font-size:10px;color:rgba(240,240,255,.28);">'+agoLabel(e.ts)+'</span>'
+      + '</div></div>';
+  }).join("") + '</div>';
+}
+async function refreshExecs(){
+  if (!isConn()){ state.execs = []; renderExecs(); return; }
+  const r = await api("/api/executions?account="+myAcct());
+  state.execs = (r && r.executions) || []; renderExecs();
+}
 function renderFp(){
   $("fp-items").textContent = state.fp.items;
   $("fp-octets").textContent = state.fp.octets;
@@ -872,8 +918,8 @@ renderSide(); renderType(); renderSeal(); renderBook(); renderMempool(); renderT
 renderBals(); renderMine(); renderFp(); renderFaucetTabs();
 
 // live feeds
-subscribe(); refresh(); refreshFp(); refreshTrades();
-setInterval(() => { refreshBals(); refreshMine(); }, 6000);
+subscribe(); refresh(); refreshFp(); refreshTrades(); refreshExecs();
+setInterval(() => { refreshBals(); refreshMine(); refreshExecs(); }, 6000);
 setInterval(refreshFp, 2000);
 setInterval(refreshTrades, 3000);
 if (localStorage.getItem("jamswap_sk_default")) setTimeout(connectAccount, 300);  // auto-load a saved account

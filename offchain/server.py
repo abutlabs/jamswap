@@ -13,6 +13,7 @@ import hashlib, json, os, secrets, struct, subprocess, threading, time, urllib.r
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
+from clearing import clear        # builder-side clearing (mirrors refine); for per-order fill receipts
 from treasury import jamkb_rent, profit_split, max_withdrawable, solvency, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN
 
 # service payload tags (must match service/src/lib.rs)
@@ -369,7 +370,8 @@ def api_round(b):
         # rest HIDDEN (carried forward) rather than being immediate-or-cancel — so a sealed
         # sell placed now can meet a sealed buy placed in a later auction. A sealed order is
         # revealed only in the round it actually crosses (see round.py + tests).
-        plan = plan_round(pend, _parse_book(rest), now)
+        resting_orders = _parse_book(rest)
+        plan = plan_round(pend, resting_orders, now)
         pending[m] = plan.carry        # non-crossing sealed orders stay hidden for next round
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
             order_expiry.pop((m, o["account"], o["oid"]), None)
@@ -405,6 +407,10 @@ def api_round(b):
         # expired one — an empty cross conserves value and leaves the last price untouched
         # (apply_settlement only updates lp when something actually fills).
         submit(bytes([TAG_MATCH]) + hdr + rest + public_bytes)
+    # per-order fill receipts for the UI: recompute this round's clearing (mirrors refine)
+    # and attribute fills to the submitting traders + any resting makers that filled.
+    try: record_executions(m, resting_orders, sealed, public)
+    except Exception as e: print("exec record failed", m, e)
     return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
             "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
             "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
@@ -573,10 +579,82 @@ def api_trades(q):
                         "high": max(prices) if prices else None,
                         "low": min(prices) if prices else None,
                         "window_hours": 24}}
+# ---- execution reports (per-order fill receipts) --------------------------
+# The trade tape above is market-level (a clearing print per round). Traders also want a
+# per-ORDER receipt: "your BUY 500 filled 200 @ 1.20 (uniform) · 300 cancelled". The chain
+# only exposes market-level lp/cv, so the builder recomputes the SAME clearing it hands to
+# refine (offchain/clearing.clear, pinned to the Rust engine by tests/test_clearing.py) and
+# attributes per-order fills. Kept per account, same 24h TTL + disk persistence as the tape.
+EXEC_HISTORY = 200
+EXECS_FILE = os.environ.get("EXECS_FILE", "/tmp/jamswap_execs.json")
+executions = {}                        # account -> deque[{ts, market, side, price, qty, filled, remainder, disposition}]
+def _save_execs():
+    try:
+        with open(EXECS_FILE, "w") as fh:
+            json.dump({str(a): list(dq) for a, dq in executions.items()}, fh)
+    except Exception:
+        pass
+def load_execs():
+    try:
+        with open(EXECS_FILE) as fh:
+            data = json.load(fh)
+        now = time.time()
+        for k, lst in data.items():
+            dq = deque([e for e in lst if e.get("ts", 0) >= now - TRADE_TTL], maxlen=EXEC_HISTORY)
+            if dq:
+                executions[int(k)] = dq
+    except Exception:
+        pass
+def _record_exec(o, filled, price, sealed, now):
+    # append one order's outcome to its owner's receipt feed. `sealed` ⇒ the unfilled
+    # remainder was immediate-or-cancel (dropped); otherwise it rests in the book.
+    qty, rem = o["qty"], o["qty"] - filled
+    if filled >= qty:
+        disp_ = "filled"
+    elif sealed:
+        disp_ = "partial-cancelled" if filled > 0 else "cancelled"   # IOC remainder dropped
+    else:
+        disp_ = "partial-resting" if filled > 0 else "resting"       # remainder rests in book
+    dq = executions.setdefault(o["account"], deque(maxlen=EXEC_HISTORY))
+    dq.append({"ts": now, "market": o["market"], "side": o["side"],
+               "price": disp(price), "qty": disp(qty), "filled": disp(filled),
+               "remainder": disp(rem), "disposition": disp_, "oid": o["oid"]})
+def record_executions(m, resting, reveal, public):
+    # recompute this round's clearing over the exact batch handed to refine and write a
+    # per-order receipt for the trader-submitted orders (reveal=sealed IOC, public=rests) and
+    # any resting maker that filled. No-op when nothing crossed.
+    combined = list(resting) + list(reveal) + list(public)
+    if not combined:
+        return
+    c = clear(combined)
+    price, fills = c["price"], c["fills"]
+    reveal_ids = {o["oid"] for o in reveal}
+    now = time.time()
+    touched = False
+    for o in reveal + public:                       # this round's own submissions
+        o = dict(o, market=m)
+        filled = fills.get(o["oid"], 0)
+        if filled == 0 and o["oid"] not in reveal_ids:
+            continue                                # a fully-unfilled public order just rests — no receipt
+        _record_exec(o, filled, price, o["oid"] in reveal_ids, now)
+        touched = True
+    for o in resting:                               # resting makers that got filled this round
+        filled = fills.get(o["oid"], 0)
+        if filled > 0:
+            _record_exec(dict(o, market=m), filled, price, sealed=False, now=now)
+            touched = True
+    if touched:
+        _save_execs()
+def api_executions(q):
+    # a trader's recent per-order fill receipts, most-recent first.
+    acct = int(q["account"])
+    dq = executions.get(acct, ())
+    return {"executions": list(reversed(list(dq)))[:100]}
+
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
               "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
               "/api/govnonce": api_govnonce, "/api/treasury_status": api_treasury_status,
-              "/api/trades": api_trades}
+              "/api/trades": api_trades, "/api/executions": api_executions}
 
 def has_expired(m):
     now = time.time()
@@ -664,7 +742,7 @@ if __name__ == "__main__":
     elif SID is None:
         SID = 1729                              # last-resort default (first deploy on a fresh node)
     print(f"jamswap off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
-    load_trades()
+    load_trades(); load_execs()
     try: ensure_markets(); ensure_reserve(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)
     ensure_committee()

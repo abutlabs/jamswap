@@ -163,6 +163,28 @@ locked in as the regression test `buy_between_asks_clears_at_the_marginal_ask_on
 > surplus. A surplus-splitting (midpoint) rule is a one-line tie-break change if the
 > community prefers it.
 
+### Partial fills and the execution report
+
+A batch clears **all-or-part at one price**, so an order can fill partially. What happens to
+the unfilled remainder depends on the order type:
+
+- **Public limit** — the remainder becomes/stays a **resting** order in the book (visible,
+  waiting for a later counterparty). A *market* order is submitted as a marketable limit (at
+  the last price ± a band), so any remainder likewise rests at that band price.
+- **Sealed** (revealed to clear) — the remainder is **immediate-or-cancel**: it is **dropped**,
+  never left resting-and-exposed. (So a sealed buy for 500 that finds only 200 of crossing
+  supply fills 200 and cancels 300 — the book stays empty of it.)
+
+The chain only exposes market-level `lp`/`cv`, not which order filled — so the **builder
+produces a per-order fill receipt**. `offchain/clearing.py` is a faithful Python port of the
+Rust engine (pinned to it by `tests/test_clearing.py`); `server.record_executions` recomputes
+the exact batch it handed to `refine` and attributes fills to each trader's order. The UI's
+**Execution report** panel polls `GET /api/executions?account=…` and shows, per order:
+`filled <qty> @ <uniform price>` plus the remainder's disposition (`rested` / `cancelled`).
+This is what makes the matching engine's behaviour legible in real time — and it corrects the
+common misread that a 500-buy filled "100 @ 1.10 + 100 @ 1.20" when it in fact filled **200 @
+one uniform price**.
+
 ## MEV-resistance
 
 Two layers, both proven e2e:

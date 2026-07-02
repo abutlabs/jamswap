@@ -11,6 +11,9 @@ every push.
 | **3. Round lifecycle** | `offchain/tests/test_round_lifecycle.py` | the **sealed-order lifecycle** — which orders clear now, rest hidden, or expire | Python (stdlib) |
 | **3b. Treasury** | `offchain/tests/test_treasury.py` | the **self-funding treasury** — fees cover JAMKB rent first, only surplus is withdrawable profit | Python (stdlib) |
 | **3c. Trade tape** | `offchain/tests/test_trade_tape.py` | the **recent-trades feed** — clearing prints recorded from cumulative-volume deltas, metrics, tick direction | Python (stdlib) |
+| **3d. Clearing parity** | `offchain/tests/test_clearing.py` | the builder's Python clearing (`clearing.py`) matches the Rust engine **scenario-for-scenario** — so the fill receipts can't lie | Python (stdlib) |
+| **3e. Execution reports** | `offchain/tests/test_executions.py` | the **per-order fill receipts** — filled qty @ uniform price + remainder disposition (rested / cancelled), per account | Python (stdlib) |
+| **3f. JAMKB standard** | `offchain/tests/test_jamkb_standard.py` | **solvency backpressure** (refuse new state while under-reserved) + beneficiary reserve top-up | Python (stdlib) |
 | **4. End-to-end** | `offchain/test_enc_round.py`, `offchain/test_sealed_resting_e2e.py` | the real service on a live node: honest settles, tampered/injected rejected, sealed orders rest & cross across rounds | Docker + node |
 
 ## Why layer 3 exists (the bug it caught)
