@@ -9,12 +9,20 @@ balance/state reads. Stdlib only (http.server, urllib, struct).
 
   LASAIR_RPC=http://localhost:19900 PORT=8080 python3 offchain/server.py
 """
-import hashlib, json, os, secrets, struct, threading, time, urllib.request
+import hashlib, json, os, secrets, struct, subprocess, threading, time, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # service payload tags (must match service/src/lib.rs)
 TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST, TAG_REGISTER, TAG_TREASURY = range(9)
+TAG_ENC_SETUP, TAG_ENC_COMMIT, TAG_ENC_ROUND = 9, 10, 11
 FEE_ACCOUNT = 0xFFFFFFFF               # treasury handle (matches FEE_ACCOUNT in the service)
+
+# Encrypt-until-batch (option 2): if a committee sidecar binary is available, sealed orders are
+# ECIES-encrypted to an off-protocol committee and decrypted (with a Chaum-Pedersen proof refine
+# verifies) at batch close — NO reveal round, no non-reveal griefing. Without the binary we fall
+# back to commit–reveal (option 3). Set ENC_MODE=0 to force commit–reveal even if present.
+COMMITTEE_BIN = os.environ.get("COMMITTEE_BIN", "")
+ENC_MODE = bool(COMMITTEE_BIN) and os.environ.get("ENC_MODE", "1") == "1"
 # Optional off-chain order-signature verification (the trustless in-refine version is the
 # documented upgrade; the builder is a trusted role in the current model). Needs PyNaCl —
 # if it's absent we degrade to accepting orders unsigned (withdraw/cancel stay trustless in
@@ -66,6 +74,19 @@ order_expiry = {}
 
 def commitment(reveal_bytes):     # must match service commitment(): Blake2s256, 32B
     return hashlib.blake2s(reveal_bytes, digest_size=32).digest()
+
+def committee_run(*args):
+    # shell out to the committee sidecar; parse its "key hex" lines into a dict
+    out = subprocess.run([COMMITTEE_BIN, *[str(a) for a in args]],
+                         capture_output=True, text=True, timeout=60)
+    if out.returncode != 0:
+        raise RuntimeError(f"committee {args[0]} failed: {out.stderr.strip()}")
+    d = {}
+    for line in out.stdout.strip().splitlines():
+        p = line.split()
+        if len(p) >= 2:
+            d[p[0]] = p[1]
+    return d
 
 # ---- node RPC + wire ------------------------------------------------------
 def node(path, body=None):
@@ -196,10 +217,20 @@ def api_order(b):
     o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty, "type": otype,
          "sealed": bool(b.get("sealed")), "address": b.get("address", "")}
     if o["sealed"]:
-        # commit-reveal: publish ONLY the hash now (orders hidden on-chain), reveal at round
-        nonce = secrets.token_bytes(32)
-        o["reveal"] = order_bytes(acct, oid, side, price, qty) + nonce
-        submit(bytes([TAG_COMMIT]) + struct.pack("<II", m, acct) + commitment(o["reveal"]))
+        if ENC_MODE:
+            # encrypt-until-batch: ECIES-encrypt the order to the committee key and post the
+            # ciphertext (ENC_COMMIT). No nonce/reveal is ever needed — the committee decrypts
+            # at batch close and refine verifies the decryption. The order terms never touch
+            # the chain in the clear until they clear.
+            seed = secrets.token_bytes(32).hex()
+            d = committee_run("encrypt", m, order_bytes(acct, oid, side, price, qty).hex(), seed)
+            o["ciphertext"] = d["ciphertext"]
+            submit(bytes.fromhex(d["commit"]))
+        else:
+            # commit-reveal: publish ONLY the hash now (orders hidden on-chain), reveal at round
+            nonce = secrets.token_bytes(32)
+            o["reveal"] = order_bytes(acct, oid, side, price, qty) + nonce
+            submit(bytes([TAG_COMMIT]) + struct.pack("<II", m, acct) + commitment(o["reveal"]))
     with _lock:
         pending.setdefault(m, []).append(o)
         n = len(pending[m])
@@ -227,11 +258,19 @@ def api_round(b):
     rest = prune_expired(m, raw)                          # drop good-till-time orders past expiry
     shrank = len(rest) < len(raw)                         # some resting order expired this round
     public_bytes = b"".join(order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"]) for o in public)
-    if sealed:
-        # UNIFIED sealed round: the resting book + this round's public orders + the revealed
-        # sealed orders all clear together at ONE uniform price (so a sealed order can cross
-        # public/resting liquidity). The node re-checks each reveal's hash ∈ commits; sealed
-        # orders are immediate-or-cancel (their remainder never rests publicly).
+    if sealed and ENC_MODE:
+        # encrypt-until-batch round: the committee decrypts each sealed ciphertext (proving it
+        # via Chaum-Pedersen); refine verifies every proof, recovers the orders, and clears them
+        # with the resting book + public orders at ONE uniform price (sealed = immediate-or-cancel).
+        # No reveal round — traders needn't be online at match time.
+        cts = ",".join(o["ciphertext"] for o in sealed)
+        d = committee_run("round", m, base, quote, (rest + public_bytes).hex(), cts)
+        submit(bytes.fromhex(d["round"]))
+    elif sealed:
+        # UNIFIED sealed round (commit–reveal): the resting book + this round's public orders +
+        # the revealed sealed orders all clear together at ONE uniform price (so a sealed order
+        # can cross public/resting liquidity). The node re-checks each reveal's hash ∈ commits;
+        # sealed orders are immediate-or-cancel (their remainder never rests publicly).
         commits = b"".join(commitment(o["reveal"]) for o in sealed)
         reveals = b"".join(o["reveal"] for o in sealed)
         submit(bytes([TAG_REVEAL]) + hdr
@@ -259,9 +298,13 @@ def mempool_entry(o, owner=False):
 def api_state(q):
     m = int(q.get("market", "1"))
     mempool = [mempool_entry(o) for o in pending.get(m, [])]
-    onchain_commits = len(storage(b"commits" + struct.pack("<I", m))) // 32
+    # sealed orders live on-chain as commit hashes (option 3) or ciphertexts (option 2); both
+    # are 32-byte / fixed-size entries in per-market sets — count whichever this mode uses.
+    seal_key = b"encset" if ENC_MODE else b"commits"
+    onchain_sealed = len(storage(seal_key + struct.pack("<I", m))) // 32
     return {"price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)), "book": book_of(m),
-            "pending": len(pending.get(m, [])), "mempool": mempool, "sealed_onchain": onchain_commits,
+            "pending": len(pending.get(m, [])), "mempool": mempool, "sealed_onchain": onchain_sealed,
+            "seal_mode": "encrypt-until-batch" if ENC_MODE else "commit-reveal",
             "next_auction_in": round(max(0.0, _next_auction[0] - time.time()), 1), "auction_secs": AUCTION_SECS}
 def api_mine(q):
     # a trader's own queued orders, across all markets — sealed terms DECRYPTED for them
@@ -308,6 +351,21 @@ def ensure_markets():
     for m, base, quote in DEFAULT_MARKETS:
         try: api_list({"market": m, "base": base, "quote": quote})
         except Exception as e: print("list failed", m, e)
+
+def ensure_committee():
+    # encrypt-until-batch: commit the off-protocol committee keys on-chain (gov-signed), once.
+    # Idempotent — if a committee is already committed (node reused across runs), do nothing.
+    if not ENC_MODE:
+        return
+    try:
+        if storage(b"committee"):
+            print("encrypt-until-batch: committee already committed on-chain"); return
+        d = committee_run("setup")
+        submit(bytes.fromhex(d["setup"]))
+        ok = bool(storage(b"committee"))
+        print(f"encrypt-until-batch ENABLED — committee committed on-chain: {ok}")
+    except Exception as e:
+        print("committee setup failed (falling back to commit-reveal):", e)
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
               "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
               "/api/govnonce": api_govnonce}
@@ -391,6 +449,7 @@ if __name__ == "__main__":
     print(f"jamswap off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
     try: ensure_markets(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)
+    ensure_committee()
     threading.Thread(target=auction_loop, daemon=True).start()
     print(f"auction loop running every {AUCTION_SECS}s (like JAM block production)")
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

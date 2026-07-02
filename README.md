@@ -124,6 +124,17 @@ your balances update — across multiple markets sharing one ledger. The committ
 service blob (`service/jamswap-service.jam`) means it runs straight from a clone;
 nothing to compile.
 
+**Sealed orders default to encrypt-until-batch (option 2 — no reveal round).** The dex
+image builds an off-protocol **committee sidecar** ([`crates/committee`](crates/committee/));
+on startup it commits the committee keys on-chain and thereafter sealed orders are
+ECIES-encrypted to that committee. At each auction the committee decrypts and refine
+verifies a Chaum-Pedersen proof of correct decryption — so a sealed order's terms stay
+hidden until it clears, with **no per-owner reveal step and no non-reveal griefing**. Set
+`ENC_MODE=0` in the `dex` service to fall back to plain commit–reveal (option 3). The
+verifiable-decryption crypto is in [`crates/vdec`](crates/vdec/) (host soundness tests) and
+gas-measured in `zk-jam-service/spikes/vdec-gas`; e2e proof in
+[`offchain/test_enc_round.py`](offchain/test_enc_round.py).
+
 Pin a node version instead of `:latest`:
 
 ```sh

@@ -167,7 +167,16 @@ pub fn encrypt(order: &[u8], joint: &G1Affine, seed: &[u8]) -> ([u8; POINT_LEN],
 pub fn partial_decrypt(c1_bytes: &[u8], member: &Member, seed: &[u8]) -> Option<[u8; PARTIAL_LEN]> {
     let c1 = de_point(c1_bytes)?;
     let s_i = (c1.into_group() * member.sk).into_affine();
-    let w = scalar_from(b"vdec-w", seed);
+    // Bind the Chaum-Pedersen nonce w to (sk, C1, seed) RFC-6979-style. This is a HARD safety
+    // property, not a convenience: if the same w is ever reused across two statements with
+    // different challenges, z = w + e·sk for e1 ≠ e2 gives sk = (z1−z2)/(e1−e2) — the secret
+    // key leaks. Deriving w from the member's own sk and the specific ciphertext makes w unique
+    // per (member, ciphertext) even if a careless caller passes a constant `seed`.
+    let mut wseed = Vec::with_capacity(SCALAR_LEN + POINT_LEN + seed.len());
+    wseed.extend_from_slice(&ser_scalar(&member.sk));
+    wseed.extend_from_slice(&ser_point(&c1));
+    wseed.extend_from_slice(seed);
+    let w = scalar_from(b"vdec-w", &wseed);
     let t1 = (g() * w).into_affine();
     let t2 = (c1.into_group() * w).into_affine();
     let e = challenge(&member.pk, &c1, &s_i, &t1, &t2);
@@ -246,6 +255,7 @@ pub fn pack_committee(members: &[G1Affine]) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ark_ff::Field; // for .inverse() in the nonce-uniqueness regression test
 
     fn committee(n: usize) -> (Vec<Member>, Vec<[u8; POINT_LEN]>, G1Affine) {
         let mut members = Vec::new();
@@ -319,5 +329,30 @@ mod tests {
         let short = &partials[..2 * PARTIAL_LEN];
         assert!(verify_and_decrypt(&c1, &body, &pks, short).is_none(),
             "fewer than n partials must not decrypt (n-of-n)");
+    }
+
+    #[test]
+    fn nonce_is_unique_per_ciphertext_even_with_constant_seed() {
+        // Regression: a reused proof nonce w across two ciphertexts with the SAME caller seed
+        // would leak sk (z = w + e·sk, two e's -> solve for sk). partial_decrypt binds w to
+        // (sk, C1), so the two proofs' z differ and, critically, the recovered sk would differ,
+        // i.e. no consistent single w explains both. We assert the z scalars differ AND that
+        // solving (z1 - z2)/(e1 - e2) does NOT yield the real sk.
+        let m = keygen(&[3, 3, 3]);
+        let (c1a, _) = encrypt(b"order-A-17-bytes!", &m.pk, b"seedA");
+        let (c1b, _) = encrypt(b"order-B-17-bytes!", &m.pk, b"seedB");
+        let pa = partial_decrypt(&c1a, &m, b"CONSTANT").unwrap();
+        let pb = partial_decrypt(&c1b, &m, b"CONSTANT").unwrap(); // same caller seed on purpose
+        let ea = de_scalar(&pa[POINT_LEN..POINT_LEN + SCALAR_LEN]).unwrap();
+        let za = de_scalar(&pa[POINT_LEN + SCALAR_LEN..]).unwrap();
+        let eb = de_scalar(&pb[POINT_LEN..POINT_LEN + SCALAR_LEN]).unwrap();
+        let zb = de_scalar(&pb[POINT_LEN + SCALAR_LEN..]).unwrap();
+        assert_ne!(za, zb, "distinct ciphertexts must produce distinct proof responses");
+        // If w were shared, (za - zb)/(ea - eb) == sk. It must NOT.
+        let recovered = (za - zb) * (ea - eb).inverse().unwrap();
+        assert_ne!(recovered, m.sk, "nonce reuse would leak sk — it must not be recoverable");
+        // both still verify individually
+        assert!(verify_partial(&c1a, &ser_point(&m.pk), &pa).is_some());
+        assert!(verify_partial(&c1b, &ser_point(&m.pk), &pb).is_some());
     }
 }

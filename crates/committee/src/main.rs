@@ -1,28 +1,32 @@
 //! Off-protocol committee sidecar for jamswap encrypt-until-batch (option 2).
 //!
-//! Simulates a k-member committee that holds fresh keys (NOT validator consensus keys) and
-//! decrypts sealed orders at batch close. Emits the exact service payloads:
-//!   ENC_SETUP  — gov-signed commitment of the committee keys on-chain
-//!   ENC_COMMIT — an encrypted order (ciphertext) posted by a trader
-//!   ENC_ROUND  — the batch: ciphertexts + proven partial decryptions for refine
+//! Simulates a k-member committee holding FRESH keys (never validator consensus keys) that
+//! decrypts sealed orders at batch close. The off-chain server shells out to these commands:
 //!
-//! `scenario <gov_seed_byte>` prints every payload the e2e test drives (honest + three
-//! adversarial rounds). `govfind` recovers the demo gov seed that matches the baked
-//! GOV_PUBKEY (the service gates ENC_SETUP behind it, like the treasury).
+//!   setup                                   -> `setup <hex>` (gov-signed ENC_SETUP) + `committee <blob>`
+//!   encrypt <market> <order_hex> <seed_hex> -> `ciphertext <hex>` (C1‖body) + `commit <ENC_COMMIT hex>`
+//!   round <m> <b> <q> <plaintext_hex> <ct_csv> -> `round <ENC_ROUND hex>` (decrypts + proves each ct)
+//!
+//! Plus `scenario <gov_byte>` (drives the e2e test) and `govpub`/`govfind` (dev helpers).
+//! The committee is deterministic (fixed member seeds) so setup/encrypt/round agree on keys —
+//! a real deployment runs an interactive DKG across independent operators instead.
 
 use ed25519_compact::{KeyPair, Seed};
-use match_engine::{wire, Order, Side};
-use vdec::{encrypt, joint_pk, keygen, pack_committee, partial_decrypt, Member, PARTIAL_LEN, POINT_LEN};
+use match_engine::wire;
+use vdec::{encrypt, joint_pk, keygen, pack_committee, partial_decrypt, Member, POINT_LEN};
 
-const SCALE: u32 = 10_000;
-const MARKET: u32 = 1;
-const BASE: u32 = 10;
-const QUOTE: u32 = 20;
+const MARKET_UNUSED: u32 = 0; // (documentation: market is passed per-command)
+const COMMITTEE_SIZE: usize = 2;
+const COMMITTEE_TAG: u8 = 0x11;
 
-// Must match GOV_PUBKEY in service/src/lib.rs (governance authority for committee setup).
+// Documented demo governance seed (32 bytes). Service bakes the matching GOV_PUBKEY; production
+// replaces both with a DAO/multisig key. Only this key may set the committee or sweep the treasury.
+const GOV_SEED: [u8; 32] = *b"jamswap:demo:governance:key:v1!!";
+
+// Must match GOV_PUBKEY in service/src/lib.rs (used by `govfind`, a legacy check).
 const GOV_PUBKEY: [u8; 32] = [
-    0x90, 0x37, 0x37, 0x55, 0x60, 0x00, 0xf3, 0xf2, 0x64, 0x66, 0xd6, 0x30, 0x43, 0x64, 0xf1, 0xd2,
-    0x22, 0x6e, 0xe8, 0x34, 0x0f, 0xfe, 0xe3, 0x66, 0x26, 0xc3, 0x15, 0xd0, 0x4b, 0xcf, 0xd5, 0x68,
+    0x37, 0x42, 0x87, 0x63, 0x4e, 0x12, 0x9e, 0xc1, 0xf7, 0x2c, 0x75, 0x08, 0xa1, 0x30, 0xa6, 0xf4,
+    0xae, 0x2c, 0x14, 0x56, 0xc9, 0x28, 0x0f, 0xe5, 0x2e, 0xaa, 0x4f, 0x22, 0x54, 0xf7, 0xe6, 0xca,
 ];
 
 fn hex(b: &[u8]) -> String {
@@ -32,9 +36,28 @@ fn hex(b: &[u8]) -> String {
     }
     s
 }
+fn unhex(s: &str) -> Vec<u8> {
+    let s = s.trim();
+    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap()).collect()
+}
+
+fn govkey() -> KeyPair {
+    KeyPair::from_seed(Seed::new(GOV_SEED))
+}
+
+/// The deterministic demo committee: (members, joint key, blob = [k][pks]).
+fn fixed_committee() -> (Vec<Member>, ark_bn254::G1Affine, Vec<u8>) {
+    let members: Vec<Member> = (0..COMMITTEE_SIZE).map(|i| keygen(&[i as u8, COMMITTEE_TAG, 7])).collect();
+    let affs: Vec<_> = members.iter().map(|m| m.pk).collect();
+    let joint = joint_pk(&affs);
+    let pks = pack_committee(&affs);
+    let mut blob = Vec::with_capacity(1 + pks.len());
+    blob.push(COMMITTEE_SIZE as u8);
+    blob.extend_from_slice(&pks);
+    (members, joint, blob)
+}
 
 fn canon_committee(n: u8, pks: &[u8], nonce: u64) -> Vec<u8> {
-    // must byte-match the service: canon(b"committee", &[&[n], pks, &nonce_le])
     let mut m = Vec::new();
     m.extend_from_slice(b"jamswap:v1:committee");
     m.push(n);
@@ -43,147 +66,169 @@ fn canon_committee(n: u8, pks: &[u8], nonce: u64) -> Vec<u8> {
     m
 }
 
-/// Build a committee of `k` members from a domain seed. Returns (members, joint key, blob=[k][pks]).
-fn committee(k: usize, tag: u8) -> (Vec<Member>, ark_committee_key, Vec<u8>) {
-    let members: Vec<Member> = (0..k).map(|i| keygen(&[i as u8, tag, 7])).collect();
-    let pk_affines: Vec<_> = members.iter().map(|m| m.pk).collect();
-    let joint = joint_pk(&pk_affines);
-    let pks = pack_committee(&pk_affines);
-    let mut blob = Vec::with_capacity(1 + pks.len());
-    blob.push(k as u8);
-    blob.extend_from_slice(&pks);
-    (members, joint, blob)
-}
-type ark_committee_key = ark_bn254::G1Affine;
-
-fn order_bytes(o: &Order) -> Vec<u8> {
-    wire::encode_orders(core::slice::from_ref(o))
-}
-
-/// ENC_COMMIT payload: [10][market:4][C1:32][body]. Returns (payload, ciphertext = C1‖body).
-fn enc_commit(order: &Order, joint: &ark_committee_key, seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
-    let ob = order_bytes(order);
-    let (c1, body) = encrypt(&ob, joint, seed);
-    let mut ct = Vec::with_capacity(POINT_LEN + body.len());
-    ct.extend_from_slice(&c1);
-    ct.extend_from_slice(&body);
-    let mut payload = Vec::new();
-    payload.push(10u8); // TAG_ENC_COMMIT
-    payload.extend_from_slice(&MARKET.to_le_bytes());
-    payload.extend_from_slice(&ct);
-    (payload, ct)
-}
-
-/// ENC_ROUND payload for refine. `sealed` = (order, seed) pairs decrypted by `members`;
-/// `plaintext` = public/resting orders. `tamper` flips a byte in the first partial.
-fn enc_round(
-    members: &[Member],
-    blob: &[u8],
-    sealed: &[(Order, &[u8])],
-    plaintext: &[Order],
-    tamper: bool,
-) -> Vec<u8> {
-    let k = members.len();
-    let pks = &blob[1..]; // strip the leading n byte
-    let joint = {
-        let affs: Vec<_> = members.iter().map(|m| m.pk).collect();
-        joint_pk(&affs)
-    };
+/// Gov-signed ENC_SETUP payload for a committee blob at the given nonce.
+fn setup_payload(blob: &[u8], nonce: u64) -> Vec<u8> {
+    let n = blob[0];
+    let pks = &blob[1..];
+    let msg = canon_committee(n, pks, nonce);
+    let sig = govkey().sk.sign(&msg, None);
     let mut out = Vec::new();
-    out.push(11u8); // TAG_ENC_ROUND
-    out.extend_from_slice(&MARKET.to_le_bytes());
-    out.extend_from_slice(&BASE.to_le_bytes());
-    out.extend_from_slice(&QUOTE.to_le_bytes());
-    out.push(k as u8);
+    out.push(9u8); // TAG_ENC_SETUP
+    out.push(n);
     out.extend_from_slice(pks);
-    out.extend_from_slice(&(sealed.len() as u16).to_le_bytes());
-    // ciphertexts
-    let mut cts: Vec<Vec<u8>> = Vec::new();
-    for (o, seed) in sealed {
-        let ob = order_bytes(o);
-        let (c1, body) = encrypt(&ob, &joint, seed);
-        out.extend_from_slice(&c1);
-        out.push(body.len() as u8);
-        out.extend_from_slice(&body);
-        let mut ct = Vec::new();
-        ct.extend_from_slice(&c1);
-        ct.extend_from_slice(&body);
-        cts.push(ct);
-    }
-    // partials: per ciphertext, one proven partial per member
-    let mut first = true;
-    for ct in &cts {
-        let c1 = &ct[..POINT_LEN];
-        for (i, m) in members.iter().enumerate() {
-            let mut p = partial_decrypt(c1, m, &[i as u8, 99]).expect("partial");
-            if tamper && first {
-                p[POINT_LEN + POINT_LEN + 1] ^= 0x01; // corrupt z of the first partial
-                first = false;
-            }
-            out.extend_from_slice(&p);
-        }
-    }
-    let _ = PARTIAL_LEN;
-    // plaintext (resting book + public orders)
-    out.extend_from_slice(&wire::encode_orders(plaintext));
+    out.extend_from_slice(&nonce.to_le_bytes());
+    out.extend_from_slice(&*sig);
     out
 }
 
-fn ord(account: u32, id: u32, side: Side, price_disp: u32, qty_disp: u32) -> Order {
-    Order { account, id, side, price: price_disp * SCALE, qty: qty_disp * SCALE }
+/// Assemble the ENC_ROUND payload: for each (C1, body) ciphertext, every member contributes a
+/// proven partial decryption; refine will verify + decrypt + clear. `plaintext` = resting book
+/// + public orders (17B each). The committee keys are embedded so accumulate can hash-check them.
+fn assemble_round(
+    members: &[Member],
+    blob: &[u8],
+    market: u32,
+    base: u32,
+    quote: u32,
+    ciphertexts: &[(Vec<u8>, Vec<u8>)],
+    plaintext: &[u8],
+) -> Vec<u8> {
+    let k = members.len();
+    let pks = &blob[1..];
+    let mut out = Vec::new();
+    out.push(11u8); // TAG_ENC_ROUND
+    out.extend_from_slice(&market.to_le_bytes());
+    out.extend_from_slice(&base.to_le_bytes());
+    out.extend_from_slice(&quote.to_le_bytes());
+    out.push(k as u8);
+    out.extend_from_slice(pks);
+    out.extend_from_slice(&(ciphertexts.len() as u16).to_le_bytes());
+    for (c1, body) in ciphertexts {
+        out.extend_from_slice(c1);
+        out.push(body.len() as u8);
+        out.extend_from_slice(body);
+    }
+    // partials: per ciphertext, one proven partial per member. The proof nonce is bound to
+    // (sk, C1) inside vdec, so a constant per-member seed here is safe (no nonce reuse leak).
+    for (c1, _body) in ciphertexts {
+        for (i, m) in members.iter().enumerate() {
+            let p = partial_decrypt(c1, m, &[i as u8]).expect("partial");
+            out.extend_from_slice(&p);
+        }
+    }
+    out.extend_from_slice(plaintext);
+    out
 }
 
-fn scenario(gov_byte: u8) {
-    // the real committee (2 members) that the chain commits to
-    let (members, joint, blob) = committee(2, 0x11);
-    let n = blob[0];
-    let pks = &blob[1..];
+fn cmd_setup() {
+    let (_members, _joint, blob) = fixed_committee();
+    println!("setup {}", hex(&setup_payload(&blob, 0)));
+    println!("committee {}", hex(&blob));
+}
 
-    // gov-signed ENC_SETUP (nonce 0), signed by the documented demo governance key
-    let _ = gov_byte; // (legacy arg; the demo gov key is the documented GOV_SEED)
-    let msg = canon_committee(n, pks, 0);
-    let gov = govkey();
-    let sig = gov.sk.sign(&msg, None);
-    let mut setup = Vec::new();
-    setup.push(9u8); // TAG_ENC_SETUP
-    setup.push(n);
-    setup.extend_from_slice(pks);
-    setup.extend_from_slice(&0u64.to_le_bytes());
-    setup.extend_from_slice(&*sig);
-    println!("setup {}", hex(&setup));
+fn cmd_encrypt(market: u32, order_hex: &str, seed_hex: &str) {
+    let (_members, joint, _blob) = fixed_committee();
+    let order = unhex(order_hex);
+    let seed = unhex(seed_hex);
+    let (c1, body) = encrypt(&order, &joint, &seed);
+    let mut ct = Vec::with_capacity(POINT_LEN + body.len());
+    ct.extend_from_slice(&c1);
+    ct.extend_from_slice(&body);
+    let mut commit = Vec::new();
+    commit.push(10u8); // TAG_ENC_COMMIT
+    commit.extend_from_slice(&market.to_le_bytes());
+    commit.extend_from_slice(&ct);
+    println!("ciphertext {}", hex(&ct));
+    println!("commit {}", hex(&commit));
+}
 
-    // two crossing sealed orders: buy 5 @100 (acct 8) and sell 5 @100 (acct 7)
-    let buy = ord(8, 1, Side::Buy, 100, 5);
-    let sell = ord(7, 2, Side::Sell, 100, 5);
-    let (c_buy, _) = enc_commit(&buy, &joint, b"seed-buy");
-    let (c_sell, _) = enc_commit(&sell, &joint, b"seed-sell");
-    println!("commit_buy {}", hex(&c_buy));
-    println!("commit_sell {}", hex(&c_sell));
+fn cmd_round(market: u32, base: u32, quote: u32, plaintext_hex: &str, ct_csv: &str) {
+    let (members, _joint, blob) = fixed_committee();
+    let plaintext = if plaintext_hex.is_empty() { Vec::new() } else { unhex(plaintext_hex) };
+    let mut cts: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+    for cthex in ct_csv.split(',').filter(|s| !s.trim().is_empty()) {
+        let ct = unhex(cthex);
+        let (c1, body) = ct.split_at(POINT_LEN);
+        cts.push((c1.to_vec(), body.to_vec()));
+    }
+    let payload = assemble_round(&members, &blob, market, base, quote, &cts, &plaintext);
+    println!("round {}", hex(&payload));
+}
 
-    let sealed: [(Order, &[u8]); 2] = [(buy, b"seed-buy"), (sell, b"seed-sell")];
+fn ord_bytes(account: u32, id: u32, side_buy: bool, price_disp: u32, qty_disp: u32) -> Vec<u8> {
+    const SCALE: u32 = 10_000;
+    let side = if side_buy { match_engine::Side::Buy } else { match_engine::Side::Sell };
+    let o = match_engine::Order { account, id, side, price: price_disp * SCALE, qty: qty_disp * SCALE };
+    wire::encode_orders(core::slice::from_ref(&o))
+}
 
-    // honest round
-    println!("round {}", hex(&enc_round(&members, &blob, &sealed, &[], false)));
-    // tampered proof -> refine rejects (empty output)
-    println!("round_tampered {}", hex(&enc_round(&members, &blob, &sealed, &[], true)));
-    // wrong committee -> refine decrypts self-consistently but committee_hash mismatches
-    // the on-chain committee -> accumulate rejects
-    let (evil_members, _evil_joint, evil_blob) = committee(2, 0x99);
-    // re-encrypt to the evil joint so the evil committee can actually decrypt
-    let evil_joint = {
-        let affs: Vec<_> = evil_members.iter().map(|m| m.pk).collect();
-        joint_pk(&affs)
+/// The e2e scenario driver: emits ENC_SETUP + two ENC_COMMITs + honest/tampered/wrong-committee/
+/// injected ENC_ROUNDs. Kept identical in shape to the modular commands (one assembler).
+fn scenario(_gov_byte: u8) {
+    let market = 1u32;
+    let (base, quote) = (10u32, 20u32);
+    let (members, joint, blob) = fixed_committee();
+
+    println!("setup {}", hex(&setup_payload(&blob, 0)));
+
+    let buy = ord_bytes(8, 1, true, 100, 5);
+    let sell = ord_bytes(7, 2, false, 100, 5);
+    let (c1b, bb) = encrypt(&buy, &joint, b"seed-buy");
+    let (c1s, bs) = encrypt(&sell, &joint, b"seed-sell");
+    let ct_buy = [c1b.to_vec(), bb.clone()].concat();
+    let ct_sell = [c1s.to_vec(), bs.clone()].concat();
+    let mk_commit = |ct: &[u8]| {
+        let mut c = Vec::new();
+        c.push(10u8);
+        c.extend_from_slice(&market.to_le_bytes());
+        c.extend_from_slice(ct);
+        c
     };
-    let _ = evil_joint;
+    println!("commit_buy {}", hex(&mk_commit(&ct_buy)));
+    println!("commit_sell {}", hex(&mk_commit(&ct_sell)));
+
+    let cts = vec![(c1b.to_vec(), bb.clone()), (c1s.to_vec(), bs.clone())];
+    // honest
+    println!("round {}", hex(&assemble_round(&members, &blob, market, base, quote, &cts, &[])));
+    // tampered: flip a byte in the assembled partials region (after header+cts)
+    let mut tampered = assemble_round(&members, &blob, market, base, quote, &cts, &[]);
+    let tlen = tampered.len();
+    tampered[tlen - 1] ^= 0x01; // corrupt the last partial's z tail
+    println!("round_tampered {}", hex(&tampered));
+    // wrong committee: build with a DIFFERENT committee (keys + partials) -> committee-hash mismatch
+    let evil_members: Vec<Member> = (0..COMMITTEE_SIZE).map(|i| keygen(&[i as u8, 0x99, 7])).collect();
+    let evil_affs: Vec<_> = evil_members.iter().map(|m| m.pk).collect();
+    let evil_joint = joint_pk(&evil_affs);
+    let evil_pks = pack_committee(&evil_affs);
+    let mut evil_blob = vec![COMMITTEE_SIZE as u8];
+    evil_blob.extend_from_slice(&evil_pks);
+    // re-encrypt to the evil joint so the evil committee can actually decrypt its own ciphertexts
+    let (ec1b, ebb) = encrypt(&buy, &evil_joint, b"seed-buy");
+    let (ec1s, ebs) = encrypt(&sell, &evil_joint, b"seed-sell");
+    let evil_cts = vec![(ec1b.to_vec(), ebb), (ec1s.to_vec(), ebs)];
     println!(
         "round_wrongcommittee {}",
-        hex(&enc_round(&evil_members, &evil_blob, &sealed, &[], false))
+        hex(&assemble_round(&evil_members, &evil_blob, market, base, quote, &evil_cts, &[]))
     );
-    // injected ciphertext never committed on-chain -> accumulate consume-or-reject fails
-    let inject = ord(9, 3, Side::Buy, 105, 5);
-    let sealed3: [(Order, &[u8]); 3] =
-        [(buy, b"seed-buy"), (sell, b"seed-sell"), (inject, b"seed-inject-uncommitted")];
-    println!("round_injected {}", hex(&enc_round(&members, &blob, &sealed3, &[], false)));
+    // injected: a third ciphertext never committed on-chain -> accumulate consume-or-reject
+    let inject = ord_bytes(9, 3, true, 105, 5);
+    let (c1i, bi) = encrypt(&inject, &joint, b"seed-inject-uncommitted");
+    let mut cts3 = cts.clone();
+    cts3.push((c1i.to_vec(), bi));
+    println!("round_injected {}", hex(&assemble_round(&members, &blob, market, base, quote, &cts3, &[])));
+}
+
+fn govpub() {
+    let pk = govkey().pk;
+    print!("gov_pubkey ");
+    for (i, b) in pk.as_ref().iter().enumerate() {
+        print!("0x{:02x}, ", b);
+        if i % 16 == 15 {
+            print!("\n           ");
+        }
+    }
+    println!();
+    println!("gov_pubkey_hex {}", hex(pk.as_ref()));
 }
 
 fn govfind() {
@@ -197,41 +242,21 @@ fn govfind() {
     println!("gov_seed_byte NOTFOUND");
 }
 
-/// Documented demo governance seed (exactly 32 bytes). The service bakes the matching
-/// GOV_PUBKEY; production replaces both with a DAO/multisig key. Printing the pubkey lets us
-/// bake it and lets the demo/tests actually sign governance ops (treasury + committee setup).
-const GOV_SEED: [u8; 32] = *b"jamswap:demo:governance:key:v1!!";
-
-fn govkey() -> KeyPair {
-    KeyPair::from_seed(Seed::new(GOV_SEED))
-}
-
-fn govpub() {
-    let kp = govkey();
-    // print as a Rust byte-array literal ready to paste into GOV_PUBKEY
-    let pk = kp.pk;
-    print!("gov_pubkey ");
-    for (i, b) in pk.as_ref().iter().enumerate() {
-        print!("0x{:02x}, ", b);
-        if i % 16 == 15 {
-            print!("\n           ");
-        }
-    }
-    println!();
-    println!("gov_pubkey_hex {}", hex(pk.as_ref()));
-}
-
 fn main() {
-    let cmd = std::env::args().nth(1).unwrap_or_default();
-    match cmd.as_str() {
-        "govfind" => govfind(),
+    let _ = MARKET_UNUSED;
+    let a: Vec<String> = std::env::args().collect();
+    let cmd = a.get(1).map(|s| s.as_str()).unwrap_or("");
+    let p = |i: usize| a.get(i).cloned().unwrap_or_default();
+    let pu = |i: usize| p(i).parse::<u32>().unwrap_or(0);
+    match cmd {
+        "setup" => cmd_setup(),
+        "encrypt" => cmd_encrypt(pu(2), &p(3), &p(4)),
+        "round" => cmd_round(pu(2), pu(3), pu(4), &p(5), &p(6)),
+        "scenario" => scenario(pu(2) as u8),
         "govpub" => govpub(),
-        "scenario" => {
-            let g: u8 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(0);
-            scenario(g);
-        }
+        "govfind" => govfind(),
         _ => {
-            eprintln!("usage: committee <govfind|scenario <gov_seed_byte>>");
+            eprintln!("usage: committee <setup | encrypt <market> <order_hex> <seed_hex> | round <m> <b> <q> <plaintext_hex> <ct_csv> | scenario <gov> | govpub | govfind>");
             std::process::exit(2);
         }
     }

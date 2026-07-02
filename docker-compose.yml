@@ -23,7 +23,12 @@ services:
     restart: unless-stopped
 
   dex:                              # off-chain builder API + trading UI
-    image: python:3-slim
+    # Built (not pulled) so the encrypt-until-batch committee sidecar (Rust) ships inside the
+    # image; COMMITTEE_BIN is baked in => sealed orders use option 2 (no reveal round). The
+    # build compiles the committee binary once (arkworks) then runs the stdlib-only Python server.
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
     depends_on:
       lasair-node:
         condition: service_healthy
@@ -35,8 +40,9 @@ services:
       JAM: /work/jamswap-service.jam
       PORT: "8080"
       PYTHONUNBUFFERED: "1"           # so the "deployed -> service id N" line shows in `docker compose logs`
+      # ENC_MODE: "0"                 # uncomment to force commit-reveal (option 3) instead
     volumes:
-      - ./offchain:/app:ro
+      - ./offchain:/app:ro            # live-edit the server; the committee binary lives in /usr/local/bin
       - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
     working_dir: /app
     command: ["python3", "server.py"]
