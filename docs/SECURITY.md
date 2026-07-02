@@ -54,6 +54,15 @@ carries the asterisk noted here.
   (chooses which orders/book to include); that role is inherently trusted in any
   exchange, but the **matching over the included inputs is fully validator-audited**,
   and orders are **sealed until the batch closes** (no intra-round front-running).
+  The builder **cannot fabricate an order that was never committed** (this was a
+  real bug: `refine` checks reveals against the *builder-supplied* commits blob,
+  and `accumulate` used to consume commitments without verifying they existed
+  on-chain — a builder could pad the blob with a fake hash and settle an
+  uncommitted order. Fixed consume-or-reject: `accumulate` now requires every
+  revealed commitment to match a distinct on-chain entry, else the whole round is
+  dropped before settlement; proven e2e — the pre-fix blob settles the injected
+  order, the fixed blob rejects the round while honest rounds still clear).
+  Residual builder power is censorship/ordering within a round, never fabrication.
 - **What sealing does and doesn't hide (precise model).** A sealed order is hidden
   (only its Blake2s256 commitment is on-chain) **until the auction it clears in**. At
   that auction it is revealed on-chain to be matched — so the reveal is **transiently

@@ -247,10 +247,15 @@ fn apply_settlement(base: u32, quote: u32, market: u32, settle: &[u8]) {
     set_storage(&mkey(b"cv", market), &cum.to_le_bytes()).ok();
 }
 
-// Remove each 32-byte hash in `consumed` from the stored commitments blob (first match per
-// hash). Commitments that were NOT revealed this round are preserved — no wholesale wipe, so
-// an order committed-but-not-yet-revealed (e.g. cancelled in the mempool) isn't destroyed.
-fn consume_commits(market: u32, consumed: &[u8]) {
+// Verify each 32-byte hash in `consumed` against the stored commitments blob (each consumed
+// hash must claim a DISTINCT stored entry), then remove the matched entries. Commitments that
+// were NOT revealed this round are preserved — no wholesale wipe, so an order
+// committed-but-not-yet-revealed (e.g. cancelled in the mempool) isn't destroyed.
+// Returns false — leaving storage untouched — if any consumed hash has no stored match:
+// refine only checks reveals against the BUILDER-supplied commits blob, so a hash missing
+// on-chain means the builder injected an order that was never committed, and the whole round
+// must be rejected rather than settled.
+fn consume_commits(market: u32, consumed: &[u8]) -> bool {
     let key = mkey(b"commits", market);
     let stored = get_storage(&key).unwrap_or_default();
     let n = stored.len() / 32;
@@ -258,11 +263,16 @@ fn consume_commits(market: u32, consumed: &[u8]) {
     removed.resize(n, false);
     for c in 0..(consumed.len() / 32) {
         let h = &consumed[c * 32..c * 32 + 32];
+        let mut found = false;
         for j in 0..n {
             if !removed[j] && &stored[j * 32..j * 32 + 32] == h {
                 removed[j] = true;
+                found = true;
                 break;
             }
+        }
+        if !found {
+            return false;
         }
     }
     let mut out = Vec::with_capacity(stored.len());
@@ -272,6 +282,7 @@ fn consume_commits(market: u32, consumed: &[u8]) {
         }
     }
     set_storage(&key, &out).ok();
+    true
 }
 
 impl Service for Jamswap {
@@ -488,7 +499,11 @@ impl Service for Jamswap {
                     }
                     let consumed = &out[consumed_off..consumed_off + consumed_len];
                     let book = &out[consumed_off + consumed_len..];
-                    consume_commits(market, consumed);
+                    // consume-or-reject BEFORE settling: every revealed commitment must exist
+                    // on-chain, else the builder smuggled in an uncommitted order.
+                    if !consume_commits(market, consumed) {
+                        continue;
+                    }
                     set_storage(&mkey(b"book", market), book).ok();
                     apply_settlement(base, quote, market, settle);
                 }
