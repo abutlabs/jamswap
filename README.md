@@ -12,6 +12,8 @@ re-checked by every validator on the network.
 **New here? Start with the three sections below** — what it is, how it works, and how
 it hides your orders. Then [try it in one command](#try-it-in-one-command).
 
+![Jamswap-demo](./docs/demo.gif)
+
 ---
 
 ## What is it? (and why it couldn't exist before)
