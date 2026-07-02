@@ -15,6 +15,7 @@ every push.
 | **3e. Execution reports** | `offchain/tests/test_executions.py` | the **per-order fill receipts** — filled qty @ uniform price + remainder disposition (rested / cancelled), per account | Python (stdlib) |
 | **3f. JAMKB standard** | `offchain/tests/test_jamkb_standard.py` | **solvency backpressure** (refuse new state while under-reserved) + beneficiary reserve top-up | Python (stdlib) |
 | **3g. Order lifetime** | `offchain/tests/test_order_lifetime.py` | **anti-bloat** — rent-funded expiry (sealed sooner than public, hard-capped), GTC never infinite, per-account open-order cap | Python (stdlib) |
+| **3h. Sealed carry** | `offchain/tests/test_sealed_carry.py` | a **large sealed order accumulates fills across auctions** — its partial-fill remainder is re-sealed and carried forward (not cancelled), unless expired | Python (stdlib) |
 | **4. End-to-end** | `offchain/test_enc_round.py`, `offchain/test_sealed_resting_e2e.py` | the real service on a live node: honest settles, tampered/injected rejected, sealed orders rest & cross across rounds | Docker + node |
 
 ## Why layer 3 exists (the bug it caught)

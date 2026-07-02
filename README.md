@@ -182,6 +182,19 @@ state you're paying for. The knobs (`ORDER_RENT_BUDGET_KBS`, `MAX_RESTING_SECS`,
 guards are tested in `offchain/tests/test_order_lifetime.py`. The live UI shows each order's
 countdown and the current policy under **Time in force**.
 
+### Big orders accumulate liquidity across batches
+
+A single 6-second auction rarely has enough crossing supply to fill a large order at once —
+a 250-lot buy against 10-lot asks fills 10 this round. So a big order **keeps working across
+successive auctions**, filling more each round until it's complete or expires, rather than
+grabbing 2% and giving up. Public (and market) orders do this by **resting in the book**;
+sealed orders do it privately — the builder **re-seals each round's unfilled remainder into a
+fresh hidden commitment and carries it forward**, so a large sealed order accumulates fills
+while staying hidden (never resting exposed). The **Execution report** shows it happening:
+`filled 10 @ 1.30 · 240 working`, then `filled 10 @ 1.20 · 230 working`, and so on. See
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) → "Partial fills"; tested in
+`offchain/tests/test_sealed_carry.py`.
+
 ---
 
 ## Try it in one command

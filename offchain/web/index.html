@@ -818,8 +818,9 @@ function renderMine(){
 // per-order fill receipts — what the matching engine actually did with each of your orders
 const EXEC_DISPO = {
   "filled":            {label:"filled",             color:"#4ADE80", note:o=>""},
+  "partial-carried":   {label:"partial · working",  color:"#38BDF8", note:o=>o.remainder+" carried (hidden, still working)"},
   "partial-resting":   {label:"partial · rested",   color:"#FBBF24", note:o=>o.remainder+" resting"},
-  "partial-cancelled": {label:"partial · cancelled",color:"#FB923C", note:o=>o.remainder+" cancelled"},
+  "partial-cancelled": {label:"partial · cancelled",color:"#FB923C", note:o=>o.remainder+" cancelled (expired)"},
   "resting":           {label:"resting",            color:"#93C5FD", note:o=>o.qty+" resting"},
   "cancelled":         {label:"cancelled",          color:"#F87171", note:o=>"no supply at your limit"},
 };

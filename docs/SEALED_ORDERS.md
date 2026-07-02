@@ -66,11 +66,14 @@ you committed earlier, then includes it in the auction.
 - **What it still leaks:** the reveal is **briefly public** at clearing time (too late
   to front-run *that* batch, but visible after). And it needs a **reveal step** — if you
   commit and then never reveal, you've wasted a slot ("non-reveal griefing").
-- **Rests hidden until it crosses:** a sealed order that finds no counterparty is *not*
-  revealed and *not* discarded — it stays hidden (only its commitment on-chain) and is
-  retried each auction, revealing its terms only in the round it actually crosses (see
-  "How sealed orders rest" below). Any unfilled remainder of a *revealed* order is
-  immediate-or-cancel — it never rests in the public book with its terms exposed.
+- **Rests hidden until it crosses, and keeps working after a partial fill:** a sealed order
+  that finds no counterparty is *not* revealed and *not* discarded — it stays hidden (only its
+  commitment on-chain) and is retried each auction, revealing its terms only in the round it
+  actually crosses (see "How sealed orders rest" below). When it *does* cross but only partially
+  fills, its remainder never rests in the public book with its terms exposed (immediate-or-cancel
+  on-chain); instead the builder **re-seals the remainder into a fresh commitment and carries it
+  forward**, so a large sealed order accumulates fills across many auctions while staying hidden,
+  until it's complete or its good-till-time expires.
 
 This is the simplest, most trust-minimal rung: **no third party at all**. It's the
 `ENC_MODE=0` fallback in Jamswap.

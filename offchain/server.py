@@ -320,6 +320,24 @@ def open_order_count(m, acct):
         if a == acct:
             n += 1
     return n
+def _post_seal(m, o):
+    # Post a fresh on-chain commitment/ciphertext for a sealed order dict
+    # {account,oid,side,price,qty}, hiding its terms. Used both at placement AND to re-seal the
+    # unfilled remainder of a partially-filled order so it carries forward (still hidden).
+    ob = order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"])
+    if ENC_MODE:
+        # encrypt-until-batch: ECIES-encrypt to the committee key; the terms never touch the
+        # chain in the clear until they clear. No nonce/reveal needed.
+        seed = secrets.token_bytes(32).hex()
+        d = committee_run("encrypt", m, ob.hex(), seed)
+        o["ciphertext"] = d["ciphertext"]
+        submit(bytes.fromhex(d["commit"]))
+    else:
+        # commit-reveal: publish ONLY the hash now (order hidden), reveal at the round it crosses.
+        nonce = secrets.token_bytes(32)
+        o["reveal"] = ob + nonce
+        submit(bytes([TAG_COMMIT]) + struct.pack("<II", m, o["account"]) + commitment(o["reveal"]))
+    return o
 def api_order(b):
     m = int(b["market"])
     side = BUY if b["side"] == "buy" else SELL
@@ -384,20 +402,7 @@ def api_order(b):
     o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty, "type": otype,
          "sealed": sealed, "address": b.get("address", "")}
     if o["sealed"]:
-        if ENC_MODE:
-            # encrypt-until-batch: ECIES-encrypt the order to the committee key and post the
-            # ciphertext (ENC_COMMIT). No nonce/reveal is ever needed — the committee decrypts
-            # at batch close and refine verifies the decryption. The order terms never touch
-            # the chain in the clear until they clear.
-            seed = secrets.token_bytes(32).hex()
-            d = committee_run("encrypt", m, order_bytes(acct, oid, side, price, qty).hex(), seed)
-            o["ciphertext"] = d["ciphertext"]
-            submit(bytes.fromhex(d["commit"]))
-        else:
-            # commit-reveal: publish ONLY the hash now (orders hidden on-chain), reveal at round
-            nonce = secrets.token_bytes(32)
-            o["reveal"] = order_bytes(acct, oid, side, price, qty) + nonce
-            submit(bytes([TAG_COMMIT]) + struct.pack("<II", m, acct) + commitment(o["reveal"]))
+        _post_seal(m, o)               # post a fresh on-chain commitment/ciphertext (terms hidden)
     with _lock:
         pending.setdefault(m, []).append(o)
         n = len(pending[m])
@@ -472,13 +477,38 @@ def api_round(b):
         # expired one — an empty cross conserves value and leaves the last price untouched
         # (apply_settlement only updates lp when something actually fills).
         submit(bytes([TAG_MATCH]) + hdr + rest + public_bytes)
-    # per-order fill receipts for the UI: recompute this round's clearing (mirrors refine)
-    # and attribute fills to the submitting traders + any resting makers that filled.
-    try: record_executions(m, resting_orders, sealed, public)
+    # This round's clearing (mirrors refine); reused for the receipt AND to carry sealed remainders.
+    combined = resting_orders + sealed + public
+    clearing = clear(combined) if combined else {"price": 0, "volume": 0, "fills": {}}
+    fills = clearing["fills"]
+    # A big order rarely fills against one 6 s batch's thin supply. Public/market remainders
+    # already REST in the on-chain book and keep filling across auctions. Sealed remainders are
+    # IOC on-chain (the service excludes them from the public book so they're never exposed) — so
+    # to give sealed orders the SAME cross-batch persistence, the builder re-seals each revealed
+    # order's unfilled remainder into a FRESH hidden commitment and carries it forward. A 250-lot
+    # sealed buy thus accumulates 10-lot fills over successive auctions until filled or expired,
+    # while staying hidden — instead of losing 240 to cancellation.
+    carried = []
+    for o in sealed:
+        rem = o["qty"] - fills.get(o["oid"], 0)
+        exp = order_expiry.get((m, o["account"], o["oid"]))
+        if rem > 0 and not (exp and exp <= now):
+            r = {"account": o["account"], "oid": o["oid"], "side": o["side"], "price": o["price"],
+                 "qty": rem, "type": o.get("type", "limit"), "sealed": True, "address": o.get("address", "")}
+            _post_seal(m, r)
+            carried.append(r)
+            o["_carried"] = rem        # mark for the execution report (partial-carried, not cancelled)
+    if carried:
+        with _lock:
+            pending.setdefault(m, []).extend(carried)
+    # per-order fill receipts for the UI: attribute this round's fills to the submitting traders
+    # and any resting makers that filled (uses the clearing computed above).
+    try: record_executions(m, resting_orders, sealed, public, clearing)
     except Exception as e: print("exec record failed", m, e)
     return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
             "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
-            "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
+            "resting_hidden": len(plan.carry), "carried_remainder": len(carried),
+            "expired": len(plan.expired)}}
 def short(a):
     return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a
 def mempool_entry(o, owner=False):
@@ -678,27 +708,32 @@ def load_execs():
     except Exception:
         pass
 def _record_exec(o, filled, price, sealed, now):
-    # append one order's outcome to its owner's receipt feed. `sealed` ⇒ the unfilled
-    # remainder was immediate-or-cancel (dropped); otherwise it rests in the book.
+    # append one order's outcome to its owner's receipt feed. For a sealed order the unfilled
+    # remainder either CARRIES forward re-sealed (o["_carried"]) or, if expired, is cancelled;
+    # a public order's remainder rests in the book.
     qty, rem = o["qty"], o["qty"] - filled
     if filled >= qty:
         disp_ = "filled"
     elif sealed:
-        disp_ = "partial-cancelled" if filled > 0 else "cancelled"   # IOC remainder dropped
+        if o.get("_carried"):
+            disp_ = "partial-carried"                                # rests hidden, keeps working
+        else:
+            disp_ = "partial-cancelled" if filled > 0 else "cancelled"   # expired remainder dropped
     else:
         disp_ = "partial-resting" if filled > 0 else "resting"       # remainder rests in book
     dq = executions.setdefault(o["account"], deque(maxlen=EXEC_HISTORY))
     dq.append({"ts": now, "market": o["market"], "side": o["side"],
                "price": disp(price), "qty": disp(qty), "filled": disp(filled),
                "remainder": disp(rem), "disposition": disp_, "oid": o["oid"]})
-def record_executions(m, resting, reveal, public):
-    # recompute this round's clearing over the exact batch handed to refine and write a
-    # per-order receipt for the trader-submitted orders (reveal=sealed IOC, public=rests) and
-    # any resting maker that filled. No-op when nothing crossed.
+def record_executions(m, resting, reveal, public, clearing=None):
+    # write a per-order receipt for the trader-submitted orders (reveal=sealed, public=rests) and
+    # any resting maker that filled, from this round's clearing. `clearing` may be passed in (api_round
+    # computes it once, for both the receipt and the sealed-remainder carry); recomputed if omitted.
+    # No-op when nothing crossed.
     combined = list(resting) + list(reveal) + list(public)
     if not combined:
         return
-    c = clear(combined)
+    c = clearing if clearing is not None else clear(combined)
     price, fills = c["price"], c["fills"]
     reveal_ids = {o["oid"] for o in reveal}
     now = time.time()

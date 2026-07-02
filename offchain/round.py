@@ -28,6 +28,12 @@ This makes sealed orders genuinely *rest* (hidden), and it **strengthens** the
 privacy guarantee: a sealed order's terms are revealed only in the round it actually
 clears, never merely because an auction ticked.
 
+`plan_round` decides reveal-vs-carry for *not-yet-crossed* orders. The complementary
+case — a revealed order that crosses but only **partially fills** — is handled in
+`server.api_round`: its remainder is re-sealed (fresh commitment) and re-queued, so a
+large sealed order accumulates fills across many auctions instead of losing the unfilled
+part to on-chain immediate-or-cancel. Both paths respect the good-till-time expiry.
+
 ### Why it's clearing-neutral (correctness)
 
 A sealed order that does **not** cross is, by definition, non-marketable at any
