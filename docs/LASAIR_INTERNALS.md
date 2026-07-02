@@ -61,8 +61,12 @@ lasair today. There is no host call that avoids it.
   - Full anonymous-vote refine (Groth16 + Merkle/nullifier logic): **59,855,977 gas**
     (zk-jam-service `services/voting/README.md:50`), verified e2e on a lasair-node.
   - Jamswap FBA match of 3 orders: **7,476 gas** (`docs/M1_DEMO.md:20`).
-  - **ed25519 verify ~195k gas: NOT committed anywhere** — it exists only in team
-    memory. Neither is a Blake2s number. → action item below.
+  - **ed25519-compact verify: 1,312,932 gas/op** and **Blake2s256 (64B): 2,759
+    gas/op** — MEASURED 2026-07-02 (zk-jam-service `spikes/crypto-gas/`, same rig
+    as the Groth16 spike). This **corrects the remembered ~195k figure, which was
+    6.7× too low and never sourced.** One Groth16 verify (56.1M) ≈ 43 ed25519
+    verifies — the break-even that motivates proving signatures instead of
+    checking them per-order (see Q7/Q9).
 
 ## Q3 — PVM stack/memory model
 
@@ -162,11 +166,13 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
   signatures are verified node-side (`lib/guaranteeing.ml:203-209`).
 - **No service-usable signature-verification host call exists** (see Q1). Every
   per-order ed25519 verify in refine is full in-PVM interpretation at 1 gas/instruction.
-  At the remembered ~195k gas/verify (uncommitted — see action items), a full-spec
-  refine budget of 5e9 gas admits ~25,000 verifies even before batching tricks; at
-  tiny (1e9) ~5,000. Signature checking will not be the batch bound — input size is
-  (Q9) — but for the ZK-matcher architecture the right move is to fold signature
-  validity into the proof and verify nothing per-order on-chain.
+  At the **measured 1,312,932 gas/verify** (zk-jam-service `spikes/crypto-gas/`), a
+  full-spec refine budget of 5e9 gas admits **~3,800 verifies**; tiny (1e9) ~760.
+  That is well below the input ceiling (~25k–69k orders, Q9), so **signature
+  checking becomes the binding constraint** for a signed-order batch — the
+  strongest argument for the ZK-matcher architecture: fold signature validity into
+  one off-chain proof (Groth16 verify = 56.1M gas ≈ 43 ed25519 verifies) and check
+  nothing per-order on-chain.
 
 ## Q8 — Proof systems verified in a lasair refine
 
@@ -195,11 +201,16 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
 | Accumulate per report G_A | 10,000,000 (both specs) | `lib/pvm_host.ml:101`, `conformance/reports_stf.ml:443-450` |
 | Accumulate per block G_T | 20M tiny / 3.5e9 full | `lib/spec.ml:55,74` |
 
-- **The batch is input-bound:** ~13.15 MiB of bundle → **≈27,500 orders @ 500 B /
-  ≈68,900 @ 200 B** via extrinsic blobs (or ~25k/63k via imported segments — maxing
-  imports fills the bundle because each import charges a 4488 B footprint,
-  `lib/work_packages.ml:39,312`).
-- Gas is order-count-independent if matching is proven off-chain (one ~56M-gas verify).
+- **The batch bound depends on how orders are validated:**
+  - *Signed orders verified per-order in refine:* **gas-bound at ~3,800 orders**
+    (5e9 full ÷ 1.31M gas/ed25519 verify — measured, `spikes/crypto-gas/`), long
+    before the input ceiling.
+  - *Matching proven off-chain (ZK-matcher):* gas is order-count-independent (one
+    ~56M-gas Groth16 verify), so the batch is **input-bound** at ~13.15 MiB of
+    bundle → **≈27,500 orders @ 500 B / ≈68,900 @ 200 B** via extrinsic blobs (or
+    ~25k/63k via imported segments — each import charges a 4488 B footprint,
+    `lib/work_packages.ml:39,312`).
+  - Break-even ≈ 43 orders: above that, one SNARK beats per-order signature checks.
 - Output forces the zk-rollup shape regardless: refine must emit a constant-size
   commitment (new book root + fill summary), because per-order output dies at the
   48 KiB report cap; accumulate must be O(1) per batch inside 10M gas.
@@ -252,8 +263,10 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
 
 ## Action items surfaced by this audit
 
-- [ ] **Benchmark and commit the in-PVM ed25519-verify and Blake2s gas numbers** — the
-      ~195k figure exists only in team memory; nothing is committed anywhere.
+- [x] **Benchmark and commit the in-PVM ed25519-verify and Blake2s gas numbers** —
+      DONE 2026-07-02: ed25519-compact verify = 1,312,932 gas, Blake2s256 (64B) =
+      2,759 gas (zk-jam-service `spikes/crypto-gas/`). Corrected the ~195k memory
+      (6.7× too low). Consequence folded into Q7/Q9 above.
 - [ ] **lasair conformance gap:** refine's host-call set is not gated per GP — `read`/
       `write`/`new`/etc. execute in refine against the ephemeral context instead of
       WHAT, while `historical_lookup` (which GP refine allows) returns WHAT
