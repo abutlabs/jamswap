@@ -264,9 +264,16 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
    verified batch to **~880/n orders** (refine-gas-bound), so above ~10–20 orders a single
    batch ZK proof wins — the convergence with option 1. t-of-n is a drop-in (same proof,
    same refine cost).
-3. **Option 1 (ZK dark-pool matcher) is verify-side cheap** (~56M gas, 1.1% of full
-   G_R, measured) — the hard part is circuit/prover engineering and the
-   relayer-liveness model, not the chain.
+3. **Option 1 (ZK dark-pool matcher) is verify-side cheap — PROVEN**: one Groth16
+   proof settles a whole batch in refine at **60.1M gas (1.20% of full G_R),
+   FLAT in order count** (zk-jam-service `spikes/fba-zk/`). The circuit proves
+   settlement validity in ZK (every filled order marketable at p*, fills within
+   qty, base conservation, bound to a commitment of the hidden orders); a lied
+   settlement is rejected. Orders never appear on-chain. Not-yet-proven:
+   p*-optimality (argmax) — the documented next circuit layer. This is also
+   option 2's scaling answer (fold decryption+matching into one proof → the
+   per-order ~n·5.6M vanishes). Remaining work is circuit maturity (optimality,
+   larger N) + binding orders_commitment to the on-chain sealed set, not the chain.
 4. Batch capacity is generous: tens of thousands of sealed orders per work-package,
    input-bound, provided refine outputs a constant-size commitment and accumulate is O(1).
 
