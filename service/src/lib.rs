@@ -16,12 +16,12 @@ use match_engine::{clear, resting, wire, Order, Side};
 declare_service!(Jamswap);
 struct Jamswap;
 
-// ed25519 verification (curve field arithmetic) needs more stack than polkavm's small
-// default — without this the verify traps and the whole accumulate rolls back. 1 MiB is
-// ample for ed25519 (the sibling zk-jam-service bumps to 4 MiB for BN254 pairing).
-// PVM-target only; skipped on host builds (CI compile gate).
+// Curve field arithmetic needs more stack than polkavm's small default — without this a
+// verify traps and the whole invocation rolls back. 4 MiB covers both ed25519 (account auth)
+// and BN254 G1 scalar mults (the encrypt-until-batch committee decryption in refine); the
+// vdec gas spike established 4 MiB is required for BN254. PVM-target only (host CI compile gate).
 #[cfg(target_arch = "riscv64")]
-polkavm_derive::min_stack_size!(1024 * 1024);
+polkavm_derive::min_stack_size!(4 * 1024 * 1024);
 
 // payload / work-output tags
 const TAG_MATCH: u8 = 0; // plaintext batch for one market: [tag][market][base][quote][orders…]
@@ -33,13 +33,19 @@ const TAG_WITHDRAW: u8 = 5; // [tag][account][asset][amount][nonce][sig(64)] —
 const TAG_LIST: u8 = 6; // [tag][market][base][quote] — list a market (canonical assets)
 const TAG_REGISTER: u8 = 7; // [tag][pubkey(32)][sig(64)] — bind an ed25519 key to an account handle
 const TAG_TREASURY: u8 = 8; // [tag][asset(4)][amount(8)][dest(4)][nonce(8)][sig(64)] — governance fee sweep
+// --- encrypt-until-batch (option 2): sealed orders decrypted by an off-protocol committee ---
+const TAG_ENC_SETUP: u8 = 9; // gov-signed: [tag][n:u8][committee_pks(n*32)][nonce(8)][sig(64)] — commit the committee keys on-chain
+const TAG_ENC_COMMIT: u8 = 10; // [tag][market(4)][C1(32)][body(ORDER_LEN)] — post an encrypted order (stored by id = H(ciphertext))
+const TAG_ENC_ROUND: u8 = 11; // sealed-encrypted round — see enc_round_output() for the wire layout
 
-// Governance key authorised to sweep the fee treasury. Derived from a documented seed for the
-// demo (see sim/); in production this is a DAO/multisig key. Only signatures by this key can
-// move funds out of FEE_ACCOUNT, and a dedicated governance nonce (b"govnonce") stops replay.
+// Governance key authorised to sweep the fee treasury AND commit the encrypt-until-batch
+// committee. Derived from the documented demo seed b"jamswap:demo:governance:key:v1!!"
+// (crates/committee, `committee govpub`); in production this is a DAO/multisig key. Only
+// signatures by this key move funds out of FEE_ACCOUNT or set the committee, and dedicated
+// nonces (b"govnonce" / b"comnonce") stop replay.
 const GOV_PUBKEY: [u8; 32] = [
-    0x90, 0x37, 0x37, 0x55, 0x60, 0x00, 0xf3, 0xf2, 0x64, 0x66, 0xd6, 0x30, 0x43, 0x64, 0xf1, 0xd2,
-    0x22, 0x6e, 0xe8, 0x34, 0x0f, 0xfe, 0xe3, 0x66, 0x26, 0xc3, 0x15, 0xd0, 0x4b, 0xcf, 0xd5, 0x68,
+    0x37, 0x42, 0x87, 0x63, 0x4e, 0x12, 0x9e, 0xc1, 0xf7, 0x2c, 0x75, 0x08, 0xa1, 0x30, 0xa6, 0xf4,
+    0xae, 0x2c, 0x14, 0x56, 0xc9, 0x28, 0x0f, 0xe5, 0x2e, 0xaa, 0x4f, 0x22, 0x54, 0xf7, 0xe6, 0xca,
 ];
 
 // trading fee: a flat fee on matched quote notional (FBA has no maker/taker), paid
@@ -228,6 +234,51 @@ fn reveal_output(
     out
 }
 
+// Encrypt-until-batch round output. `sealed` = orders the committee decrypted this round
+// (each proven, see refine), `consumed` = the ciphertext ids (H(C1‖body)) to remove from the
+// on-chain encset, `committee_h` = hash of the committee keys refine used (accumulate checks
+// it against the on-chain committee). Same IOC/uniform-price semantics as reveal_output:
+// sealed orders clear against the public book at one price and their remainder never rests.
+//
+// Output: [TAG_ENC_ROUND][market][base][quote]
+//         [settle_len:u32][settle]
+//         [consumed_len:u32][consumed(32×k)]   — ciphertext ids consumed
+//         [committee_hash(32)]                 — committee refine used (accumulate verifies)
+//         [book]                               — new resting book (sealed remainder excluded)
+fn enc_round_output(
+    market: u32,
+    base: u32,
+    quote: u32,
+    plaintext: &[Order],
+    sealed: &[Order],
+    consumed: &[[u8; 32]],
+    committee_h: &[u8; 32],
+) -> Vec<u8> {
+    let mut all: Vec<Order> = Vec::with_capacity(plaintext.len() + sealed.len());
+    all.extend_from_slice(plaintext);
+    all.extend_from_slice(sealed);
+    let c = clear(&all);
+    let settle = wire::encode_settlement(c.price, &all, &c);
+    let rest = resting(&all, &c);
+    let public_rest: Vec<Order> =
+        rest.into_iter().filter(|o| !sealed.iter().any(|s| s.id == o.id)).collect();
+    let book = wire::encode_orders(&public_rest);
+    let mut out = Vec::with_capacity(21 + settle.len() + consumed.len() * 32 + 32 + book.len());
+    out.push(TAG_ENC_ROUND);
+    out.extend_from_slice(&market.to_le_bytes());
+    out.extend_from_slice(&base.to_le_bytes());
+    out.extend_from_slice(&quote.to_le_bytes());
+    out.extend_from_slice(&(settle.len() as u32).to_le_bytes());
+    out.extend_from_slice(&settle);
+    out.extend_from_slice(&((consumed.len() * 32) as u32).to_le_bytes());
+    for h in consumed {
+        out.extend_from_slice(h);
+    }
+    out.extend_from_slice(committee_h);
+    out.extend_from_slice(&book);
+    out
+}
+
 // Apply conservation-checked settlement deltas (incl. the treasury fee) to balances at the
 // uniform price, and update the market's last price + cumulative volume. Shared by the
 // plaintext (TAG_MATCH) and sealed (TAG_REVEAL) settlement paths.
@@ -247,17 +298,16 @@ fn apply_settlement(base: u32, quote: u32, market: u32, settle: &[u8]) {
     set_storage(&mkey(b"cv", market), &cum.to_le_bytes()).ok();
 }
 
-// Verify each 32-byte hash in `consumed` against the stored commitments blob (each consumed
-// hash must claim a DISTINCT stored entry), then remove the matched entries. Commitments that
-// were NOT revealed this round are preserved — no wholesale wipe, so an order
-// committed-but-not-yet-revealed (e.g. cancelled in the mempool) isn't destroyed.
-// Returns false — leaving storage untouched — if any consumed hash has no stored match:
-// refine only checks reveals against the BUILDER-supplied commits blob, so a hash missing
-// on-chain means the builder injected an order that was never committed, and the whole round
-// must be rejected rather than settled.
-fn consume_commits(market: u32, consumed: &[u8]) -> bool {
-    let key = mkey(b"commits", market);
-    let stored = get_storage(&key).unwrap_or_default();
+// Verify each 32-byte hash in `consumed` against a stored id-set blob (each consumed hash
+// must claim a DISTINCT stored entry), then remove the matched entries. Entries NOT touched
+// this round are preserved — no wholesale wipe, so an order committed-but-not-yet-settled
+// (e.g. cancelled in the mempool) isn't destroyed. Returns false — leaving storage untouched
+// — if any consumed hash has no stored match: refine only checks against the BUILDER-supplied
+// set, so a hash missing on-chain means the builder injected an order/ciphertext that was
+// never committed, and the whole round must be rejected rather than settled. Shared by the
+// commit–reveal (b"commits") and encrypt-until-batch (b"encset") paths.
+fn consume_set(key: &[u8], consumed: &[u8]) -> bool {
+    let stored = get_storage(key).unwrap_or_default();
     let n = stored.len() / 32;
     let mut removed = Vec::new();
     removed.resize(n, false);
@@ -281,8 +331,91 @@ fn consume_commits(market: u32, consumed: &[u8]) -> bool {
             out.extend_from_slice(&stored[j * 32..j * 32 + 32]);
         }
     }
-    set_storage(&key, &out).ok();
+    set_storage(key, &out).ok();
     true
+}
+
+// Read a big-endian... no: little-endian u16 (all jamswap wire ints are LE).
+fn ru16(b: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes([b[off], b[off + 1]])
+}
+
+// Hash the committee blob (exactly the bytes stored under b"committee": [n:u8][pks n*32]).
+// refine outputs this hash; accumulate re-hashes the ON-CHAIN committee and compares, so a
+// builder cannot swap in its own committee keys to steer the decryption to a forged order.
+fn committee_hash(blob: &[u8]) -> [u8; 32] {
+    commitment(blob)
+}
+
+// refine side of the sealed-encrypted round. Builder-supplied input:
+//   [tag][market:4][base:4][quote:4]
+//   [n:u8][committee_pks: n*32]                 — the committee keys (accumulate re-checks these)
+//   [m:u16]                                      — number of sealed ciphertexts
+//   m × ( [C1:32][body_len:u8][body] )           — the encrypted orders (bodies = ORDER_LEN)
+//   m × [partials: n*PARTIAL_LEN]                — one proven partial per member per ciphertext
+//   [plaintext orders]                           — resting book + public orders (17B each)
+// Verifies every partial against the committee keys, recovers each order, and clears. Returns
+// None (⇒ empty output ⇒ round dropped) on any malformed input or failed decryption proof.
+fn refine_enc_round(data: &[u8]) -> Option<Vec<u8>> {
+    let n_off = 13usize;
+    let n = *data.get(n_off)? as usize;
+    if n == 0 {
+        return None;
+    }
+    let (market, base, quote) = (ru32(data, 1), ru32(data, 5), ru32(data, 9));
+    let mut off = n_off + 1;
+    // committee keys
+    let pks_blob = data.get(off..off + n * vdec::POINT_LEN)?;
+    let mut pks: Vec<[u8; vdec::POINT_LEN]> = Vec::with_capacity(n);
+    for i in 0..n {
+        let mut a = [0u8; vdec::POINT_LEN];
+        a.copy_from_slice(&pks_blob[i * vdec::POINT_LEN..(i + 1) * vdec::POINT_LEN]);
+        pks.push(a);
+    }
+    off += n * vdec::POINT_LEN;
+    let m = ru16(data.get(off..off + 2)?, 0) as usize;
+    off += 2;
+    // ciphertexts: m × (C1 ‖ body_len ‖ body)
+    let mut ciphertexts: Vec<(&[u8], &[u8])> = Vec::with_capacity(m);
+    for _ in 0..m {
+        let c1 = data.get(off..off + vdec::POINT_LEN)?;
+        off += vdec::POINT_LEN;
+        let body_len = *data.get(off)? as usize;
+        off += 1;
+        let body = data.get(off..off + body_len)?;
+        off += body_len;
+        ciphertexts.push((c1, body));
+    }
+    // partials: m × (n × PARTIAL_LEN)
+    let partials_blob = data.get(off..off + m * n * vdec::PARTIAL_LEN)?;
+    off += m * n * vdec::PARTIAL_LEN;
+    // remaining bytes = plaintext (resting book + public orders)
+    let plaintext = wire::decode_orders(&data[off..]);
+
+    let mut sealed: Vec<Order> = Vec::with_capacity(m);
+    let mut consumed: Vec<[u8; 32]> = Vec::with_capacity(m);
+    for i in 0..m {
+        let (c1, body) = ciphertexts[i];
+        let parts = &partials_blob[i * n * vdec::PARTIAL_LEN..(i + 1) * n * vdec::PARTIAL_LEN];
+        // verifiable decryption: every partial must prove out against the committed keys, or
+        // the whole round is rejected (fail-closed). This is the MEV-resistance property —
+        // nobody, not even the builder, can substitute a plaintext for a committed ciphertext.
+        let order_bytes = vdec::verify_and_decrypt(c1, body, &pks, parts)?;
+        let o = wire::decode_orders(&order_bytes).into_iter().next()?;
+        sealed.push(o);
+        // ciphertext id = H(C1 ‖ body): accumulate consumes exactly these from the encset.
+        let mut idbuf = Vec::with_capacity(c1.len() + body.len());
+        idbuf.extend_from_slice(c1);
+        idbuf.extend_from_slice(body);
+        consumed.push(commitment(&idbuf));
+    }
+    // committee hash over exactly [n][pks] — the bytes accumulate stores/checks.
+    let mut blob = Vec::with_capacity(1 + n * vdec::POINT_LEN);
+    blob.push(n as u8);
+    blob.extend_from_slice(pks_blob);
+    let ch = committee_hash(&blob);
+
+    Some(enc_round_output(market, base, quote, &plaintext, &sealed, &consumed, &ch))
 }
 
 impl Service for Jamswap {
@@ -304,7 +437,12 @@ impl Service for Jamswap {
             }
             // echoes for accumulate (auth + state changes happen there, where storage lives)
             TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_LIST | TAG_REGISTER
-            | TAG_TREASURY => data.into(),
+            | TAG_TREASURY | TAG_ENC_SETUP | TAG_ENC_COMMIT => data.into(),
+            // Sealed-encrypted round (encrypt-until-batch): the committee has decrypted, so
+            // refine verifies each partial against the builder-supplied committee keys,
+            // recovers each order, and clears — no reveal round, no owner liveness. accumulate
+            // re-checks the committee keys and ciphertext ids against on-chain state.
+            TAG_ENC_ROUND => refine_enc_round(&data).map(Into::into).unwrap_or_else(|| Vec::new().into()),
             // Unified sealed round. Input:
             //   [tag][market][base][quote]
             //   [commits_len:u32][commits]
@@ -501,7 +639,7 @@ impl Service for Jamswap {
                     let book = &out[consumed_off + consumed_len..];
                     // consume-or-reject BEFORE settling: every revealed commitment must exist
                     // on-chain, else the builder smuggled in an uncommitted order.
-                    if !consume_commits(market, consumed) {
+                    if !consume_set(&mkey(b"commits", market), consumed) {
                         continue;
                     }
                     set_storage(&mkey(b"book", market), book).ok();
@@ -520,6 +658,76 @@ impl Service for Jamswap {
                     }
                     let settle = &out[17..17 + settle_len];
                     let book = &out[17 + settle_len..];
+                    set_storage(&mkey(b"book", market), book).ok();
+                    apply_settlement(base, quote, market, settle);
+                }
+                // gov-signed committee setup: [tag][n:u8][pks n*32][nonce(8)][sig(64)]
+                // — commits the encrypt-until-batch committee keys on-chain. Only GOV_PUBKEY
+                // can set/rotate them (same authority as the treasury), nonce-protected.
+                TAG_ENC_SETUP if out.len() >= 1 + 1 + 8 + 64 => {
+                    let n = out[1] as usize;
+                    let pks_end = 2 + n * 32;
+                    if out.len() != pks_end + 8 + 64 {
+                        continue; // exact-length: n keys + nonce + sig
+                    }
+                    let pks = &out[2..pks_end];
+                    let nonce = le_u64(&out[pks_end..pks_end + 8]);
+                    let sig = sig64(&out, pks_end + 8);
+                    let com_nonce = get_storage(b"comnonce").map(|v| le_u64(&v)).unwrap_or(0);
+                    let msg = canon(b"committee", &[&[n as u8], pks, &nonce.to_le_bytes()]);
+                    if nonce != com_nonce || !verify_signed(&GOV_PUBKEY, &msg, &sig) {
+                        continue;
+                    }
+                    set_storage(b"comnonce", &(nonce + 1).to_le_bytes()).ok();
+                    // store exactly [n][pks] — the bytes committee_hash() runs over.
+                    let mut blob = Vec::with_capacity(1 + pks.len());
+                    blob.push(n as u8);
+                    blob.extend_from_slice(pks);
+                    set_storage(b"committee", &blob).ok();
+                }
+                // encrypted-order commit: [tag][market(4)][C1(32)][body(ORDER_LEN)]
+                // — record id = H(C1‖body) in the market's encset. The ciphertext reveals
+                // nothing until the committee decrypts it in a round.
+                TAG_ENC_COMMIT if out.len() >= 1 + 4 + vdec::POINT_LEN + wire::ORDER_LEN => {
+                    let market = ru32(&out, 1);
+                    let id = commitment(&out[5..5 + vdec::POINT_LEN + wire::ORDER_LEN]);
+                    let key = mkey(b"encset", market);
+                    let mut set = get_storage(&key).unwrap_or_default();
+                    set.extend_from_slice(&id);
+                    set_storage(&key, &set).ok();
+                }
+                // sealed-encrypted round: [tag][market][base][quote][settle_len][settle]
+                //   [consumed_len][consumed][committee_hash(32)][book]
+                // — verify the round used the ON-CHAIN committee, consume-or-reject the
+                // ciphertext ids, then settle. Two builder-defence checks, both fail-closed.
+                TAG_ENC_ROUND if out.len() >= 21 + 32 => {
+                    let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
+                    if market_assets(market) != Some((base, quote)) {
+                        continue;
+                    }
+                    let settle_len = ru32(&out, 13) as usize;
+                    if out.len() < 21 + settle_len {
+                        continue;
+                    }
+                    let settle = &out[17..17 + settle_len];
+                    let consumed_len = ru32(&out, 17 + settle_len) as usize;
+                    let consumed_off = 21 + settle_len;
+                    if out.len() < consumed_off + consumed_len + 32 {
+                        continue;
+                    }
+                    let consumed = &out[consumed_off..consumed_off + consumed_len];
+                    let ch = &out[consumed_off + consumed_len..consumed_off + consumed_len + 32];
+                    let book = &out[consumed_off + consumed_len + 32..];
+                    // (1) the round MUST have used the committed committee keys, else a builder
+                    // could supply its own committee + partials and decrypt to a forged order.
+                    let committee = get_storage(b"committee").unwrap_or_default();
+                    if committee.is_empty() || committee_hash(&committee)[..] != *ch {
+                        continue;
+                    }
+                    // (2) consume-or-reject: every ciphertext id must exist in the encset.
+                    if !consume_set(&mkey(b"encset", market), consumed) {
+                        continue;
+                    }
                     set_storage(&mkey(b"book", market), book).ok();
                     apply_settlement(base, quote, market, settle);
                 }

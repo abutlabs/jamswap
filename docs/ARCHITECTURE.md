@@ -40,6 +40,28 @@ books, sharing one global balance ledger.
 | 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
 | 5 | `WITHDRAW` | account ‖ asset_id ‖ amount(u64) | echo | debit balance + custody, **only if funded** (no overdraft) |
 | 6 | `LIST` | market ‖ base ‖ quote | echo | register a market's canonical assets (+ index it). A `MATCH`/`REVEAL` for an unlisted or asset-mismatched market is **rejected**. |
+| 9 | `ENC_SETUP` | n ‖ committee_pks(n·32) ‖ nonce(8) ‖ sig(64) | echo | **gov-signed**: commit the encrypt-until-batch committee keys on-chain (nonce-protected) |
+| 10 | `ENC_COMMIT` | market ‖ C1(32) ‖ body(17) | echo | append `id = H(C1‖body)` to the market's encrypted-order set |
+| 11 | `ENC_ROUND` | committee keys ‖ ciphertexts ‖ proven partials ‖ plaintext (see below) | verify every partial's proof against the committee keys, decrypt each order, clear | verify committee-hash == on-chain committee **and** consume-or-reject the ciphertext ids, then settle |
+
+**Encrypt-until-batch (option 2, sealed orders with no reveal round).** Orders are
+encrypted (ECIES) to an **off-protocol committee** key committed on-chain via `ENC_SETUP`
+(fresh committee keys — *never* validator consensus keys; a JAM service can't hold a
+secret). A trader posts a ciphertext with `ENC_COMMIT`. At batch close the committee
+produces, for each ciphertext, a partial decryption `S_i = sk_i·C1` carrying a
+Chaum-Pedersen proof that it's the correct share for the committed `PK_i`; the builder
+assembles these into an `ENC_ROUND`. `refine` verifies every proof, recovers each order
+with **no secret**, and clears — and because refine is a pure function of its payload, two
+`accumulate`-side checks stop a malicious builder: (1) the committee keys the round used
+must hash-match the on-chain committee (else a swapped committee could steer decryption),
+and (2) every ciphertext id must already be in the on-chain encrypted-order set
+(consume-or-reject, same defence as `REVEAL`). This removes commit–reveal's reveal round
+and non-reveal griefing; trust is honest-committee for *liveness* only (the DDH proof
+forces honest plaintext). Verifiable-decryption cost is ~n·5.6M gas/order (measured;
+zk-jam-service `spikes/vdec-gas/`), bounding a per-order-verified batch to ~880/n orders.
+Crypto lives in `crates/vdec`; the committee sidecar is `crates/committee`; proven e2e by
+`offchain/test_enc_round.py` (honest settles; tampered / wrong-committee / injected all
+rejected).
 
 `refine` for `MATCH`/`REVEAL` emits:
 `[0]‖[market:u32]‖[base:u32]‖[quote:u32]‖[settle_len:u32]‖[settlement]‖[resting book]`.

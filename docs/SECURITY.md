@@ -72,7 +72,21 @@ carries the asterisk noted here.
   fixed by emitting no resting book on the reveal path). The MEV protection is therefore
   *intra-round* (you can't see or front-run an order before its batch seals).
   **Persistent privacy across rounds** (an order that rests without ever revealing) needs
-  **threshold/time-lock encryption** — the documented upgrade, not yet built.
+  **threshold/time-lock encryption**.
+- **Encrypt-until-batch (option 2, no reveal round) — BUILT.** Orders are ECIES-encrypted
+  to an off-protocol committee key committed on-chain (`ENC_SETUP`, gov-signed; the
+  committee uses fresh keys, never validator consensus keys). At batch close the committee
+  supplies a Chaum-Pedersen-proven partial decryption per member; `refine` verifies every
+  proof against the committed keys and recovers each order **with no secret**, so there is
+  **no reveal round and no non-reveal griefing** (the owner need not be online at match
+  time). Two `accumulate` checks defeat a malicious builder: the round must use the
+  on-chain committee (committee-hash match) and every ciphertext must be committed
+  (consume-or-reject). Trust is honest-committee for **liveness** only — the DDH proof
+  forces honest plaintext, so the committee cannot forge or alter an order, only withhold
+  decryption (censorship). Cost ~n·5.6M gas/order (measured). Crypto in `crates/vdec`,
+  committee in `crates/committee`, proven e2e by `offchain/test_enc_round.py`. The residual
+  gap vs a true dark pool (option 1) is that a decrypted order is public at clearing, same
+  as commit–reveal — persistent hidden *resting* orders still require the ZK/MPC matcher.
 
 ## Sound (and why)
 

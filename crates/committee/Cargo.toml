@@ -1,0 +1,16 @@
+[package]
+name = "committee"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Off-protocol committee sidecar for jamswap encrypt-until-batch: keygen, gov-signed committee setup, order encryption, and proven partial decryption. Emits the service payloads (ENC_SETUP / ENC_COMMIT / ENC_ROUND)."
+
+[[bin]]
+name = "committee"
+path = "src/main.rs"
+
+[dependencies]
+vdec = { path = "../vdec" }
+match-engine = { path = "../match-engine" }
+ed25519-compact = { version = "2", default-features = false }
+ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }

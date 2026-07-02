@@ -1,0 +1,14 @@
+[package]
+name = "vdec"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Verifiable committee decryption for jamswap sealed-encrypted rounds: ECIES to an additive n-of-n committee over BN254 G1, each partial carrying a Chaum-Pedersen DDH proof. refine verifies against the committed committee keys and recovers the order with no secret. Proven + gas-measured in zk-jam-service/spikes/vdec-gas."
+
+[dependencies]
+ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }
+ark-ec = { version = "0.5", default-features = false }
+ark-ff = { version = "0.5", default-features = false }
+ark-serialize = { version = "0.5", default-features = false }
+ark-std = { version = "0.5", default-features = false }
+blake2 = { version = "0.10", default-features = false }
