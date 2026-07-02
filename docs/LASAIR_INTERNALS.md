@@ -39,8 +39,9 @@ size**, not gas: ~25k–69k sealed orders per work-package at 500–200 B/order.
   or the refine/accumulate loops. `ed25519_ffi` even has `batch_verify`
   (`lib/ed25519_ffi/ed25519_ffi.ml:28`) but it is unreachable from service code.
 
-So yes: the ~195k gas + `min_stack_size!` cost for in-PVM ed25519 is unavoidable on
-lasair today. There is no host call that avoids it.
+So yes: the in-PVM ed25519 cost (measured 1,312,932 gas/verify, Q2) +
+`min_stack_size!` is unavoidable on lasair today. There is no host call that
+avoids it.
 
 ## Q2 — Gas model and measured costs
 
@@ -267,12 +268,18 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
       DONE 2026-07-02: ed25519-compact verify = 1,312,932 gas, Blake2s256 (64B) =
       2,759 gas (zk-jam-service `spikes/crypto-gas/`). Corrected the ~195k memory
       (6.7× too low). Consequence folded into Q7/Q9 above.
-- [ ] **lasair conformance gap:** refine's host-call set is not gated per GP — `read`/
-      `write`/`new`/etc. execute in refine against the ephemeral context instead of
-      WHAT, while `historical_lookup` (which GP refine allows) returns WHAT
-      (`lib/pvm_host.ml:1774-1798`). Fuzzer-relevant; fix on a feature branch.
-- [ ] **lasair:** live path doesn't enforce W_B (`is_bundle_size_valid` test-only).
-- [ ] **lasair stale constants:** `lib/work_packages.ml:45` (4096 report cap, dead) and
-      `lib/reporting.ml:237` (15e9 accumulate gas, wrong) — delete or align.
+- [x] **lasair conformance gap:** refine's host-call set is not gated per GP —
+      DONE 2026-07-02 on lasair branch `fix/gp-conformance-audit` (b5da46b):
+      out-of-invocation host calls now return WHAT + 10 gas (refine /
+      accumulate / is-authorized each get their GP set), and `historical_lookup`
+      (Omega_H) is implemented with anchor-time availability (`refine_context`
+      gains `rc_lookup_anchor_time`). Inner-PVM family (8–13) remains
+      unimplemented → WHAT. Covered by new `refine_test.ml` gating tests.
+- [x] **lasair:** live path W_B enforcement — DONE, same branch (b895b57):
+      `Deploy_demo.run_on_service` (the `node_rpc` path) rejects bundles over
+      W_B = 13,791,360 B.
+- [x] **lasair stale constants** — DONE, same branch (b895b57): dead 4096
+      report cap deleted; `reporting.ml` accumulate gas now derived from the
+      enforced G_A = 10M.
 - [ ] Optional: PLONK gas spike (clone of the Groth16 spike) if universal setup is
       ever needed.
