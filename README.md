@@ -145,7 +145,7 @@ what binds is per-order *validation*:
 |---|---|---|---|---|
 | **Public** (signed; ed25519 verified in `refine`) | 1.31 M gas | refine gas | **~3,800** | **cores** — more markets on more cores, linear |
 | **Sealed — commit–reveal** (rung 3) | 2.7k gas reveal check (+1.31 M if sig-verified) | refine gas | **~3,800** | cores |
-| **Sealed — encrypt-until-batch** (rung 2, default) | ~n × 5.6 M gas (n = committee size) | refine gas | **~880/n** (n=5 → ~176) | cores; the real scaling answer is migrating to rung 1 |
+| **Sealed — encrypt-until-batch** (rung 2, default) | ~n × 5.6 M gas (n = committee size) | refine gas | **~880/n** (n=5 → ~176) | **cores × (880 ÷ n)** — inversely with committee size: every member proves per order, so a bigger committee buys trust/liveness at the direct cost of throughput; the scaling answer is rung 1 |
 | **Sealed — ZK dark-pool** (rung 1, spiked) | ~0 — one 60.1 M-gas proof settles the batch, flat | input size (W_B ≈ 13.15 MiB) | **~27,500–68,900** | cores × prover capacity; on-chain cost flat in order count |
 
 Two independent resources, two meters: **compute** is bought per-slot (coretime/gas —
