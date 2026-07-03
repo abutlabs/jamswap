@@ -20,6 +20,11 @@ from treasury import (jamkb_rent, profit_split, max_withdrawable, solvency, rese
 # service payload tags (must match service/src/lib.rs)
 TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST, TAG_REGISTER, TAG_TREASURY = range(9)
 TAG_ENC_SETUP, TAG_ENC_COMMIT, TAG_ENC_ROUND = 9, 10, 11
+# TAG_MATCH (0) is RETIRED in the service: public rounds are now TAG_SMATCH, whose orders
+# carry the trader's pubkey + ed25519 signature and are verified IN REFINE (trustless — the
+# builder can no longer inject an order nobody signed). See service/src/lib.rs.
+TAG_SMATCH = 12
+FLAG_MARKET = 1  # order-type flag carried beside a signed order (part of the signed message)
 FEE_ACCOUNT = 0xFFFFFFFF               # treasury handle (matches FEE_ACCOUNT in the service)
 
 # Encrypt-until-batch (option 2): if a committee sidecar binary is available, sealed orders are
@@ -28,10 +33,11 @@ FEE_ACCOUNT = 0xFFFFFFFF               # treasury handle (matches FEE_ACCOUNT in
 # back to commit–reveal (option 3). Set ENC_MODE=0 to force commit–reveal even if present.
 COMMITTEE_BIN = os.environ.get("COMMITTEE_BIN", "")
 ENC_MODE = bool(COMMITTEE_BIN) and os.environ.get("ENC_MODE", "1") == "1"
-# Optional off-chain order-signature verification (the trustless in-refine version is the
-# documented upgrade; the builder is a trusted role in the current model). Needs PyNaCl —
-# if it's absent we degrade to accepting orders unsigned (withdraw/cancel stay trustless in
-# the service regardless). Set REQUIRE_ORDER_SIG=0 to disable even when PyNaCl is present.
+# Order signatures are now enforced ON-CHAIN: each public order's ed25519 signature travels in
+# the work package and is verified per-order in refine (the service also binds the key to the
+# account registry + enforces a per-account replay floor in accumulate). The check below is a
+# PREFLIGHT ONLY — it gives the trader an instant error instead of a silently-dropped round.
+# Needs PyNaCl; REQUIRE_ORDER_SIG=0 skips the preflight (the service still enforces).
 try:
     from nacl.signing import VerifyKey, SigningKey
     from nacl.exceptions import BadSignatureError
@@ -362,19 +368,30 @@ def api_order(b):
         price = int(round(lp * (1 + MARKET_BAND))) if side == BUY else max(1, int(round(lp * (1 - MARKET_BAND))))
     else:
         price = to_atomic(b["price"])
-    # Order authentication (builder-side; the trustless in-refine check is the documented
-    # upgrade): the client signs its intent with the account key. Market price is server-derived,
-    # so it's signed as 0 (the band is applied here). Refuse if unregistered or the sig is bad.
-    if REQUIRE_ORDER_SIG:
-        pub = pubkey_of_handle(acct)
+    # Order authentication — TRUSTLESS end-to-end for public orders: the client signs
+    # canon(order, …, seq) with the account key; the signature travels INTO the work package,
+    # refine verifies it per-order, and accumulate binds the key to the on-chain registry and
+    # enforces the per-account monotonic seq (replay-proof). The builder's checks here exist
+    # only to give the trader an immediate error — the SERVICE is the enforcer, so a malicious
+    # builder gains nothing by skipping them. Market price is server-derived within the band,
+    # signed as 0; the service band-checks the executed price against the on-chain last price.
+    pub = pubkey_of_handle(acct)
+    seq = int(b.get("seq", 0) or 0)
+    sig = bytes.fromhex(b.get("sig", "") or "")
+    sealed_flag = bool(b.get("sealed"))
+    signed_price = 0 if otype == "market" else price
+    if not sealed_flag:
+        # public orders CANNOT settle unsigned any more — fail fast at the door
         if not pub:
             raise ValueError("account not registered — connect a wallet and register first")
-        signed_price = 0 if otype == "market" else price
-        msg = canon(b"order", struct.pack("<I", acct), struct.pack("<I", m), bytes([side]),
-                    struct.pack("<I", qty), bytes([1 if otype == "market" else 0]),
-                    bytes([1 if b.get("sealed") else 0]), struct.pack("<I", signed_price))
-        if not verify_order_sig(pub, msg, bytes.fromhex(b.get("sig", ""))):
-            raise ValueError("bad order signature")
+        if not seq or len(sig) != 64:
+            raise ValueError("public orders must carry a signature and seq (verified in refine)")
+    msg = canon(b"order", struct.pack("<I", acct), struct.pack("<I", m), bytes([side]),
+                struct.pack("<I", qty), bytes([1 if otype == "market" else 0]),
+                bytes([1 if sealed_flag else 0]), struct.pack("<I", signed_price),
+                struct.pack("<Q", seq))
+    if REQUIRE_ORDER_SIG and pub and sig and not verify_order_sig(pub, msg, sig):
+        raise ValueError("bad order signature")
     # Collateral guard (best-effort; on-chain escrow is the trustless version): refuse an
     # order the account can't currently fund. A buy needs qty·price/SCALE of the quote asset;
     # a sell needs qty of the base asset. Note: this checks the current on-chain balance only,
@@ -400,24 +417,40 @@ def api_order(b):
     eff_ttl = min(user_ttl, life) if user_ttl > 0 else life
     order_expiry[(m, acct, oid)] = time.time() + eff_ttl
     o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty, "type": otype,
-         "sealed": sealed, "address": b.get("address", "")}
+         "sealed": sealed, "address": b.get("address", ""),
+         # the trustless-order material carried into the work package (public orders)
+         "sig": sig, "pubkey": pub or b"\x00" * 32, "seq": seq, "signed_price": signed_price}
     if o["sealed"]:
         _post_seal(m, o)               # post a fresh on-chain commitment/ciphertext (terms hidden)
     with _lock:
         pending.setdefault(m, []).append(o)
         n = len(pending[m])
     return {"ok": True, "order_id": oid, "sealed": o["sealed"], "type": otype, "pending": n}
-def prune_expired(m, rest_bytes):
-    # remove resting orders whose good-till-time has passed (they don't get re-included in the
-    # rewritten book, so the round effectively cancels them). GTC orders (no expiry) are kept.
-    now, out = time.time(), b""
+def expired_pairs(m, rest_bytes):
+    # (account, oid) pairs of resting orders whose good-till-time has passed. The book bytes
+    # themselves are NO LONGER edited here: the service hash-binds refine's input book to the
+    # on-chain book (so a builder can't fabricate resting orders), and expiry is passed as an
+    # EXPLICIT prune list inside the round — auditable in the work package, never silent.
+    now, out = time.time(), []
     for i in range(len(rest_bytes) // 17):
         a, oid, side, p, q = struct.unpack_from("<IIBII", rest_bytes, i * 17)
         exp = order_expiry.get((m, a, oid))
         if exp and exp <= now:
-            order_expiry.pop((m, a, oid), None); continue
-        out += rest_bytes[i * 17:(i + 1) * 17]
+            order_expiry.pop((m, a, oid), None); out.append((a, oid))
     return out
+def signed_order_bytes(o):
+    # order(17) ‖ flags(1) ‖ signed_price(4) ‖ seq(8) ‖ pubkey(32) ‖ sig(64) — must match
+    # wire::SignedOrder in crates/match-engine (refine re-verifies the signature from these).
+    flags = FLAG_MARKET if o.get("type") == "market" else 0
+    return (order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"])
+            + bytes([flags]) + struct.pack("<IQ", o["signed_price"], o["seq"])
+            + o["pubkey"] + o["sig"])
+def public_section_bytes(public, pruned, raw_book):
+    # the signed public-order section every round type now ends with:
+    # [ns:u16][signed orders][np:u16][pruned (account,oid) pairs][on-chain book, byte-exact]
+    sec = struct.pack("<H", len(public)) + b"".join(signed_order_bytes(o) for o in public)
+    sec += struct.pack("<H", len(pruned)) + b"".join(struct.pack("<II", a, oid) for a, oid in pruned)
+    return sec + raw_book
 def _parse_book(raw):
     # resting book bytes -> planner order dicts (integer side, atomic price)
     out = []
@@ -430,8 +463,8 @@ def api_round(b):
     now = time.time()
     hdr = struct.pack("<III", m, base, quote)
     raw = storage(b"book" + struct.pack("<I", m))        # the market's on-chain resting book
-    rest = prune_expired(m, raw)                          # drop good-till-time orders past expiry
-    shrank = len(rest) < len(raw)                         # some resting order expired this round
+    pruned = expired_pairs(m, raw)                        # good-till-time entries past expiry
+    shrank = bool(pruned)                                 # some resting order expired this round
     with _lock:                        # snapshot + re-queue atomically so a concurrent
         pend = pending.get(m, [])      # api_order during submit isn't dropped
         for o in pend:                 # attach current GTT expiry for the planner
@@ -440,13 +473,16 @@ def api_round(b):
         # rest HIDDEN (carried forward) rather than being immediate-or-cancel — so a sealed
         # sell placed now can meet a sealed buy placed in a later auction. A sealed order is
         # revealed only in the round it actually crosses (see round.py + tests).
-        resting_orders = _parse_book(rest)
+        resting_orders = [o for o in _parse_book(raw) if (o["account"], o["oid"]) not in set(pruned)]
         plan = plan_round(pend, resting_orders, now)
         pending[m] = plan.carry        # non-crossing sealed orders stay hidden for next round
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
             order_expiry.pop((m, o["account"], o["oid"]), None)
     sealed, public = plan.reveal, plan.public
-    public_bytes = b"".join(order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"]) for o in public)
+    # every round type carries the same signed public section: new orders WITH their
+    # signatures (verified in refine), the explicit prune list, and the on-chain book
+    # byte-exact (the service hash-checks it — a fabricated book rejects the round).
+    section = public_section_bytes(public, pruned, raw)
     if sealed and ENC_MODE:
         # encrypt-until-batch round: the committee decrypts each sealed ciphertext (proving it
         # via Chaum-Pedersen); refine verifies every proof, recovers the orders, and clears them
@@ -456,7 +492,7 @@ def api_round(b):
         # remainder of a revealed order is immediate-or-cancel (never rests publicly exposed).
         # No reveal round — traders needn't be online at match time.
         cts = ",".join(o["ciphertext"] for o in sealed)
-        d = committee_run("round", m, base, quote, (rest + public_bytes).hex(), cts)
+        d = committee_run("round", m, base, quote, section.hex(), cts)
         submit(bytes.fromhex(d["round"]))
     elif sealed:
         # UNIFIED sealed round (commit–reveal): the resting book + this round's public orders +
@@ -470,13 +506,13 @@ def api_round(b):
         submit(bytes([TAG_REVEAL]) + hdr
                + struct.pack("<I", len(commits)) + commits
                + struct.pack("<I", len(reveals)) + reveals
-               + rest + public_bytes)
+               + section)
     elif public or shrank:
-        # plaintext round: resting book + this round's public orders -> MATCH. Also runs on
-        # `shrank` (an order expired) with no new orders, to rewrite the book without the
-        # expired one — an empty cross conserves value and leaves the last price untouched
-        # (apply_settlement only updates lp when something actually fills).
-        submit(bytes([TAG_MATCH]) + hdr + rest + public_bytes)
+        # signed public round: the section carries the new signed orders + prune list + the
+        # on-chain book. Also runs on `shrank` (an order expired) with no new orders, to
+        # rewrite the book without the expired one — an empty cross conserves value and
+        # leaves the last price untouched (apply_settlement only updates lp on real fills).
+        submit(bytes([TAG_SMATCH]) + hdr + section)
     # This round's clearing (mirrors refine); reused for the receipt AND to carry sealed remainders.
     combined = resting_orders + sealed + public
     clearing = clear(combined) if combined else {"price": 0, "volume": 0, "fills": {}}

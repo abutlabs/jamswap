@@ -86,7 +86,8 @@ def main():
     r = submit(sid, s["round"])
     buyer_base = bal(sid, BASE, 8)
     seller_quote = bal(sid, QUOTE, 7)
-    assert buyer_base == 5 * SCALE, f"buyer must receive 5 base, got {buyer_base}"
+    FEE = 300  # flat per-filled-order fee in the base asset (FEE_FLAT in the service)
+    assert buyer_base == 5 * SCALE - FEE, f"buyer must receive 5 base − fee, got {buyer_base}"
     assert seller_quote > 0, f"seller must receive quote proceeds, got {seller_quote}"
     assert encset(sid) == b"", "both ciphertexts consumed by the honest round"
     print(f"round (honest)         SETTLED — buyer +{buyer_base} base, seller +{seller_quote} quote, "

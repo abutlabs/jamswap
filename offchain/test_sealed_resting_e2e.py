@@ -107,8 +107,9 @@ def main():
     run_auction()
     seller_usdc_after = balance(SELLER, USDC)
     buyer_dot_after = balance(BUYER, DOT)
-    assert buyer_dot_after == buyer_dot_before + QTY, \
-        f"R2: buyer must receive {QTY} DOT, got {buyer_dot_after - buyer_dot_before}"
+    FEE = 0.03  # flat per-filled-order fee in the base asset (FEE_FLAT=300 atomic in the service)
+    assert abs((buyer_dot_after - buyer_dot_before) - (QTY - FEE)) < 1e-6, \
+        f"R2: buyer must receive {QTY} DOT − {FEE} fee, got {buyer_dot_after - buyer_dot_before}"
     assert seller_usdc_after > seller_usdc_before, \
         f"R2: seller must receive USDC proceeds, got {seller_usdc_after - seller_usdc_before}"
     assert pending_count(SELLER) == 0 and pending_count(BUYER) == 0, "both orders should have cleared"

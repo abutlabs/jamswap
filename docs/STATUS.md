@@ -9,6 +9,13 @@ resting orders, sealing, and the trading layer on top.
 
 ## Done
 
+- ✅ **Trustless public orders (2026-07-03)** — every public order carries `pubkey+sig`
+  and is **ed25519-verified per-order in `refine`** (`TAG_SMATCH`; unsigned `TAG_MATCH`
+  deleted). Accumulate binds the key to the registry, enforces per-account replay floors,
+  band-checks market orders, and **hash-binds the resting book** (no fabricated resting
+  orders). Verified e2e on a live node: forged order REJECTED, replayed seq REJECTED,
+  honest signed rounds clear/rest/settle. See `docs/SECURITY.md`.
+
 - ✅ **`crates/match-engine`** — the FBA uniform-price clearing algorithm:
   `no_std`, integer-only, fully deterministic (so guarantors and auditors
   re-execute it byte-identically). Property-tested for value conservation,

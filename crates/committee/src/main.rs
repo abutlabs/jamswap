@@ -82,8 +82,10 @@ fn setup_payload(blob: &[u8], nonce: u64) -> Vec<u8> {
 }
 
 /// Assemble the ENC_ROUND payload: for each (C1, body) ciphertext, every member contributes a
-/// proven partial decryption; refine will verify + decrypt + clear. `plaintext` = resting book
-/// + public orders (17B each). The committee keys are embedded so accumulate can hash-check them.
+/// proven partial decryption; refine will verify + decrypt + clear. `public_section` = the
+/// signed public-order section ([ns][signed orders][np][pruned][on-chain book] — assembled by
+/// the builder; refine verifies each order's signature and the service hash-binds the book).
+/// The committee keys are embedded so accumulate can hash-check them.
 fn assemble_round(
     members: &[Member],
     blob: &[u8],
@@ -91,7 +93,7 @@ fn assemble_round(
     base: u32,
     quote: u32,
     ciphertexts: &[(Vec<u8>, Vec<u8>)],
-    plaintext: &[u8],
+    public_section: &[u8],
 ) -> Vec<u8> {
     let k = members.len();
     let pks = &blob[1..];
@@ -116,9 +118,13 @@ fn assemble_round(
             out.extend_from_slice(&p);
         }
     }
-    out.extend_from_slice(plaintext);
+    out.extend_from_slice(public_section);
     out
 }
+
+/// The canonical EMPTY public section: no new signed orders, no pruned entries, empty book.
+/// ([ns=0][np=0] — a bare empty byte string is malformed and refine rejects the round.)
+const EMPTY_SECTION: [u8; 4] = [0, 0, 0, 0];
 
 fn cmd_setup() {
     let (_members, _joint, blob) = fixed_committee();
@@ -144,7 +150,8 @@ fn cmd_encrypt(market: u32, order_hex: &str, seed_hex: &str) {
 
 fn cmd_round(market: u32, base: u32, quote: u32, plaintext_hex: &str, ct_csv: &str) {
     let (members, _joint, blob) = fixed_committee();
-    let plaintext = if plaintext_hex.is_empty() { Vec::new() } else { unhex(plaintext_hex) };
+    let plaintext =
+        if plaintext_hex.is_empty() { EMPTY_SECTION.to_vec() } else { unhex(plaintext_hex) };
     let mut cts: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
     for cthex in ct_csv.split(',').filter(|s| !s.trim().is_empty()) {
         let ct = unhex(cthex);
@@ -189,9 +196,9 @@ fn scenario(_gov_byte: u8) {
 
     let cts = vec![(c1b.to_vec(), bb.clone()), (c1s.to_vec(), bs.clone())];
     // honest
-    println!("round {}", hex(&assemble_round(&members, &blob, market, base, quote, &cts, &[])));
+    println!("round {}", hex(&assemble_round(&members, &blob, market, base, quote, &cts, &EMPTY_SECTION)));
     // tampered: flip a byte in the assembled partials region (after header+cts)
-    let mut tampered = assemble_round(&members, &blob, market, base, quote, &cts, &[]);
+    let mut tampered = assemble_round(&members, &blob, market, base, quote, &cts, &EMPTY_SECTION);
     let tlen = tampered.len();
     tampered[tlen - 1] ^= 0x01; // corrupt the last partial's z tail
     println!("round_tampered {}", hex(&tampered));
@@ -208,14 +215,14 @@ fn scenario(_gov_byte: u8) {
     let evil_cts = vec![(ec1b.to_vec(), ebb), (ec1s.to_vec(), ebs)];
     println!(
         "round_wrongcommittee {}",
-        hex(&assemble_round(&evil_members, &evil_blob, market, base, quote, &evil_cts, &[]))
+        hex(&assemble_round(&evil_members, &evil_blob, market, base, quote, &evil_cts, &EMPTY_SECTION))
     );
     // injected: a third ciphertext never committed on-chain -> accumulate consume-or-reject
     let inject = ord_bytes(9, 3, true, 105, 5);
     let (c1i, bi) = encrypt(&inject, &joint, b"seed-inject-uncommitted");
     let mut cts3 = cts.clone();
     cts3.push((c1i.to_vec(), bi));
-    println!("round_injected {}", hex(&assemble_round(&members, &blob, market, base, quote, &cts3, &[])));
+    println!("round_injected {}", hex(&assemble_round(&members, &blob, market, base, quote, &cts3, &EMPTY_SECTION)));
 }
 
 fn govpub() {

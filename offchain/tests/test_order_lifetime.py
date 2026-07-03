@@ -45,9 +45,16 @@ class ApiOrderExpiry(unittest.TestCase):
         server.storage = lambda k: b""           # empty on-chain book
         server.submit = lambda payload: None
         server.mstate = lambda prefix, m: 0
+        # public orders are now trustless: api_order requires a registered key + sig + seq
+        # (the service verifies for real in refine/accumulate; these tests exercise expiry
+        # policy, so a mocked registration and a dummy signature are sufficient).
+        server.pubkey_of_handle = lambda h: b"\x01" * 32
+        self._seq = 0
 
     def _order(self, **kw):
-        b = {"market": 1, "side": "buy", "qty": 1, "price": 1, "account": 7}
+        self._seq += 1
+        b = {"market": 1, "side": "buy", "qty": 1, "price": 1, "account": 7,
+             "seq": self._seq, "sig": "00" * 64}
         b.update(kw)
         return server.api_order(b)
 

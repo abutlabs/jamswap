@@ -333,7 +333,7 @@ example** precisely to make these answerable with real numbers, not to pre-empt 
 |---|---|---|
 | **Fee shape** | a **flat, cost-based** fee per filled order in the base asset | a size-proportional fee, if the community prefers ([`docs/REVENUE.md`](docs/REVENUE.md)) |
 | **Profit payout** to the beneficiary | gov-signed sweep of fee revenue, swapped on the DEX | an actual **JAM↔Polkadot bridge** to the AssetHub account (deferred — no bridge yet) |
-| **Order / cancel / withdraw auth** | builder-side signature check | the **trustless in-`refine`** check is the documented upgrade ([`docs/SECURITY.md`](docs/SECURITY.md)) |
+| **Order / cancel / withdraw auth** | **trustless** — public orders are ed25519-verified per-order **in `refine`** (replay-proof seq floors, hash-bound book); cancel/withdraw are signed + nonce-protected | owner-signed *sealed* commits are the remaining step ([`docs/SECURITY.md`](docs/SECURITY.md)) |
 | **Custody** | **mock** (faucet credit / funded debit, conservation-checked) | real self-custody via `on_transfer`, blocked on JAM asset-service maturity |
 
 If any of these should be decided differently, they're small, well-isolated changes — say
@@ -351,9 +351,10 @@ which and we'll flip it (or wire in the toggle).
 - We also build the JAM client it runs on (**lasair**), so we understand the whole stack
   from the matching engine down to the state machine.
 
-**Honest caveats** (kept in view): JAM mainnet timing isn't ours to control; "trustless"
-carries an asterisk in the parts still being hardened (per-order signature checks in
-`refine`, real on-chain custody); and bootstrapping trading liquidity is a real grind.
+**Honest caveats** (kept in view): JAM mainnet timing isn't ours to control; public orders
+are now verified per-order in `refine` (trustless — not even the builder can inject one),
+but "trustless" still carries an asterisk in the parts being hardened (owner-signed *sealed*
+commits, real on-chain custody); and bootstrapping trading liquidity is a real grind.
 See [`docs/PLAN.md`](docs/PLAN.md) §9 and [`docs/SECURITY.md`](docs/SECURITY.md).
 
 ---

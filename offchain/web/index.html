@@ -600,16 +600,21 @@ async function placeOrder(){
   const {market, side, otype, sealed} = state;
   if (!qty || (otype==="limit" && !price)){ toast("Enter "+(otype==="limit"?"a price and ":"")+"a quantity.", "err"); return; }
   $("place").disabled = true;
-  // sign the order intent (market price is server-derived, so signed as 0) — matches api_order
+  // sign the order intent (market price is server-derived, so signed as 0) — matches api_order.
+  // seq: a per-account monotonic value (ms clock, bumped on ties). It's part of the signed
+  // message and enforced on-chain as a strictly-rising floor, so this signature can never be
+  // replayed into a later batch — the signature is verified per-order IN REFINE (trustless).
+  const seq = Math.max(Date.now(), (state.lastSeq||0)+1); state.lastSeq = seq;
   const signedPrice = otype==="market" ? 0 : toAtomic(price);
   const msg = canonBytes("order", u32le(myAcct()), u32le(market.id), new Uint8Array([side==="buy"?0:1]),
-    u32le(toAtomic(qty)), new Uint8Array([otype==="market"?1:0]), new Uint8Array([sealed?1:0]), u32le(signedPrice));
+    u32le(toAtomic(qty)), new Uint8Array([otype==="market"?1:0]), new Uint8Array([sealed?1:0]),
+    u32le(signedPrice), u64le(seq));
   let sig;
   try { sig = await signBytes(msg); }   // signs with the browser-held ed25519 key (no wallet/extension)
   catch { $("place").disabled=false; toast("Signing failed — order not placed.", "err"); return; }
   try {
     const body = {market:market.id, base:market.base, quote:market.quote, account:myAcct(),
-      address:state.wallet.selected.address, side, qty, type:otype, sealed, sig:hexRaw(sig)};
+      address:state.wallet.selected.address, side, qty, type:otype, sealed, sig:hexRaw(sig), seq};
     if (otype==="limit") body.price = price;
     body.ttl = parseInt(state.tif) || 0;   // good-till-cancelled (0) or a timed expiry (sealed too)
     const r = await api("/api/order", body);

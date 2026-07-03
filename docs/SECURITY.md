@@ -31,15 +31,36 @@ carries the asterisk noted here.
   can't currently fund (a buy needs `qty·price` of quote, a sell needs `qty` of base) —
   see "still open" below for the trustless version.
 
+## Fixed (2026-07-03): public order placement is TRUSTLESS — verified in `refine`
+
+- **Every public order now travels with its `pubkey + ed25519 sig` and is verified
+  per-order IN REFINE** (`TAG_SMATCH`; the unsigned `TAG_MATCH` path is deleted — no
+  downgrade). Split verification, because refine is stateless: refine checks the
+  signature against the *carried* pubkey and that a limit order executes at exactly the
+  signed price; `accumulate` then binds the pubkey to the account's registered key,
+  enforces a per-account **monotonic seq floor** (a captured signature can never be
+  replayed into a later batch), and band-checks a market order's builder-derived price
+  (±10%) against the on-chain last price. Any failure rejects the whole round,
+  fail-closed, before any state change.
+- **The resting book is hash-bound.** Refine outputs `H(input book bytes)`; accumulate
+  compares it against the on-chain book — a builder can no longer feed refine fabricated
+  resting orders. Expired-order pruning is passed as an explicit list in the round
+  (auditable), never silently edited.
+- Verified e2e on a live lasair-node: a forged order (signed by the wrong key for the
+  claimed account) and a replayed seq are both rejected; honest signed rounds clear,
+  rest, and settle (`sim/demo.py`, and the builder path end-to-end).
+- Cost: ~1.31M gas per order (measured) → a fully-signed batch is refine-gas-bound at
+  ~3,800 orders/core; the ZK matcher (one proof covers all signatures) is the scaling path.
+
 ## Accepted / documented (production hardening needed)
 
-- **Order-placement authentication is builder-side, not yet in-`refine`.** Orders are
-  signed by the account key and verified at the **off-chain builder** (a role SECURITY.md
-  already treats as trusted), not yet re-verified trustlessly inside `refine`. So a
-  malicious *builder* could still place an order on your behalf (it can't extract funds —
-  withdraw is trustless-authenticated). **Production:** carry each order's `pubkey+sig`
-  into the batch and verify per-order in `refine` (the research-blessed path; ed25519
-  verify is cheap in refine's gas budget). The primitive (`match_engine::auth`) is in place.
+- **Sealed-order commits are not yet owner-signed.** `TAG_COMMIT`/`TAG_ENC_COMMIT` can be
+  posted for any account (the reveal/decryption then names that account), so a malicious
+  builder could still place a *sealed* order on a victim's behalf — the sealed-path
+  sibling of the public hole fixed above. **Next:** owner-sign commits (verified in
+  accumulate — zero refine gas), store `(hash ‖ account)` in the commit/enc sets, and
+  match both at consumption; carry-forward remainder commits then need either a per-order
+  carry allowance or the ZK linkage (the rung-1 endgame).
 - **Order collateralization is a guard, not an escrow.** The submission check reads the
   *current* balance; it doesn't reserve funds across multiple pending orders, and the
   settlement clamp at 0 still means an over-matched order could lose value on-chain.

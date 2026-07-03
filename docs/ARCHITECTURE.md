@@ -35,16 +35,28 @@ books, sharing one global balance ledger.
 
 | Tag | Name | Payload | refine | accumulate |
 |---|---|---|---|---|
-| 0 | `MATCH` | `market‖base‖quote` ‖ plaintext orders (17 B each) | clear → settlement + resting book | settle balances, store the market's book, bump stats |
+| 0 | — | **RETIRED** (was unsigned `MATCH` — deleted so there is no unsigned downgrade path) | — | — |
 | 1 | `DEPOSIT` | account ‖ asset_id ‖ amount(u64) | echo | credit `(asset_id, account)` (Phase-2 faucet; real custody = Phase 3) |
 | 2 | `COMMIT` | market ‖ account ‖ commitment(32) | echo | append commitment to the market's pending set |
-| 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) | admit only orders whose `H(order‖nonce)` ∈ commits, then clear | (output is a `MATCH` settlement → same path) |
+| 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) ‖ *public section* | admit only orders whose `H(order‖nonce)` ∈ commits, verify the public section, then clear | auth-trailer checks (below) **and** consume-or-reject the commitments, then settle |
 | 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
 | 5 | `WITHDRAW` | account ‖ asset_id ‖ amount(u64) | echo | debit balance + custody, **only if funded** (no overdraft) |
-| 6 | `LIST` | market ‖ base ‖ quote | echo | register a market's canonical assets (+ index it). A `MATCH`/`REVEAL` for an unlisted or asset-mismatched market is **rejected**. |
+| 6 | `LIST` | market ‖ base ‖ quote | echo | register a market's canonical assets (+ index it). A round for an unlisted or asset-mismatched market is **rejected**. |
 | 9 | `ENC_SETUP` | n ‖ committee_pks(n·32) ‖ nonce(8) ‖ sig(64) | echo | **gov-signed**: commit the encrypt-until-batch committee keys on-chain (nonce-protected) |
 | 10 | `ENC_COMMIT` | market ‖ C1(32) ‖ body(17) | echo | append `id = H(C1‖body)` to the market's encrypted-order set |
-| 11 | `ENC_ROUND` | committee keys ‖ ciphertexts ‖ proven partials ‖ plaintext (see below) | verify every partial's proof against the committee keys, decrypt each order, clear | verify committee-hash == on-chain committee **and** consume-or-reject the ciphertext ids, then settle |
+| 11 | `ENC_ROUND` | committee keys ‖ ciphertexts ‖ proven partials ‖ *public section* | verify every partial's proof against the committee keys, decrypt each order, verify the public section, clear | verify committee-hash == on-chain committee, auth-trailer checks, consume-or-reject the ciphertext ids, then settle |
+| 12 | `SMATCH` | `market‖base‖quote` ‖ *public section* | **verify each order's ed25519 sig** (and limit price == signed price), then clear | auth-trailer checks (below), then settle + store the book |
+
+**The signed public section (trustless orders — every round type carries it).** New public
+orders travel as `order(17) ‖ flags ‖ signed_price ‖ seq(8) ‖ pubkey(32) ‖ sig(64)`; the
+section is `[ns][signed orders][np][pruned (account,oid) pairs][on-chain book, byte-exact]`.
+`refine` verifies each signature statelessly against the carried pubkey; the round's output
+ends with an **auth trailer** (`bindings ‖ H(input book)`) that `accumulate` — which can
+read state — checks: pubkey == the account's registered key, `seq` strictly above the
+account's monotonic floor (replay-proof), market-order price within ±10% of the on-chain
+last price, and the input-book hash == the on-chain book (no fabricated resting orders).
+Any failure rejects the round fail-closed. Cost: ~1.31M gas/order (measured) → a signed
+batch is gas-bound at ~3,800 orders; the ZK matcher folds all signatures into one proof.
 
 **Encrypt-until-batch (option 2, sealed orders with no reveal round).** Orders are
 encrypted (ECIES) to an **off-protocol committee** key committed on-chain via `ENC_SETUP`

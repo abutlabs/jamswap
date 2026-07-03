@@ -22,8 +22,41 @@ pub fn canon(action: &[u8], parts: &[&[u8]]) -> Vec<u8> {
     m
 }
 
+/// Canonical message a trader signs to place an order. Covers everything the trader chose —
+/// account, market, side, quantity, order type, sealing, limit price — plus a per-account
+/// monotonic `seq` so a captured signature can't be replayed into a later batch. The order id
+/// is NOT signed (it's builder-assigned after signing); replay protection comes from `seq`.
+/// Market orders sign price 0 (the executed price is builder-derived within the band, which
+/// accumulate re-checks against the on-chain last price).
+/// Must stay byte-identical to the constructions in server.py / the UI.
+#[allow(clippy::too_many_arguments)]
+pub fn order_msg(
+    account: u32,
+    market: u32,
+    side: u8,
+    qty: u32,
+    is_market: bool,
+    sealed: bool,
+    signed_price: u32,
+    seq: u64,
+) -> Vec<u8> {
+    canon(
+        b"order",
+        &[
+            &account.to_le_bytes(),
+            &market.to_le_bytes(),
+            &[side],
+            &qty.to_le_bytes(),
+            &[is_market as u8],
+            &[sealed as u8],
+            &signed_price.to_le_bytes(),
+            &seq.to_le_bytes(),
+        ],
+    )
+}
+
 /// Verify an ed25519 signature over `msg` by `pubkey`. Rejects malformed keys/signatures, and
-/// (like every JAM validator re-running this) is deterministic. Accepts the `<Bytes>` wallet
+/// (like any JAM guarantor or auditor re-running this) is deterministic. Accepts the `<Bytes>`
 /// framing so a message signed via `signRaw` verifies against the same canonical `msg`.
 pub fn verify_signed(pubkey: &[u8; 32], msg: &[u8], sig: &[u8; 64]) -> bool {
     let Ok(pk) = PublicKey::from_slice(pubkey) else { return false };
@@ -78,6 +111,21 @@ mod tests {
         let mut bad = sig;
         bad[0] ^= 0xff;
         assert!(!verify_signed(&pk, &msg, &bad), "corrupt signature must not verify");
+    }
+
+    #[test]
+    fn order_msg_binds_every_field() {
+        let base = order_msg(7, 1, 0, 100, false, false, 250, 5);
+        assert!(base.starts_with(b"jamswap:v1:order"));
+        // flipping any field must change the message (no cross-field/replay collisions)
+        assert_ne!(base, order_msg(8, 1, 0, 100, false, false, 250, 5)); // account
+        assert_ne!(base, order_msg(7, 2, 0, 100, false, false, 250, 5)); // market
+        assert_ne!(base, order_msg(7, 1, 1, 100, false, false, 250, 5)); // side
+        assert_ne!(base, order_msg(7, 1, 0, 101, false, false, 250, 5)); // qty
+        assert_ne!(base, order_msg(7, 1, 0, 100, true, false, 250, 5)); // market-order flag
+        assert_ne!(base, order_msg(7, 1, 0, 100, false, true, 250, 5)); // sealed flag
+        assert_ne!(base, order_msg(7, 1, 0, 100, false, false, 251, 5)); // price
+        assert_ne!(base, order_msg(7, 1, 0, 100, false, false, 250, 6)); // seq
     }
 
     #[test]

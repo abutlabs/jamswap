@@ -10,7 +10,7 @@ use jam_pvm_common::jam_types::*;
 use jam_pvm_common::{declare_service, Service};
 
 use blake2::{Blake2s256, Digest};
-use match_engine::auth::{canon, verify_signed};
+use match_engine::auth::{canon, order_msg, verify_signed};
 use match_engine::{clear, resting, wire, Order, Side};
 
 declare_service!(Jamswap);
@@ -24,7 +24,9 @@ struct Jamswap;
 polkavm_derive::min_stack_size!(4 * 1024 * 1024);
 
 // payload / work-output tags
-const TAG_MATCH: u8 = 0; // plaintext batch for one market: [tag][market][base][quote][orders…]
+// TAG 0 (unsigned TAG_MATCH) is RETIRED: it let the builder submit orders nobody signed.
+// Public rounds now go exclusively through TAG_SMATCH, whose orders are signature-verified
+// in refine — leaving the unsigned path in place would be a downgrade attack.
 const TAG_DEPOSIT: u8 = 1; // [tag][account][asset_id][amount] — fund a balance (Phase-2 faucet)
 const TAG_COMMIT: u8 = 2; // [tag][market][account][commitment(32)] — seal a hidden order
 const TAG_REVEAL: u8 = 3; // unified sealed round — see reveal_output() for the wire layout
@@ -37,6 +39,8 @@ const TAG_TREASURY: u8 = 8; // [tag][asset(4)][amount(8)][dest(4)][nonce(8)][sig
 const TAG_ENC_SETUP: u8 = 9; // gov-signed: [tag][n:u8][committee_pks(n*32)][nonce(8)][sig(64)] — commit the committee keys on-chain
 const TAG_ENC_COMMIT: u8 = 10; // [tag][market(4)][C1(32)][body(ORDER_LEN)] — post an encrypted order (stored by id = H(ciphertext))
 const TAG_ENC_ROUND: u8 = 11; // sealed-encrypted round — see enc_round_output() for the wire layout
+// --- trustless public orders: per-order ed25519 verified IN REFINE (no builder trust) ---
+const TAG_SMATCH: u8 = 12; // signed public round — see parse_public_section() / smatch_output()
 
 // Governance key authorised to sweep the fee treasury AND commit the encrypt-until-batch
 // committee. Derived from the documented demo seed b"jamswap:demo:governance:key:v1!!"
@@ -160,6 +164,17 @@ fn get_nonce(handle: u32) -> u64 {
 fn set_nonce(handle: u32, v: u64) {
     set_storage(&mkey(b"nc", handle), &v.to_le_bytes()).ok();
 }
+// Per-account monotonic order-sequence floor (b"sq"‖handle → u64). Distinct from the strict
+// per-op nonce above: orders are concurrent (several may be in flight), so instead of exact
+// equality each signed order carries a client-chosen seq that must be STRICTLY greater than
+// the account's floor; the floor rises to the round's max. A captured order signature can
+// therefore never be replayed into a later batch.
+fn get_seq_floor(handle: u32) -> u64 {
+    get_storage(&mkey(b"sq", handle)).map(|v| le_u64(&v)).unwrap_or(0)
+}
+fn set_seq_floor(handle: u32, v: u64) {
+    set_storage(&mkey(b"sq", handle), &v.to_le_bytes()).ok();
+}
 // Assign a handle to a fresh pubkey (idempotent: an already-registered key keeps its handle).
 fn register_key(pubkey: &[u8; 32]) -> u32 {
     if let Some(h) = handle_of(pubkey) {
@@ -183,19 +198,106 @@ fn market_assets(market: u32) -> Option<(u32, u32)> {
     if v.len() >= 8 { Some((ru32(&v, 0), ru32(&v, 4))) } else { None }
 }
 
-// clear a market's orders → work-output: [TAG_MATCH][market][base][quote][settle_len][settle][book]
-fn match_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8> {
-    let c = clear(orders);
-    let settle = wire::encode_settlement(c.price, orders, &c);
-    let book = wire::encode_orders(&resting(orders, &c));
-    let mut out = Vec::with_capacity(17 + settle.len() + book.len());
-    out.push(TAG_MATCH);
+// ---- the signed public-order section (shared by every round type) ----------
+//
+// Every round's public input is now:
+//   [ns:u16] ns×SignedOrder(126)          — NEW orders, each carrying pubkey + ed25519 sig
+//   [np:u16] np×(account:4 ‖ oid:4)       — resting entries the builder prunes (expired)
+//   [resting book bytes, 17 each]         — MUST be the on-chain book, byte-exact
+//
+// Refine verifies each new order's signature statelessly against the CARRIED pubkey (and
+// that a limit order executes at exactly the signed price); accumulate — which can read
+// state — finishes the job: pubkey must equal the account's registered key, seq must beat
+// the account's floor (replay), market orders must price within the band of the on-chain
+// last price, and the book refine matched against must hash to the on-chain book (so the
+// builder can't fabricate resting orders). Pruning is builder discretion it already had
+// (expiry policy lives off-chain), but it is now EXPLICIT in the input, never silent.
+// Fail-closed: any bad signature / price mismatch / malformed section rejects the round.
+struct PublicSection {
+    book: Vec<Order>,       // on-chain resting book minus the pruned entries
+    new_orders: Vec<Order>, // signature-verified new orders, in submission order
+    bindings: Vec<wire::Binding>,
+    book_hash: [u8; 32],    // H(raw input book bytes) — accumulate compares vs on-chain
+}
+fn parse_public_section(data: &[u8], mut off: usize, market: u32) -> Option<PublicSection> {
+    let ns = ru16(data.get(off..off + 2)?, 0) as usize;
+    off += 2;
+    let sblob = data.get(off..off + ns * wire::SIGNED_ORDER_LEN)?;
+    off += ns * wire::SIGNED_ORDER_LEN;
+    let signed = wire::decode_signed_orders(sblob);
+    if signed.len() != ns {
+        return None;
+    }
+    let mut new_orders = Vec::with_capacity(ns);
+    let mut bindings = Vec::with_capacity(ns);
+    for s in &signed {
+        let is_market = s.flags & wire::FLAG_MARKET != 0;
+        if s.flags & wire::FLAG_SEALED != 0 {
+            return None; // sealed orders never travel in the public section
+        }
+        // a limit order must execute at exactly the price the trader signed
+        if !is_market && s.order.price != s.signed_price {
+            return None;
+        }
+        let side = if s.order.side == Side::Buy { 0u8 } else { 1u8 };
+        let msg =
+            order_msg(s.order.account, market, side, s.order.qty, is_market, false, s.signed_price, s.seq);
+        if !verify_signed(&s.pubkey, &msg, &s.sig) {
+            return None;
+        }
+        new_orders.push(s.order);
+        bindings.push(wire::Binding {
+            account: s.order.account,
+            seq: s.seq,
+            pubkey: s.pubkey,
+            flags: s.flags,
+            price: s.order.price,
+        });
+    }
+    let np = ru16(data.get(off..off + 2)?, 0) as usize;
+    off += 2;
+    let pruned = data.get(off..off + np * 8)?;
+    off += np * 8;
+    let book_bytes = data.get(off..)?;
+    let book_hash = commitment(book_bytes);
+    let mut book = Vec::new();
+    'keep: for o in wire::decode_orders(book_bytes) {
+        for i in 0..np {
+            if o.account == ru32(pruned, i * 8) && o.id == ru32(pruned, i * 8 + 4) {
+                continue 'keep;
+            }
+        }
+        book.push(o);
+    }
+    Some(PublicSection { book, new_orders, bindings, book_hash })
+}
+
+// The verification trailer every round output now ends with, so accumulate can finish
+// the checks refine couldn't do statelessly: [nb:u16][bindings 49×nb][book_hash 32][book].
+fn push_auth_trailer(out: &mut Vec<u8>, bindings: &[wire::Binding], book_hash: &[u8; 32], book: &[u8]) {
+    out.extend_from_slice(&(bindings.len() as u16).to_le_bytes());
+    out.extend_from_slice(&wire::encode_bindings(bindings));
+    out.extend_from_slice(book_hash);
+    out.extend_from_slice(book);
+}
+
+// clear a signed public round → work-output:
+// [TAG_SMATCH][market][base][quote][settle_len][settle][nb][bindings][book_hash][book]
+fn smatch_output(market: u32, base: u32, quote: u32, ps: &PublicSection) -> Vec<u8> {
+    let mut all: Vec<Order> = Vec::with_capacity(ps.book.len() + ps.new_orders.len());
+    all.extend_from_slice(&ps.book);
+    all.extend_from_slice(&ps.new_orders);
+    let c = clear(&all);
+    let settle = wire::encode_settlement(c.price, &all, &c);
+    let book = wire::encode_orders(&resting(&all, &c));
+    let mut out = Vec::with_capacity(51 + settle.len() + ps.bindings.len() * wire::BINDING_LEN + book.len());
+    out.push(TAG_SMATCH);
     out.extend_from_slice(&market.to_le_bytes());
     out.extend_from_slice(&base.to_le_bytes());
     out.extend_from_slice(&quote.to_le_bytes());
     out.extend_from_slice(&(settle.len() as u32).to_le_bytes());
     out.extend_from_slice(&settle);
-    out.extend_from_slice(&book);
+    push_auth_trailer(&mut out, &ps.bindings, &ps.book_hash, &book);
     out
 }
 
@@ -209,17 +311,19 @@ fn match_output(market: u32, base: u32, quote: u32, orders: &[Order]) -> Vec<u8>
 // Output: [TAG_REVEAL][market][base][quote]
 //         [settle_len:u32][settle]            — all fills, at the uniform price
 //         [consumed_len:u32][consumed(32×k)]  — commitment hashes this round consumed
+//         [nb:u16][bindings][book_hash(32)]   — auth trailer (see push_auth_trailer)
 //         [book]                              — new resting book (sealed remainder excluded)
 fn reveal_output(
     market: u32,
     base: u32,
     quote: u32,
-    plaintext: &[Order],
+    ps: &PublicSection,
     sealed: &[Order],
     consumed: &[[u8; 32]],
 ) -> Vec<u8> {
-    let mut all: Vec<Order> = Vec::with_capacity(plaintext.len() + sealed.len());
-    all.extend_from_slice(plaintext);
+    let mut all: Vec<Order> = Vec::with_capacity(ps.book.len() + ps.new_orders.len() + sealed.len());
+    all.extend_from_slice(&ps.book);
+    all.extend_from_slice(&ps.new_orders);
     all.extend_from_slice(sealed);
     let c = clear(&all);
     let settle = wire::encode_settlement(c.price, &all, &c);
@@ -228,7 +332,7 @@ fn reveal_output(
     let public_rest: Vec<Order> =
         rest.into_iter().filter(|o| !sealed.iter().any(|s| s.id == o.id)).collect();
     let book = wire::encode_orders(&public_rest);
-    let mut out = Vec::with_capacity(21 + settle.len() + consumed.len() * 32 + book.len());
+    let mut out = Vec::with_capacity(55 + settle.len() + consumed.len() * 32 + book.len());
     out.push(TAG_REVEAL);
     out.extend_from_slice(&market.to_le_bytes());
     out.extend_from_slice(&base.to_le_bytes());
@@ -239,7 +343,7 @@ fn reveal_output(
     for h in consumed {
         out.extend_from_slice(h);
     }
-    out.extend_from_slice(&book);
+    push_auth_trailer(&mut out, &ps.bindings, &ps.book_hash, &book);
     out
 }
 
@@ -253,18 +357,20 @@ fn reveal_output(
 //         [settle_len:u32][settle]
 //         [consumed_len:u32][consumed(32×k)]   — ciphertext ids consumed
 //         [committee_hash(32)]                 — committee refine used (accumulate verifies)
+//         [nb:u16][bindings][book_hash(32)]    — auth trailer (see push_auth_trailer)
 //         [book]                               — new resting book (sealed remainder excluded)
 fn enc_round_output(
     market: u32,
     base: u32,
     quote: u32,
-    plaintext: &[Order],
+    ps: &PublicSection,
     sealed: &[Order],
     consumed: &[[u8; 32]],
     committee_h: &[u8; 32],
 ) -> Vec<u8> {
-    let mut all: Vec<Order> = Vec::with_capacity(plaintext.len() + sealed.len());
-    all.extend_from_slice(plaintext);
+    let mut all: Vec<Order> = Vec::with_capacity(ps.book.len() + ps.new_orders.len() + sealed.len());
+    all.extend_from_slice(&ps.book);
+    all.extend_from_slice(&ps.new_orders);
     all.extend_from_slice(sealed);
     let c = clear(&all);
     let settle = wire::encode_settlement(c.price, &all, &c);
@@ -272,7 +378,7 @@ fn enc_round_output(
     let public_rest: Vec<Order> =
         rest.into_iter().filter(|o| !sealed.iter().any(|s| s.id == o.id)).collect();
     let book = wire::encode_orders(&public_rest);
-    let mut out = Vec::with_capacity(21 + settle.len() + consumed.len() * 32 + 32 + book.len());
+    let mut out = Vec::with_capacity(55 + settle.len() + consumed.len() * 32 + 32 + book.len());
     out.push(TAG_ENC_ROUND);
     out.extend_from_slice(&market.to_le_bytes());
     out.extend_from_slice(&base.to_le_bytes());
@@ -284,7 +390,7 @@ fn enc_round_output(
         out.extend_from_slice(h);
     }
     out.extend_from_slice(committee_h);
-    out.extend_from_slice(&book);
+    push_auth_trailer(&mut out, &ps.bindings, &ps.book_hash, &book);
     out
 }
 
@@ -349,6 +455,58 @@ fn ru16(b: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([b[off], b[off + 1]])
 }
 
+// Market orders sign price 0 (the executed price is builder-derived), so accumulate holds the
+// executed price to ±10% of the on-chain last clearing price. Must match MARKET_BAND in
+// server.py — the builder derives inside the same band the service enforces.
+const MARKET_BAND_PCT: u128 = 10;
+
+// The state-side half of order verification (refine already did the crypto). For a round to
+// settle, ALL of: the book refine matched against hashes to the on-chain book (no fabricated
+// resting orders); every new order's carried pubkey IS the account's registered key; every
+// seq strictly beats the account's floor (no replayed signatures — floors are per account and
+// only ever rise); a market order's executed price sits within the band of the on-chain last
+// price. Returns the floors to commit, or None to reject the round untouched (fail-closed —
+// consistent with consume_set: a builder that includes one bad order forfeits the round).
+fn check_round_auth(market: u32, bindings_blob: &[u8], book_hash: &[u8]) -> Option<Vec<(u32, u64)>> {
+    if commitment(&get_storage(&mkey(b"book", market)).unwrap_or_default())[..] != *book_hash {
+        return None; // refine was fed a book that isn't the on-chain book
+    }
+    let bindings = wire::decode_bindings(bindings_blob);
+    let lp = get_storage(&mkey(b"lp", market)).map(|v| le_u64(&v)).unwrap_or(0);
+    let mut floors: Vec<(u32, u64)> = Vec::new();
+    for b in &bindings {
+        if pubkey_of(b.account)? != b.pubkey {
+            return None; // unregistered account or a key that isn't the registered one
+        }
+        let i = match floors.iter().position(|(a, _)| *a == b.account) {
+            Some(i) => i,
+            None => {
+                floors.push((b.account, get_seq_floor(b.account)));
+                floors.len() - 1
+            }
+        };
+        if b.seq <= floors[i].1 {
+            return None; // replayed (or intra-round duplicate) order signature
+        }
+        floors[i].1 = b.seq;
+        if b.flags & wire::FLAG_MARKET != 0 {
+            if lp == 0 {
+                return None; // no reference price — a market order can't be bounded
+            }
+            let (p, l) = (b.price as u128, lp as u128);
+            if p * 100 < l * (100 - MARKET_BAND_PCT) || p * 100 > l * (100 + MARKET_BAND_PCT) {
+                return None; // builder-derived price outside the band the trader accepted
+            }
+        }
+    }
+    Some(floors)
+}
+fn commit_seq_floors(floors: &[(u32, u64)]) {
+    for (a, s) in floors {
+        set_seq_floor(*a, *s);
+    }
+}
+
 // Hash the committee blob (exactly the bytes stored under b"committee": [n:u8][pks n*32]).
 // refine outputs this hash; accumulate re-hashes the ON-CHAIN committee and compares, so a
 // builder cannot swap in its own committee keys to steer the decryption to a forged order.
@@ -362,9 +520,10 @@ fn committee_hash(blob: &[u8]) -> [u8; 32] {
 //   [m:u16]                                      — number of sealed ciphertexts
 //   m × ( [C1:32][body_len:u8][body] )           — the encrypted orders (bodies = ORDER_LEN)
 //   m × [partials: n*PARTIAL_LEN]                — one proven partial per member per ciphertext
-//   [plaintext orders]                           — resting book + public orders (17B each)
-// Verifies every partial against the committee keys, recovers each order, and clears. Returns
-// None (⇒ empty output ⇒ round dropped) on any malformed input or failed decryption proof.
+//   [signed public section]                      — see parse_public_section()
+// Verifies every partial against the committee keys, recovers each order, verifies every
+// public order's signature, and clears. Returns None (⇒ empty output ⇒ round dropped) on any
+// malformed input, failed decryption proof, or bad order signature.
 fn refine_enc_round(data: &[u8]) -> Option<Vec<u8>> {
     let n_off = 13usize;
     let n = *data.get(n_off)? as usize;
@@ -398,8 +557,8 @@ fn refine_enc_round(data: &[u8]) -> Option<Vec<u8>> {
     // partials: m × (n × PARTIAL_LEN)
     let partials_blob = data.get(off..off + m * n * vdec::PARTIAL_LEN)?;
     off += m * n * vdec::PARTIAL_LEN;
-    // remaining bytes = plaintext (resting book + public orders)
-    let plaintext = wire::decode_orders(&data[off..]);
+    // remaining bytes = the signed public section (new orders verified here, in refine)
+    let ps = parse_public_section(data, off, market)?;
 
     let mut sealed: Vec<Order> = Vec::with_capacity(m);
     let mut consumed: Vec<[u8; 32]> = Vec::with_capacity(m);
@@ -424,7 +583,7 @@ fn refine_enc_round(data: &[u8]) -> Option<Vec<u8>> {
     blob.extend_from_slice(pks_blob);
     let ch = committee_hash(&blob);
 
-    Some(enc_round_output(market, base, quote, &plaintext, &sealed, &consumed, &ch))
+    Some(enc_round_output(market, base, quote, &ps, &sealed, &consumed, &ch))
 }
 
 impl Service for Jamswap {
@@ -440,9 +599,15 @@ impl Service for Jamswap {
             return Vec::new().into();
         }
         match data[0] {
-            TAG_MATCH if data.len() >= 13 => {
+            // signed public round: [tag][market][base][quote][signed public section]
+            // — every NEW order's ed25519 signature is verified HERE, in refine, where gas is
+            // abundant. Nobody (builder included) can inject an order a trader didn't sign.
+            TAG_SMATCH if data.len() >= 13 => {
                 let (market, base, quote) = (ru32(&data, 1), ru32(&data, 5), ru32(&data, 9));
-                match_output(market, base, quote, &wire::decode_orders(&data[13..])).into()
+                match parse_public_section(&data, 13, market) {
+                    Some(ps) => smatch_output(market, base, quote, &ps).into(),
+                    None => Vec::new().into(), // bad signature / malformed — round dropped
+                }
             }
             // echoes for accumulate (auth + state changes happen there, where storage lives)
             TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_LIST | TAG_REGISTER
@@ -456,7 +621,7 @@ impl Service for Jamswap {
             //   [tag][market][base][quote]
             //   [commits_len:u32][commits]
             //   [reveals_len:u32][reveals]        — n×(order17 ‖ nonce32)
-            //   [plaintext orders]                — resting book + public orders (each 17B)
+            //   [signed public section]           — see parse_public_section()
             TAG_REVEAL if data.len() >= 17 => {
                 let cl = ru32(&data, 13) as usize;
                 if data.len() < 21 + cl {
@@ -470,7 +635,9 @@ impl Service for Jamswap {
                     return Vec::new().into();
                 }
                 let reveals = &data[reveals_off..reveals_off + rl];
-                let plaintext = wire::decode_orders(&data[reveals_off + rl..]);
+                let Some(ps) = parse_public_section(&data, reveals_off + rl, market) else {
+                    return Vec::new().into(); // bad public-order signature — round dropped
+                };
                 let n_commit = commits.len() / 32;
                 let mut verified: Vec<Order> = Vec::new();
                 let mut consumed: Vec<[u8; 32]> = Vec::new();
@@ -494,7 +661,7 @@ impl Service for Jamswap {
                         }
                     }
                 }
-                reveal_output(market, base, quote, &plaintext, &verified, &consumed).into()
+                reveal_output(market, base, quote, &ps, &verified, &consumed).into()
             }
             _ => Vec::new().into(),
         }
@@ -626,9 +793,10 @@ impl Service for Jamswap {
                     }
                 }
                 // unified sealed round (immediate-or-cancel for sealed orders):
-                // [tag][market][base][quote][settle_len][settle][consumed_len][consumed][book]
-                // — settle everything that crossed, consume ONLY the revealed commitments, and
-                // write the new public book (sealed remainder already excluded in refine).
+                // [tag][m][b][q][settle_len][settle][consumed_len][consumed][nb][bindings][book_hash][book]
+                // — verify the public-order bindings + input-book hash, consume ONLY the revealed
+                // commitments, then settle and write the new public book (sealed remainder
+                // already excluded in refine). ALL checks precede ANY state change.
                 TAG_REVEAL if out.len() >= 21 => {
                     let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
                     if market_assets(market) != Some((base, quote)) {
@@ -641,32 +809,57 @@ impl Service for Jamswap {
                     let settle = &out[17..17 + settle_len];
                     let consumed_len = ru32(&out, 17 + settle_len) as usize;
                     let consumed_off = 21 + settle_len;
-                    if out.len() < consumed_off + consumed_len {
+                    if out.len() < consumed_off + consumed_len + 2 {
                         continue;
                     }
                     let consumed = &out[consumed_off..consumed_off + consumed_len];
-                    let book = &out[consumed_off + consumed_len..];
+                    let nb = ru16(&out, consumed_off + consumed_len) as usize;
+                    let b_off = consumed_off + consumed_len + 2;
+                    if out.len() < b_off + nb * wire::BINDING_LEN + 32 {
+                        continue;
+                    }
+                    let bindings = &out[b_off..b_off + nb * wire::BINDING_LEN];
+                    let h_off = b_off + nb * wire::BINDING_LEN;
+                    let book_hash = &out[h_off..h_off + 32];
+                    let book = &out[h_off + 32..];
+                    let Some(floors) = check_round_auth(market, bindings, book_hash) else {
+                        continue; // forged pubkey binding / replayed seq / fabricated book
+                    };
                     // consume-or-reject BEFORE settling: every revealed commitment must exist
                     // on-chain, else the builder smuggled in an uncommitted order.
                     if !consume_set(&mkey(b"commits", market), consumed) {
                         continue;
                     }
+                    commit_seq_floors(&floors);
                     set_storage(&mkey(b"book", market), book).ok();
                     apply_settlement(base, quote, market, settle);
                 }
-                // [tag][market][base][quote][settle_len][settle][book] — plaintext (public) round
-                TAG_MATCH if out.len() >= 17 => {
+                // signed public round:
+                // [tag][m][b][q][settle_len][settle][nb][bindings][book_hash][book]
+                TAG_SMATCH if out.len() >= 19 => {
                     let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
                     // integrity: the market must be listed with exactly these assets
                     if market_assets(market) != Some((base, quote)) {
                         continue; // unlisted or asset-mismatched market — reject the round
                     }
                     let settle_len = ru32(&out, 13) as usize;
-                    if out.len() < 17 + settle_len {
+                    if out.len() < 19 + settle_len {
                         continue;
                     }
                     let settle = &out[17..17 + settle_len];
-                    let book = &out[17 + settle_len..];
+                    let nb = ru16(&out, 17 + settle_len) as usize;
+                    let b_off = 19 + settle_len;
+                    if out.len() < b_off + nb * wire::BINDING_LEN + 32 {
+                        continue;
+                    }
+                    let bindings = &out[b_off..b_off + nb * wire::BINDING_LEN];
+                    let h_off = b_off + nb * wire::BINDING_LEN;
+                    let book_hash = &out[h_off..h_off + 32];
+                    let book = &out[h_off + 32..];
+                    let Some(floors) = check_round_auth(market, bindings, book_hash) else {
+                        continue; // forged pubkey binding / replayed seq / fabricated book
+                    };
+                    commit_seq_floors(&floors);
                     set_storage(&mkey(b"book", market), book).ok();
                     apply_settlement(base, quote, market, settle);
                 }
@@ -706,10 +899,11 @@ impl Service for Jamswap {
                     set_storage(&key, &set).ok();
                 }
                 // sealed-encrypted round: [tag][market][base][quote][settle_len][settle]
-                //   [consumed_len][consumed][committee_hash(32)][book]
-                // — verify the round used the ON-CHAIN committee, consume-or-reject the
-                // ciphertext ids, then settle. Two builder-defence checks, both fail-closed.
-                TAG_ENC_ROUND if out.len() >= 21 + 32 => {
+                //   [consumed_len][consumed][committee_hash(32)][nb][bindings][book_hash][book]
+                // — verify the round used the ON-CHAIN committee, verify the public-order
+                // bindings + input-book hash, consume-or-reject the ciphertext ids, then
+                // settle. All builder-defence checks fail-closed, before any state change.
+                TAG_ENC_ROUND if out.len() >= 23 + 32 => {
                     let (market, base, quote) = (ru32(&out, 1), ru32(&out, 5), ru32(&out, 9));
                     if market_assets(market) != Some((base, quote)) {
                         continue;
@@ -721,22 +915,35 @@ impl Service for Jamswap {
                     let settle = &out[17..17 + settle_len];
                     let consumed_len = ru32(&out, 17 + settle_len) as usize;
                     let consumed_off = 21 + settle_len;
-                    if out.len() < consumed_off + consumed_len + 32 {
+                    if out.len() < consumed_off + consumed_len + 32 + 2 {
                         continue;
                     }
                     let consumed = &out[consumed_off..consumed_off + consumed_len];
                     let ch = &out[consumed_off + consumed_len..consumed_off + consumed_len + 32];
-                    let book = &out[consumed_off + consumed_len + 32..];
+                    let nb = ru16(&out, consumed_off + consumed_len + 32) as usize;
+                    let b_off = consumed_off + consumed_len + 34;
+                    if out.len() < b_off + nb * wire::BINDING_LEN + 32 {
+                        continue;
+                    }
+                    let bindings = &out[b_off..b_off + nb * wire::BINDING_LEN];
+                    let h_off = b_off + nb * wire::BINDING_LEN;
+                    let book_hash = &out[h_off..h_off + 32];
+                    let book = &out[h_off + 32..];
                     // (1) the round MUST have used the committed committee keys, else a builder
                     // could supply its own committee + partials and decrypt to a forged order.
                     let committee = get_storage(b"committee").unwrap_or_default();
                     if committee.is_empty() || committee_hash(&committee)[..] != *ch {
                         continue;
                     }
-                    // (2) consume-or-reject: every ciphertext id must exist in the encset.
+                    // (2) the public-order bindings + the input book must check out.
+                    let Some(floors) = check_round_auth(market, bindings, book_hash) else {
+                        continue;
+                    };
+                    // (3) consume-or-reject: every ciphertext id must exist in the encset.
                     if !consume_set(&mkey(b"encset", market), consumed) {
                         continue;
                     }
+                    commit_seq_floors(&floors);
                     set_storage(&mkey(b"book", market), book).ok();
                     apply_settlement(base, quote, market, settle);
                 }

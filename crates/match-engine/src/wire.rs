@@ -74,6 +74,116 @@ pub fn decode_clearing(data: &[u8]) -> Option<Clearing> {
     Some(Clearing { price, volume, fills })
 }
 
+// ---- trustless order authentication (verified in refine) -------------------
+//
+// A NEW public order travels with everything refine needs to verify it statelessly:
+// the trader's pubkey and signature over auth::order_msg(...). Refine verifies the
+// signature (and that the executed price equals the signed price for limit orders);
+// accumulate — which CAN read state — then binds the pubkey to the account's
+// registered key, enforces the per-account monotonic seq (replay), and band-checks
+// market orders against the on-chain last price. Split verification: expensive
+// crypto where gas is abundant, cheap state checks where state lives.
+
+/// Order type / sealing flags carried beside a signed order (they're part of the
+/// signed message, so refine can reconstruct exactly what the trader signed).
+pub const FLAG_MARKET: u8 = 1;
+pub const FLAG_SEALED: u8 = 2;
+
+/// order(17) ‖ flags(1) ‖ signed_price(4) ‖ seq(8) ‖ pubkey(32) ‖ sig(64)
+pub const SIGNED_ORDER_LEN: usize = ORDER_LEN + 1 + 4 + 8 + 32 + 64;
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct SignedOrder {
+    pub order: Order,
+    pub flags: u8,
+    pub signed_price: u32,
+    pub seq: u64,
+    pub pubkey: [u8; 32],
+    pub sig: [u8; 64],
+}
+
+pub fn encode_signed_orders(orders: &[SignedOrder]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(orders.len() * SIGNED_ORDER_LEN);
+    for s in orders {
+        b.extend_from_slice(&encode_orders(core::slice::from_ref(&s.order)));
+        b.push(s.flags);
+        b.extend_from_slice(&s.signed_price.to_le_bytes());
+        b.extend_from_slice(&s.seq.to_le_bytes());
+        b.extend_from_slice(&s.pubkey);
+        b.extend_from_slice(&s.sig);
+    }
+    b
+}
+
+pub fn decode_signed_orders(data: &[u8]) -> Vec<SignedOrder> {
+    let mut out = Vec::new();
+    let n = data.len() / SIGNED_ORDER_LEN;
+    for i in 0..n {
+        let s = &data[i * SIGNED_ORDER_LEN..(i + 1) * SIGNED_ORDER_LEN];
+        let order = match decode_orders(&s[..ORDER_LEN]).into_iter().next() {
+            Some(o) => o,
+            None => continue,
+        };
+        let mut pubkey = [0u8; 32];
+        pubkey.copy_from_slice(&s[30..62]);
+        let mut sig = [0u8; 64];
+        sig.copy_from_slice(&s[62..126]);
+        out.push(SignedOrder {
+            order,
+            flags: s[17],
+            signed_price: u32::from_le_bytes([s[18], s[19], s[20], s[21]]),
+            seq: u64::from_le_bytes([s[22], s[23], s[24], s[25], s[26], s[27], s[28], s[29]]),
+            pubkey,
+            sig,
+        });
+    }
+    out
+}
+
+/// What refine reports to accumulate about each admitted NEW order, so accumulate can
+/// finish the verification refine couldn't do statelessly:
+/// account(4) ‖ seq(8) ‖ pubkey(32) ‖ flags(1) ‖ price(4).
+pub const BINDING_LEN: usize = 4 + 8 + 32 + 1 + 4;
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Binding {
+    pub account: u32,
+    pub seq: u64,
+    pub pubkey: [u8; 32],
+    pub flags: u8,
+    pub price: u32,
+}
+
+pub fn encode_bindings(bindings: &[Binding]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(bindings.len() * BINDING_LEN);
+    for x in bindings {
+        b.extend_from_slice(&x.account.to_le_bytes());
+        b.extend_from_slice(&x.seq.to_le_bytes());
+        b.extend_from_slice(&x.pubkey);
+        b.push(x.flags);
+        b.extend_from_slice(&x.price.to_le_bytes());
+    }
+    b
+}
+
+pub fn decode_bindings(data: &[u8]) -> Vec<Binding> {
+    let mut out = Vec::new();
+    let n = data.len() / BINDING_LEN;
+    for i in 0..n {
+        let s = &data[i * BINDING_LEN..(i + 1) * BINDING_LEN];
+        let mut pubkey = [0u8; 32];
+        pubkey.copy_from_slice(&s[12..44]);
+        out.push(Binding {
+            account: u32::from_le_bytes([s[0], s[1], s[2], s[3]]),
+            seq: u64::from_le_bytes([s[4], s[5], s[6], s[7], s[8], s[9], s[10], s[11]]),
+            pubkey,
+            flags: s[44],
+            price: u32::from_le_bytes([s[45], s[46], s[47], s[48]]),
+        });
+    }
+    out
+}
+
 /// One fill resolved to its trader + side, at the uniform clearing price — what
 /// settlement (`accumulate`) needs to debit/credit balances.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -198,6 +308,26 @@ mod tests {
             Order { account: 9, id: 2, side: Side::Sell, price: 99, qty: 7 },
         ];
         assert_eq!(decode_orders(&encode_orders(&orders)), orders.to_vec());
+    }
+
+    #[test]
+    fn signed_order_and_binding_roundtrip() {
+        let s = SignedOrder {
+            order: Order { account: 7, id: 42, side: Side::Buy, price: 100, qty: 10 },
+            flags: FLAG_MARKET,
+            signed_price: 0,
+            seq: 1_720_000_000_000,
+            pubkey: [0xAB; 32],
+            sig: [0xCD; 64],
+        };
+        let enc = encode_signed_orders(core::slice::from_ref(&s));
+        assert_eq!(enc.len(), SIGNED_ORDER_LEN);
+        assert_eq!(decode_signed_orders(&enc), alloc::vec![s]);
+
+        let b = Binding { account: 7, seq: 9, pubkey: [0xEF; 32], flags: 0, price: 100 };
+        let enc = encode_bindings(core::slice::from_ref(&b));
+        assert_eq!(enc.len(), BINDING_LEN);
+        assert_eq!(decode_bindings(&enc), alloc::vec![b]);
     }
 
     #[test]
