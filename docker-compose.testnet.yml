@@ -5,8 +5,10 @@
 # This swaps the single `lasair-node` (immediate local execution) for six
 # `lasair-testnet-node` validators running actual JAM consensus: **real TCP block
 # gossip, wall-clock leader rotation, 6 s slots, STF import** — PolkaJam-style. Every
-# order is included in a gossiped block and each validator re-executes `refine`
-# (the matching engine) and `accumulate` (settlement) byte-identically. The image is
+# order is included in a gossiped block; `refine` (the matching engine) runs on the
+# node that receives the work package (v0's operator RPC — protocol-level guarantor
+# assignment/auditing is later-milestone client work), and every validator imports the
+# block and re-executes `accumulate` (settlement) byte-identically. The image is
 # purpose-built for a 6-validator set (its baked genesis defines exactly six), so the
 # validator count is fixed at 6 — NODE_INDEX runs 0..5.
 #
@@ -57,7 +59,13 @@ services:
     environment: { NODE_INDEX: "5", NODES: *nodes, RPC_PORT: "19900" }
 
   dex:                          # off-chain builder API + trading UI, pointed at v0
-    image: python:3-slim
+    # Built (not pulled), same as docker-compose.yml: the encrypt-until-batch committee
+    # sidecar (crates/committee — OUR Rust binary simulating the n decryption-committee
+    # members, no relation to any JAM client) ships inside the image, so sealed orders
+    # use option 2 on the testnet too instead of silently falling back to commit–reveal.
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
     depends_on:
       v0: { condition: service_healthy }
       v1: { condition: service_healthy }

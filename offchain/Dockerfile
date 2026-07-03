@@ -11,9 +11,10 @@ RUN cargo build --release --manifest-path crates/committee/Cargo.toml \
  && cp /target/release/committee /committee
 
 FROM python:3-slim
-# PyNaCl: enables server-side governance signing for the (opt-in) beneficiary profit
-# sweep. Order-sig verification is kept OFF by default (REQUIRE_ORDER_SIG=0) to preserve
-# the prior permissive behaviour — the browser still signs orders regardless.
+# PyNaCl: server-side governance signing for the (opt-in) beneficiary profit sweep, and
+# the order-signature PREFLIGHT. Signatures are enforced ON-CHAIN regardless (public
+# orders verified per-order in refine; sealed commits owner-signed) — the preflight just
+# turns a would-be-rejected round into an instant API error, so it defaults ON.
 RUN pip install --no-cache-dir pynacl
 COPY --from=build /committee /usr/local/bin/committee
 COPY offchain/ /app/
@@ -22,6 +23,6 @@ WORKDIR /app
 # BENEFICIARY_SWEEP=1 lets the OWNER sweep profit over the API (prototype: server holds
 # the demo gov key) — leave off unless operator == owner. See docs/REVENUE.md.
 ENV COMMITTEE_BIN=/usr/local/bin/committee \
-    REQUIRE_ORDER_SIG=0 \
+    REQUIRE_ORDER_SIG=1 \
     PYTHONUNBUFFERED=1
 CMD ["python3", "server.py"]
