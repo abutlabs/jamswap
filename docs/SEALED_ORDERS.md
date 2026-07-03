@@ -41,8 +41,8 @@ below are the ELI5.
 
 | # | Approach | Hides your order until… | What it still leaks | State today |
 |---|----------|-------------------------|---------------------|-------------|
-| **3** | **Commit–reveal** | the round it crosses a counterparty (rests hidden until then) | briefly public *when* it clears; needs a reveal step | ✅ shipped (fallback) |
-| **2** | **Encrypt-until-batch** (committee) | the round it crosses (rests hidden until then; a committee decrypts it) | order becomes public at clearing; trust a committee for liveness | ✅ shipped — **the default** |
+| **3** | **Commit–reveal** | the round it crosses a counterparty (rests hidden until then) | briefly public *when* it clears; needs a reveal step | ✅ shipped — **the default** (the permissionless base state: no committee, no extra operators) |
+| **2** | **Encrypt-until-batch** (committee) | the round it crosses (rests hidden until then; a committee decrypts it) | order becomes public at clearing; trust a committee for liveness | ✅ shipped — **opt-in** (`ENC_MODE=1`; committee simulated today → [`COMMITTEE_DEPLOYMENT.md`](COMMITTEE_DEPLOYMENT.md)) |
 | **1** | **ZK dark-pool** (zero-knowledge matcher) | forever — it *never* appears on-chain | nothing about individual orders; only the batch result | 🔬 proven in a spike, not yet wired into Jamswap |
 
 > There is no rung 4. **FHE** (fully homomorphic encryption — matching directly on
@@ -75,12 +75,13 @@ you committed earlier, then includes it in the auction.
   forward**, so a large sealed order accumulates fills across many auctions while staying hidden,
   until it's complete or its good-till-time expires.
 
-This is the simplest, most trust-minimal rung: **no third party at all**. It's the
-`ENC_MODE=0` fallback in Jamswap.
+This is the simplest, most trust-minimal rung: **no third party at all** — nothing to
+deploy but the service itself, no asks of validators, client teams, or anyone else.
+That's why it's **Jamswap's default and base state** (rung 2 is the `ENC_MODE=1` opt-in).
 
 ---
 
-### Rung 2 — Encrypt-until-batch (committee decryption)  ✅ shipped — the default
+### Rung 2 — Encrypt-until-batch (committee decryption)  ✅ shipped — opt-in (`ENC_MODE=1`)
 
 **ELI5.** Instead of you holding the key to your locked box, you **encrypt your order
 to a committee** — a small group whose public key is published on-chain. You post the
@@ -95,7 +96,10 @@ what your order said** — they can only refuse to help (which just stalls, it c
 steal or alter).
 
 - **Better than rung 3:** **no reveal round** and **no griefing** — you encrypt once
-  and never have to come back online. This is why it's the default.
+  and never have to come back online. It stays **opt-in** rather than the default
+  because its committee is a simulation until the open work in
+  [`COMMITTEE_DEPLOYMENT.md`](COMMITTEE_DEPLOYMENT.md) lands — the base state must be
+  fully permissionless.
 - **The trust:** you trust the committee to be **live** (an honest majority helps
   decrypt). You do **not** trust them for correctness — the proofs force honest
   decryption. The committee uses **fresh keys**, never validator consensus keys (a JAM
@@ -265,8 +269,8 @@ live in [`COMMITTEE_DEPLOYMENT.md`](COMMITTEE_DEPLOYMENT.md).
 
 - **Want zero trusted parties and simplicity?** Rung 3 (commit–reveal). You hold your
   own secret; the tradeoff is a reveal step.
-- **Want to fire-and-forget without coming back online?** Rung 2 (the default). You
-  trust a committee for liveness only.
+- **Want to fire-and-forget without coming back online?** Rung 2 (opt-in, `ENC_MODE=1`).
+  You trust a committee for liveness only — simulated today, so it's not the base state.
 - **Want hidden resting orders with no trusted builder at all?** Rung 1 (ZK
   dark-pool) — the strongest, and the scaling answer for large batches, once integrated.
   (Rungs 2 & 3 already rest hidden, but rely on the builder for the crossing check.)

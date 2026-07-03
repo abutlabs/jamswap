@@ -24,9 +24,11 @@ services:
     restart: unless-stopped
 
   dex:                              # off-chain builder API + trading UI
-    # Built (not pulled) so the encrypt-until-batch committee sidecar (Rust) ships inside the
-    # image; COMMITTEE_BIN is baked in => sealed orders use option 2 (no reveal round). The
-    # build compiles the committee binary once (arkworks) then runs the stdlib-only Python server.
+    # Built (not pulled) so the encrypt-until-batch committee sidecar (Rust) is AVAILABLE in
+    # the image. Default sealing is commit–reveal (rung 3 — the permissionless base state, no
+    # committee); set ENC_MODE=1 below to opt in to the rung-2 committee (simulated — see
+    # docs/COMMITTEE_DEPLOYMENT.md). The build compiles the committee binary once (arkworks)
+    # then runs the stdlib-only Python server.
     build:
       context: .
       dockerfile: offchain/Dockerfile
@@ -41,7 +43,7 @@ services:
       JAM: /work/jamswap-service.jam
       PORT: "8080"
       PYTHONUNBUFFERED: "1"           # so the "deployed -> service id N" line shows in `docker compose logs`
-      # ENC_MODE: "0"                 # uncomment to force commit-reveal (option 3) instead
+      # ENC_MODE: "1"                 # uncomment to OPT IN to the rung-2 committee (encrypt-until-batch)
     volumes:
       - ./offchain:/app:ro            # live-edit the server; the committee binary lives in /usr/local/bin
       - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro

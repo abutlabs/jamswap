@@ -107,11 +107,13 @@ size stay hidden until the moment it clears — so nobody can react to it at all
 
 There are **three approaches**, a ladder from simplest to strongest:
 
-- **Rung 3 — Commit–reveal.** You post only a locked fingerprint of your order; you
-  reveal it when the auction runs. No trusted parties, but needs a reveal step. *(Shipped, available as a fallback.)*
+- **Rung 3 — Commit–reveal.** You post only a locked fingerprint of your order; it's
+  revealed only in the round it trades. No trusted parties, no extra operators, no asks
+  of anyone — fully permissionless. *(Shipped — **this is the default**: the base state.)*
 - **Rung 2 — Encrypt-until-batch.** You encrypt your order to a committee and go offline;
   they help decrypt it only when the batch closes, with a proof they did it honestly. No
-  reveal step. *(Shipped — **this is the default** when you run Jamswap.)*
+  reveal step, and no single party can peek. *(Shipped as an **opt-in** — `ENC_MODE=1`;
+  the committee is simulated today, see [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md).)*
 - **Rung 1 — ZK dark-pool.** The auction runs privately off-chain and the chain verifies
   a single zero-knowledge proof that it cleared correctly — orders **never** appear
   on-chain. Strongest privacy, and cheapest at scale. *(Proven in a research spike; not
@@ -304,8 +306,9 @@ LASAIR_NODE_TAG=0.4.2 docker compose up         # pin a node version instead of 
 docker compose --profile demo run --rm demo     # run the narrated CLI walkthrough (see sim/demo.py)
 ```
 
-To fall back from the default committee sealing (rung 2) to commit–reveal (rung 3),
-uncomment `ENC_MODE: "0"` under the `dex` service in `docker-compose.yml`.
+Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to
+the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
+`ENC_MODE: "1"` under the `dex` service in `docker-compose.yml`.
 
 | Your machine | What runs | Notes |
 |---|---|---|
@@ -363,7 +366,7 @@ clearing price is chosen" and "Partial fills".
 
 | Question | Today | Alternative(s) | Trade-off |
 |---|---|---|---|
-| **How orders are hidden** until they clear | **encrypt-until-batch** (a committee decrypts at match; rung 2) by default; **commit–reveal** (rung 3) as a no-third-party fallback | a **ZK dark-pool** matcher (rung 1 — spiked, proven, not yet integrated) | each carries a *different* trust asterisk — committee liveness vs a reveal-round griefing vector vs prover cost |
+| **How orders are hidden** until they clear | **commit–reveal** (rung 3) by default — the permissionless, no-third-party base state; **encrypt-until-batch** (rung 2, committee) as the `ENC_MODE=1` opt-in | a **ZK dark-pool** matcher (rung 1 — spiked, proven, not yet integrated) | each carries a *different* trust asterisk — a reveal-round griefing vector vs committee liveness vs prover cost |
 | **Committee deployment** — today one sidecar *simulates* all n members (single-operator trust) | proven cryptography + on-chain committee anchoring; the operational model is designed but unbuilt | per-member daemons run by n independent operators, with an on-chain policy check so the builder can't use the committee as a decryption oracle | **open work** — the follow-up list lives in [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md) |
 
 The three-rung privacy ladder is in [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md).

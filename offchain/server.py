@@ -31,12 +31,14 @@ TAG_CARRY_COMMIT, TAG_CARRY_ENC_COMMIT = 13, 14
 SET_ENTRY_LEN = 36  # commit/enc set entries: hash(32) ‖ account(4)
 FEE_ACCOUNT = 0xFFFFFFFF               # treasury handle (matches FEE_ACCOUNT in the service)
 
-# Encrypt-until-batch (option 2): if a committee sidecar binary is available, sealed orders are
-# ECIES-encrypted to an off-protocol committee and decrypted (with a Chaum-Pedersen proof refine
-# verifies) at batch close — NO reveal round, no non-reveal griefing. Without the binary we fall
-# back to commit–reveal (option 3). Set ENC_MODE=0 to force commit–reveal even if present.
+# Sealing mode. The BASE STATE is commit–reveal (rung 3): fully permissionless — no committee,
+# no extra operators, no asks of validators or client teams. Encrypt-until-batch (rung 2) is an
+# OPT-IN upgrade (ENC_MODE=1 + a committee sidecar binary): sealed orders are ECIES-encrypted to
+# an off-protocol committee and decrypted (with a Chaum-Pedersen proof refine verifies) at batch
+# close — but its committee is a simulation until the open work in docs/COMMITTEE_DEPLOYMENT.md
+# lands, so it stays opt-in rather than the default.
 COMMITTEE_BIN = os.environ.get("COMMITTEE_BIN", "")
-ENC_MODE = bool(COMMITTEE_BIN) and os.environ.get("ENC_MODE", "1") == "1"
+ENC_MODE = bool(COMMITTEE_BIN) and os.environ.get("ENC_MODE", "0") == "1"
 # Order signatures are now enforced ON-CHAIN: each public order's ed25519 signature travels in
 # the work package and is verified per-order in refine (the service also binds the key to the
 # account registry + enforces a per-account replay floor in accumulate). The check below is a
