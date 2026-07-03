@@ -78,6 +78,9 @@ you committed earlier, then includes it in the auction.
 This is the simplest, most trust-minimal rung: **no third party at all** — nothing to
 deploy but the service itself, no asks of validators, client teams, or anyone else.
 That's why it's **Jamswap's default and base state** (rung 2 is the `ENC_MODE=1` opt-in).
+And the residual "the builder can see resting terms" asterisk is *trader-removable*:
+run your own builder and your preimages never leave your machine —
+[`LOCAL_BUILDER.md`](LOCAL_BUILDER.md) (verified two-builder mode).
 
 ---
 

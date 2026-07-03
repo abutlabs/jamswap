@@ -125,6 +125,12 @@ each auction, revealing its terms **only in the round it actually crosses** a
 counterparty. So you can place a sealed sell now and a sealed buy minutes later and
 they'll match, all while their terms stay private until they clear.
 
+**Who can see your resting sealed order?** On-chain: no one (it's a hiding commitment).
+Off-chain: only the builder you submitted through — with the hosted browser UI, that's
+the exchange operator (same trust as any exchange). Want privacy from *everyone*,
+including us? **Run your own builder** — one command, verified working, and your order
+data never leaves your machine: [`docs/LOCAL_BUILDER.md`](docs/LOCAL_BUILDER.md).
+
 **Read the full ELI5 of all three — what each protects, what it still leaks, and its
 current state — in [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md).** The precise trust
 boundaries are in [`docs/SECURITY.md`](docs/SECURITY.md).
@@ -329,6 +335,7 @@ the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
 | Doc | What's in it |
 |-----|--------------|
 | [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md) | The three order-hiding approaches, ELI5 — what each protects and its state today |
+| [`docs/LOCAL_BUILDER.md`](docs/LOCAL_BUILDER.md) | Run your own builder + UI — full sealed-order privacy from everyone, including us (verified two-builder mode) |
 | [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md) | **Open work:** how the decryption committee goes from today's simulation to n independent operators on a real JAM testnet |
 | [`docs/JAMKB.md`](docs/JAMKB.md) | JAMKB explained + how Jamswap is a live worked example of it |
 | [`docs/JAMKB_STANDARD.md`](docs/JAMKB_STANDARD.md) | The standard — how a service receives, holds, tops up, and is held accountable for its JAMKB |
