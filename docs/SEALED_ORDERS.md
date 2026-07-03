@@ -189,6 +189,78 @@ builder-independent hidden resting is rung 1 (ZK).
 
 ---
 
+## The full rung-2 workflow — who does what, and who picks whom
+
+The most important property first: **nothing here touches validator orchestration.**
+Guarantor assignment is JAM-protocol-side — the 1023 validators are partitioned into
+341 trios that rotate across cores every ~10 slots, and jamswap has no say in (and no
+need to know) which three serve it in any slot. A validator on a stock client serves
+jamswap without knowing jamswap exists. Everything jamswap orchestrates is app-side:
+
+```
+WHO PICKS WHOM — jamswap post-deployment
+┌───────────────┬──────────┬──────────────────────────────┬─────────────────────┬───────────────┐
+│ Role          │ How many │ Chosen by                    │ Rotation            │ Paid by       │
+├───────────────┼──────────┼──────────────────────────────┼─────────────────────┼───────────────┤
+│ Guarantors    │ 3/core   │ JAM protocol — app has NO say│ every ~10 slots     │ protocol      │
+│ Auditors      │ ~10/rpt  │ protocol randomness          │ per report          │ protocol      │
+│ All validators│ 1023     │ n/a (store state, settle)    │ n/a                 │ protocol      │
+├───────────────┼──────────┼──────────────────────────────┼─────────────────────┼───────────────┤
+│ Committee     │ n (3–5)  │ jamswap governance: keys     │ gov posts a new set │ fee treasury  │
+│ (NOT          │          │ committed ON-CHAIN via the   │ (drain outstanding  │ (REVENUE.md)  │
+│  validators)  │          │ gov-signed ENC_SETUP         │ ciphertexts, switch)│               │
+│ Builder       │ 1        │ the operator (untrusted by   │ n/a                 │ fee margin    │
+│               │          │ design — see SECURITY.md)    │                     │               │
+└───────────────┴──────────┴──────────────────────────────┴─────────────────────┴───────────────┘
+```
+
+One auction, end to end:
+
+```
+ APP-SIDE (operator runs/recruits)                PROTOCOL-SIDE (JAM assigns; untouchable)
+ traders · builder · committee(n)                 1023 validators → 341 cores × 3 guarantors
+                                                  ~10 random auditors · all nodes settle
+
+t=0→6s   trader ── signs order ─────────────▶ builder            (public orders)
+         trader ── encrypts to committee key ▶ builder            (sealed orders)
+         trader ── owner-signed 32B commitment ──────▶ ON-CHAIN   (terms hidden)
+
+t=6s     builder ── ciphertexts ──▶ each committee member, independently
+BATCH    member_i ── share_i + honesty proof_i ──▶ builder        (no member sees others;
+CLOSE                                                              no vote, no consensus —
+                                                                   validity is cryptographic)
+         builder packs ONE work package:
+           [ciphertexts | n proofs/order | signed public orders | resting book]
+         builder ──▶ whichever 3 guarantors JAM assigned to the core this slot
+
+t=6→12s  3 guarantors run REFINE:                                 ┐ the n×5.6M gas
+           verify all decryption proofs → combine shares →        │ (≈880/n orders/batch)
+           orders recovered (no secret ever exists on-chain)      ┘ lives here
+           verify public-order signatures → MATCHING ENGINE →
+           uniform price + fills → sign the work report ──▶ ON-CHAIN
+
++1–2     ACCUMULATE (every node): book hash ✓ key bindings ✓ commitments
+slots    consume-or-reject ✓ → settle balances, write the new book
+
+parallel ~10 AUDITORS re-run the entire refine (decryption proofs AND matching);
+         mismatch → dispute → slashed guarantors, before finality
+```
+
+**Committee lifecycle (the one real orchestration burden).** Today's prototype simulates
+n=2 members in one sidecar binary (fixed seeds) — enough to prove the cryptography, not a
+deployment. The production shape, with mechanisms already in the service: independent
+operators (never validators-as-validators) run an interactive DKG for fresh shared keys;
+the key set is committed on-chain via the gov-signed, nonce-protected `ENC_SETUP` (every
+round must hash-match it, so a builder can't swap committees); rotation posts a new set
+and drains outstanding ciphertexts across; liveness hardening is t-of-n threshold
+decryption (a drop-in: same proof, same gas); members are paid from the fee treasury.
+This lifecycle is rung 2's real cost — and part of why rung 1 (ZK) is the end-state: one
+proof replaces all per-order committee verification, and the committee shrinks to key
+custody or folds into the prover. The full sim-vs-production gap and the open work list
+live in [`COMMITTEE_DEPLOYMENT.md`](COMMITTEE_DEPLOYMENT.md).
+
+---
+
 ## Which should you use?
 
 - **Want zero trusted parties and simplicity?** Rung 3 (commit–reveal). You hold your

@@ -141,6 +141,20 @@ All numbers measured in Lasair's PVM (`spikes/crypto-gas/`, `spikes/fba-zk/`,
 (5×10⁹ gas). The matching itself is never the limit (7,476 gas cleared 3 orders) —
 what binds is per-order *validation*:
 
+The 880 is how many committee-share verifications fit in one batch's gas budget.
+``` 
+5,000,000,000 gas   (one core's refine budget per 6s work package, full spec)
+÷     ~5,680,000 gas (measured cost to verify ONE committee member's decryption share)
+≈           880      share-verifications per batch
+```
+Then the /n: each sealed order needs all n members' shares verified (that's what removes trust in the committee — every share is proven honest, per order). So one order consumes n of your 880 verification "slots":
+
+```
+- n = 1 → 880 orders/batch
+- n = 5 → 880 ÷ 5 = 176 orders/batch
+- n = 10 → 88 orders/batch
+```
+
 | Order type | Refine cost per order | Binding limit | ~Orders per batch | Scales with |
 |---|---|---|---|---|
 | **Public** (signed; ed25519 verified in `refine`) | 1.31 M gas | refine gas | **~3,800** | **cores** — more markets on more cores, linear |
@@ -312,6 +326,7 @@ uncomment `ENC_MODE: "0"` under the `dex` service in `docker-compose.yml`.
 | Doc | What's in it |
 |-----|--------------|
 | [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md) | The three order-hiding approaches, ELI5 — what each protects and its state today |
+| [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md) | **Open work:** how the decryption committee goes from today's simulation to n independent operators on a real JAM testnet |
 | [`docs/JAMKB.md`](docs/JAMKB.md) | JAMKB explained + how Jamswap is a live worked example of it |
 | [`docs/JAMKB_STANDARD.md`](docs/JAMKB_STANDARD.md) | The standard — how a service receives, holds, tops up, and is held accountable for its JAMKB |
 | [`docs/REVENUE.md`](docs/REVENUE.md) | The self-funding treasury — fees pay the JAMKB rent, owner takes the profit |
@@ -349,6 +364,7 @@ clearing price is chosen" and "Partial fills".
 | Question | Today | Alternative(s) | Trade-off |
 |---|---|---|---|
 | **How orders are hidden** until they clear | **encrypt-until-batch** (a committee decrypts at match; rung 2) by default; **commit–reveal** (rung 3) as a no-third-party fallback | a **ZK dark-pool** matcher (rung 1 — spiked, proven, not yet integrated) | each carries a *different* trust asterisk — committee liveness vs a reveal-round griefing vector vs prover cost |
+| **Committee deployment** — today one sidecar *simulates* all n members (single-operator trust) | proven cryptography + on-chain committee anchoring; the operational model is designed but unbuilt | per-member daemons run by n independent operators, with an on-chain policy check so the builder can't use the committee as a decryption oracle | **open work** — the follow-up list lives in [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md) |
 
 The three-rung privacy ladder is in [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md).
 
