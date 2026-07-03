@@ -73,6 +73,18 @@ JAM has no built-in wallets, so Jamswap gives your account its own cryptographic
 (held in your browser, exportable). Your orders are signed by that key; withdrawing or
 cancelling is verified against it. No exchange can move your money — only you can.
 
+> **The wallet work-around, in short:** JAM has no protocol-level accounts, no wallet
+> standard, and no signature-check host call — so the *service* is the wallet layer.
+> Your browser generates an **ed25519** key (WebCrypto, kept in localStorage,
+> export/importable); registering binds it on-chain to a compact account handle, and
+> every action — orders, sealed commits, cancels, withdrawals — is a signed message the
+> service verifies itself, in-PVM, against that registered key (replay-protected by
+> per-account nonces/sequence floors). A browser extension like Talisman is used for
+> *identity/connection only*: its default accounts are **sr25519**, a curve the PVM
+> can't cheaply verify, so signing stays with the ed25519 key (the verifier also accepts
+> a wallet's `signRaw` `<Bytes>` framing, so direct ed25519 wallet signing is a
+> straightforward later add). No extension is required to trade.
+
 Once matched, any part of your order that didn't fill can **rest in the order book** and
 fill later when a matching order arrives — a true continuous exchange, not a one-shot
 auction.
