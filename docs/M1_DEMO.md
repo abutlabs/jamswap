@@ -28,17 +28,17 @@ service`) was deployed to a `lasair-node` and fed a sealed batch of orders. Its
 - **7,476 gas** — the matching engine is *cheap*. Compared to the ~56M gas a ZK
   proof verify costs, a batch of thousands of orders fits comfortably in one refine.
   This is the empirical refutation of "no chain can run a matching engine."
-- **Byte-identical re-execution** — the existential property: every JAM validator
-  auditing the work-package re-runs `refine` and must get the same bytes. Integer-only
+- **Byte-identical re-execution** — the existential property: every JAM auditor
+  of the work-package re-runs `refine` and must get the same bytes. Integer-only
   + deterministic tie-breaks deliver it.
 
 ## Architecture answer (the open question from the brief)
 
 **Jamswap is a self-contained JAM service — nothing needs to be baked into
 Lasair.** `refine` = matching engine, `accumulate` = settlement, service state =
-the books. Lasair is the *cost moat* (we make it the cheapest node to clear
-auctions — PLAN.md §3.9), not a functional dependency: the `.jam` runs on any
-conformant JAM node.
+the books. Lasair is the client we build and dogfood it on (PLAN.md §3.9 on what
+owning the full stack buys us), not a functional dependency: the `.jam` runs on
+any conformant JAM node.
 
 ## Reproduce
 

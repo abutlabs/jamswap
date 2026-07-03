@@ -10,9 +10,9 @@ resting orders, sealing, and the trading layer on top.
 ## Done
 
 - ✅ **`crates/match-engine`** — the FBA uniform-price clearing algorithm:
-  `no_std`, integer-only, fully deterministic (so every JAM validator re-executes
-  it byte-identically). Property-tested for value conservation, determinism, and
-  per-order fill bounds.
+  `no_std`, integer-only, fully deterministic (so guarantors and auditors
+  re-execute it byte-identically). Property-tested for value conservation,
+  determinism, and per-order fill bounds.
 - ✅ **`service/`** — the `no_std` JAM service: `refine` = the matching engine,
   `accumulate` = settlement. **M1 PROVEN** — it clears a real batch *in Refine on
   lasair*, deterministically (byte-identical re-runs), at **7,476 gas** for 3

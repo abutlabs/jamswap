@@ -47,7 +47,7 @@ engine.*
 | AMM DEX (Uniswap) | none — a formula | self | high (sandwiching) | real price discovery; no IL; limit orders |
 | CLOB DEX on a fast L1 (Hyperliquid, Phoenix) | off-chain or app-specific sequencer | self-ish | sequencer-trust / latency games | trustless *audited* matching, no privileged sequencer |
 | CEX (Binance, Coinbase) | off-chain engine | **custodial** | operator-trust | non-custodial; verifiable matching |
-| Jamswap | **in-Refine, audited** | self | batch-auction + encryption → minimal | trustless matching + encryption + our cost moat |
+| Jamswap | **in-Refine, audited** | self | batch-auction + encryption → minimal | trustless matching + encryption + full-stack (client + builder) expertise |
 
 **What we are NOT:** we are not "AWS for compute," not microsecond HFT (Refine
 settles per block), and not a place to run arbitrary smart contracts. We do one
@@ -75,9 +75,11 @@ Two consequences drive the whole business:
    you auction it every block. So the operating discipline is: **only run an
    auction when there's flow** (skip empty rounds; batch low-volume markets into
    shared cores; charge listing fees / minimum-activity requirements).
-2. **Whoever runs the auctions cheapest wins.** Lower COGS per trade means you can
-   undercut on fees *and* keep margin. This is where lasair becomes a moat, not
-   just a client (§4.10).
+2. **Whoever operates the exchange cheapest wins.** Lower COGS per trade means you
+   can undercut on fees *and* keep margin. Our lever is the **builder** (batching,
+   inclusion, skipping empty rounds) and coretime efficiency — *not* preferential
+   clearing: JAM assigns guarantors to cores protocol-side, so we cannot arrange
+   for our own node to refine our own auctions (§2.3, §3.9).
 
 ### 2.2 Revenue model
 
@@ -99,16 +101,24 @@ Layered, in rough order of when they come online:
    fundraise. Liquidity mining can bootstrap volume but is a sugar high.
 6. **Insurance-fund yield / float** (minor, and regulatorily sensitive — flag).
 
-### 2.3 The lasair moat (why this isn't just another DEX)
+### 2.3 What owning the client buys us (and what it doesn't)
 
-We control the node software. That is rare and it compounds:
+**Corrected 2026-07-03 after Fellowship feedback.** An earlier version claimed a
+"cost moat": make lasair the cheapest node to clear auctions → structural fee
+advantage. That doesn't survive the protocol: **guarantor assignment is
+protocol-determined and rotating** — a work package is refined by whichever
+validators are assigned to its core, running whatever client they run. We cannot
+arrange for our node to clear our auctions, and validators are app-agnostic by
+design. What genuinely compounds:
 
-- We can make lasair **fastest at refining Jamswap work-packages** → lowest COGS
-  per trade → structural fee advantage.
-- We run the **work-package builder** ourselves → reliable inclusion, optimal
-  batching, and capture of whatever (intentionally minimal) builder value exists.
-- Our existing perf work (flambda -O3, O(log n) state, memoized roots) **directly
-  lowers the cost of every auction**.
+- We run the **work-package builder** ourselves (a permissionless, app-side role) →
+  reliable inclusion, optimal batching, skipping empty rounds — the real COGS lever.
+- If we also operate validators, our perf work (flambda -O3, O(log n) state,
+  memoized roots) lowers **our own operating cost** — an operator margin, applying
+  to all work we're assigned, not preferential treatment of Jamswap.
+- **Co-design knowledge**: writing the client means we know exactly what refine
+  execution costs, so we shape the service's data layout and measure real gas
+  instead of guessing — a development-speed edge, not a fee edge.
 - Independent client + flagship app is a strong **grant and fellowship story**.
 
 ### 2.4 Funding strategy (non-dilutive first)
@@ -139,8 +149,9 @@ We control the node software. That is rare and it compounds:
   jurisdiction, front-end exposure, and token design are legal questions to get
   ahead of (not legal advice — engage counsel before mainnet/token).
 - **Token value-accrual** — see §2.2.5; do not assume it.
-- **Competition** — other JAM teams will see the same opportunity; the lasair cost
-  moat and first-mover client integration are our defenses.
+- **Competition** — other JAM teams will see the same opportunity; our defenses are
+  first-mover position, builder-side efficiency, and full-stack expertise (§2.3) —
+  not privileged clearing, which the protocol doesn't allow anyone.
 
 ---
 
@@ -276,25 +287,32 @@ entry (limit/market/IOC), portfolio & balances, order/fill history, deposit/
 withdraw flows, wallet + signing, and a UX that hides the encrypt→commit→reveal
 mechanics so it *feels* like a normal exchange.
 
-### 3.9 How lasair optimizes the order book (the moat, in detail)
+### 3.9 What owning the client lets us optimize (scoped honestly)
 
-Because we write the client, we can do what no DEX-on-someone-else's-chain can:
+**Scope correction (2026-07-03):** guarantor assignment is protocol-determined, so
+none of this buys Jamswap preferential clearing — see §2.3. These optimizations
+lower *our* costs where we actually hold a role (builder, and validator ops if we
+run any), and speed up development:
 
 - **L1 — PVM hot-path optimization.** The matching engine's inner loops (sorting,
-  comparisons, curve aggregation) are the same ops every round. Specialize lasair's
-  PVM execution for them (JIT or targeted interpretation) → cheaper refine.
-- **L2 — Fastest guarantor.** Be the node most able to refine Jamswap
-  work-packages quickly and reliably → dependable inclusion.
+  comparisons, curve aggregation) are the same ops every round. Specializing
+  lasair's PVM execution makes refine cheaper *for any service* on any node
+  running lasair — a client contribution, not a Jamswap privilege.
+- **L2 — Efficient validator ops.** If we operate validators, a faster client
+  lowers our cost across whatever work we're assigned.
 - **L3 — Builder integration.** Batch assembly inside lasair → optimal, low-latency
-  work-package construction.
+  work-package construction. The builder is app-side and permissionless — this one
+  is genuinely ours.
 - **L4 — Host-side state caching.** Memoize the resting order book / historical
-  lookups so refine's reads are cheap.
+  lookups so refine's reads are cheap (again: a client win for all services).
 - **L5 — General perf compounding.** Every lasair perf win (flambda -O3, O(log n)
-  state, memoized Merkle roots) lowers COGS per trade.
-- **L6 — Co-design.** We can shape the service's data layout to match what lasair
-  executes fastest — a luxury you only have when you own both sides.
+  state, memoized Merkle roots) lowers our operating cost.
+- **L6 — Co-design.** We know what refine execution actually costs, so we shape the
+  service's data layout to it and measure real gas instead of guessing — a
+  development-speed edge you only get by owning both sides.
 
-This is the durable advantage: **same protocol, lower marginal cost.**
+The durable advantage: **full-stack knowledge and the builder role — not
+privileged clearing.**
 
 ---
 
@@ -405,7 +423,7 @@ backend phases. A **Track L** (lasair optimization) runs continuously alongside.
 - **Exit:** live, generating fees.
 
 ### Track L — lasair optimization  *(continuous, alongside all phases)*
-- L1 PVM matching hot-path optimization · L2 fastest guarantor · L3 builder
+- L1 PVM matching hot-path optimization · L2 efficient validator ops · L3 builder
   integration · L4 host-side state caching · L5 perf compounding · L6 service/client
   co-design. (See §3.9.)
 
@@ -485,7 +503,8 @@ calendar promise.
   is legible in one sentence.
 - It **dogfoods lasair** harder than any fuzzer can — a real service surfaces real
   client bugs and real perf needs.
-- The **lasair cost moat** is genuine and rare (we own the node).
+- Owning the client is a rare, genuine edge — in knowledge, measurement, and the
+  builder role (§2.3) — even though it grants no privileged clearing.
 - The **story** (an AI built the client *and* the first real exchange on it) funds
   itself in attention and grants.
 - And it's a **great use of fuzzer downtime** — long-horizon, high-ceiling, and

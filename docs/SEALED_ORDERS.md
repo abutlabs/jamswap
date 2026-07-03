@@ -200,5 +200,6 @@ builder-independent hidden resting is rung 1 (ZK).
   (Rungs 2 & 3 already rest hidden, but rely on the builder for the crossing check.)
 
 The common thread: **the matching and settlement are always fully deterministic and
-re-verified by every JAM validator.** Sealing changes *who can see your order and
-when* — it never changes the guarantee that the auction cleared honestly.
+re-verified under JAM's guarantee-and-audit protocol** (assigned guarantors compute,
+random auditors re-execute, fraud is slashable). Sealing changes *who can see your
+order and when* — it never changes the guarantee that the auction cleared honestly.

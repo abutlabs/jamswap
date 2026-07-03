@@ -7,7 +7,8 @@ Jamswap is a **decentralized exchange (DEX)** built on [JAM](https://jam.web3.fo
 It lets you trade one token for another the way a stock exchange or a company like
 Coinbase does — using a live **order book** and a proper **matching engine** — but with
 no company in the middle. You keep custody of your own funds, and every trade is
-re-checked by every validator on the network.
+checked by the network: independent validators re-run the matching under JAM's
+audit protocol, and settlement is re-executed by every node.
 
 **New here? Start with the three sections below** — what it is, how it works, and how
 it hides your orders. Then [try it in one command](#try-it-in-one-command).
@@ -31,8 +32,10 @@ computation, and blockchains charge for every step — so DEXs settled for the c
 formula-based approximation, which costs traders in worse prices and "slippage".
 
 **JAM changes the economics.** JAM has a special phase called **Refine** designed for
-heavy, parallel, deterministic computation that every validator can independently verify.
-That's exactly the shape of a matching engine. So Jamswap runs a **genuine order-book
+heavy, parallel, deterministic computation. Crucially, it is *not* re-run by every
+validator — a small group assigned to the core computes each batch, randomly selected
+auditors re-execute it, and a provably wrong result costs the signers their stake.
+That's why it's cheap, and it's exactly the shape of a matching engine. So Jamswap runs a **genuine order-book
 matching engine** on-chain — CEX-grade matching, DEX-grade self-custody. It's the
 cleanest demonstration of something **only JAM can do**.
 
@@ -58,9 +61,12 @@ JAM splits work into two phases, and Jamswap maps an exchange straight onto them
 | **Refine** | the **matching engine** — figures out who trades with whom, at what price | the trading floor |
 | **Accumulate** | **settlement** — moves the actual balances between accounts | the vault / clearing house |
 
-The matching is **deterministic** (integer-only, no randomness), so every validator
-re-runs it and gets the byte-identical result — that's what makes it trustless. Then
-settlement moves your tokens and records the new order book.
+The matching is **deterministic** (integer-only, no randomness), so *anyone* who
+re-runs it gets the byte-identical result. In JAM that's what makes the audit decisive:
+the validators assigned to the core clear the batch, randomly chosen auditors re-execute
+it, and any mismatch is provable fraud that gets the signers slashed. Trustless —
+*without* the whole network redoing the work. Then settlement moves your tokens and
+records the new order book.
 
 **3. You keep your own funds.**
 JAM has no built-in wallets, so Jamswap gives your account its own cryptographic key
@@ -106,8 +112,9 @@ current state — in [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md).** The pre
 boundaries are in [`docs/SECURITY.md`](docs/SECURITY.md).
 
 Whichever rung you use, the guarantee never changes: **the auction itself is always
-re-verified by every validator.** Sealing changes *who can see your order and when* — not
-whether it cleared honestly.
+re-verified under JAM's guarantee-and-audit protocol** (assigned validators compute it,
+auditors re-execute it, fraud is slashable). Sealing changes *who can see your order and
+when* — not whether it cleared honestly.
 
 ---
 
@@ -233,8 +240,9 @@ state-transition import (PolkaJam-style):
 docker compose -f docker-compose.testnet.yml up    # 6 validators + the same UI at :8080
 ```
 
-Now every order is gossiped, included in a block, and re-executed by all six validators
-byte-identically; settlement lands a slot or two later at the real 6-second cadence.
+Now every order is gossiped and included in a block, the batch is cleared in `refine`
+byte-identically, and settlement — imported and re-executed by all six validators —
+lands a slot or two later at the real 6-second cadence.
 
 ### Options
 

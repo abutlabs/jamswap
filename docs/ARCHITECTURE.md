@@ -16,12 +16,14 @@ service Jamswap {
 
 - **`refine`** runs the frequent-batch-auction uniform-price clearing
   ([`crates/match-engine`](../crates/match-engine)) — integer-only and
-  deterministic, so every JAM validator re-executes it byte-identically (the
-  trust model). It produces a work-output; it does **not** touch live state.
+  deterministic, so any re-execution is byte-identical. That's the trust model:
+  the guarantors assigned to the core compute it, randomly selected auditors
+  re-run it, and a mismatch is slashable — not universal re-execution. It
+  produces a work-output; it does **not** touch live state.
 - **`accumulate`** reads each work-output (via `accumulate_items()`) and commits
   it to service storage — balances, the resting book, commitments, stats.
 - It's a **self-contained JAM service**: nothing is baked into Lasair. The `.jam`
-  runs on any conformant node; Lasair is the cost moat (cheapest to clear), not a
+  runs on any conformant node; Lasair is simply the client we dogfood it on, not a
   dependency.
 
 ## Work-item types (payload tag = first byte)
