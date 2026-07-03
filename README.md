@@ -41,7 +41,7 @@ cleanest demonstration of something **only JAM can do**.
 
 ---
 
-## How does it work? (ELI5)
+## How does it work?
 
 Three ideas make Jamswap tick:
 
@@ -115,6 +115,28 @@ Whichever rung you use, the guarantee never changes: **the auction itself is alw
 re-verified under JAM's guarantee-and-audit protocol** (assigned validators compute it,
 auditors re-execute it, fraud is slashable). Sealing changes *who can see your order and
 when* — not whether it cleared honestly.
+
+---
+
+## Throughput & costs (measured, per 6-second batch)
+
+All numbers measured in Lasair's PVM (`spikes/crypto-gas/`, `spikes/fba-zk/`,
+`spikes/vdec-gas/`), per work package on **one core** at the full-spec refine budget
+(5×10⁹ gas). The matching itself is never the limit (7,476 gas cleared 3 orders) —
+what binds is per-order *validation*:
+
+| Order type | Refine cost per order | Binding limit | ~Orders per batch | Scales with |
+|---|---|---|---|---|
+| **Public** (signed; ed25519 verified in `refine`) | 1.31 M gas | refine gas | **~3,800** | **cores** — more markets on more cores, linear |
+| **Sealed — commit–reveal** (rung 3) | 2.7k gas reveal check (+1.31 M if sig-verified) | refine gas | **~3,800** | cores |
+| **Sealed — encrypt-until-batch** (rung 2, default) | ~n × 5.6 M gas (n = committee size) | refine gas | **~880/n** (n=5 → ~176) | cores; the real scaling answer is migrating to rung 1 |
+| **Sealed — ZK dark-pool** (rung 1, spiked) | ~0 — one 60.1 M-gas proof settles the batch, flat | input size (W_B ≈ 13.15 MiB) | **~27,500–68,900** | cores × prover capacity; on-chain cost flat in order count |
+
+Two independent resources, two meters: **compute** is bought per-slot (coretime/gas —
+the table above), **state** is bought per-byte (JAMKB, below). A *filled* order leaves
+almost no lasting state; a *resting* public order occupies 17 B of validator RAM
+(~60 orders/KB), a resting sealed commitment 32 B (32/KB) — prepaid by rent and
+reclaimed at expiry, so a bigger book costs rent, not gas, and the two never compete.
 
 ---
 
@@ -333,7 +355,7 @@ example** precisely to make these answerable with real numbers, not to pre-empt 
 |---|---|---|
 | **Fee shape** | a **flat, cost-based** fee per filled order in the base asset | a size-proportional fee, if the community prefers ([`docs/REVENUE.md`](docs/REVENUE.md)) |
 | **Profit payout** to the beneficiary | gov-signed sweep of fee revenue, swapped on the DEX | an actual **JAM↔Polkadot bridge** to the AssetHub account (deferred — no bridge yet) |
-| **Order / cancel / withdraw auth** | **trustless** — public orders are ed25519-verified per-order **in `refine`** (replay-proof seq floors, hash-bound book); cancel/withdraw are signed + nonce-protected | owner-signed *sealed* commits are the remaining step ([`docs/SECURITY.md`](docs/SECURITY.md)) |
+| **Order / cancel / withdraw auth** | **trustless** — public orders ed25519-verified per-order **in `refine`** (replay-proof seq floors, hash-bound book); sealed commits **owner-signed + account-bound**; cancel/withdraw signed + nonce-protected | remaining asterisk: a carried remainder's *terms* are builder-attested until the rung-1 ZK linkage ([`docs/SECURITY.md`](docs/SECURITY.md)) |
 | **Custody** | **mock** (faucet credit / funded debit, conservation-checked) | real self-custody via `on_transfer`, blocked on JAM asset-service maturity |
 
 If any of these should be decided differently, they're small, well-isolated changes — say
@@ -351,11 +373,13 @@ which and we'll flip it (or wire in the toggle).
 - We also build the JAM client it runs on (**lasair**), so we understand the whole stack
   from the matching engine down to the state machine.
 
-**Honest caveats** (kept in view): JAM mainnet timing isn't ours to control; public orders
-are now verified per-order in `refine` (trustless — not even the builder can inject one),
-but "trustless" still carries an asterisk in the parts being hardened (owner-signed *sealed*
-commits, real on-chain custody); and bootstrapping trading liquidity is a real grind.
-See [`docs/PLAN.md`](docs/PLAN.md) §9 and [`docs/SECURITY.md`](docs/SECURITY.md).
+**Honest caveats** (kept in view): JAM mainnet timing isn't ours to control; orders are now
+verified on-chain end-to-end (public orders per-order in `refine`, sealed commits
+owner-signed — not even the builder can inject either), but "trustless" still carries an
+asterisk in the parts being hardened (a carried sealed remainder's *terms* are
+builder-attested until the ZK linkage; real on-chain custody); and bootstrapping trading
+liquidity is a real grind. See [`docs/PLAN.md`](docs/PLAN.md) §9 and
+[`docs/SECURITY.md`](docs/SECURITY.md).
 
 ---
 

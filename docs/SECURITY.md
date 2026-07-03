@@ -52,15 +52,30 @@ carries the asterisk noted here.
 - Cost: ~1.31M gas per order (measured) → a fully-signed batch is refine-gas-bound at
   ~3,800 orders/core; the ZK matcher (one proof covers all signatures) is the scaling path.
 
+## Fixed (2026-07-03): sealed-order placement is OWNER-SIGNED and account-bound
+
+- **`TAG_COMMIT`/`TAG_ENC_COMMIT` now carry the owner's ed25519 signature** over
+  `canon(commit, market, account, commit_id, seq)` — verified in `accumulate` against the
+  account's registered key (zero refine gas), with the same monotonic per-account seq
+  floor as orders. Nobody can seal an order onto someone else's account.
+- **Commit/enc set entries are `hash(32) ‖ account(4)`**, and round consumption must match
+  BOTH — refine reports the revealed/decrypted order's account alongside its hash, so a
+  sealed order can only ever settle for the account that signed its commitment.
+- **Carry-forward is allowance-gated.** A round that *partially fills* an account's sealed
+  order mints exactly one carry credit (reported by refine, which is audited); the builder
+  spends it to post the re-sealed remainder (`TAG_CARRY_COMMIT`/`TAG_CARRY_ENC_COMMIT`,
+  unsigned — the trader is offline by design). Verified e2e: no-allowance carries and
+  unsigned commits are rejected; a genuine partial fill carries and later clears.
+- Placement is two-phase (`/api/seal_prepare` → the browser signs the 32-byte commit id →
+  `/api/order`), so the hiding material never goes on-chain unsigned.
+
 ## Accepted / documented (production hardening needed)
 
-- **Sealed-order commits are not yet owner-signed.** `TAG_COMMIT`/`TAG_ENC_COMMIT` can be
-  posted for any account (the reveal/decryption then names that account), so a malicious
-  builder could still place a *sealed* order on a victim's behalf — the sealed-path
-  sibling of the public hole fixed above. **Next:** owner-sign commits (verified in
-  accumulate — zero refine gas), store `(hash ‖ account)` in the commit/enc sets, and
-  match both at consumption; carry-forward remainder commits then need either a per-order
-  carry allowance or the ZK linkage (the rung-1 endgame).
+- **A carried remainder's *terms* are builder-attested.** The allowance proves the account
+  really had a partially-filled sealed order this round, and settlement still binds to that
+  account — but the re-sealed commitment's price/qty are the builder's claim until reveal
+  (revealing them for verification would leak the hidden remainder). The full fix is the
+  rung-1 ZK linkage: prove `remainder = original − fills` without revealing either.
 - **Order collateralization is a guard, not an escrow.** The submission check reads the
   *current* balance; it doesn't reserve funds across multiple pending orders, and the
   settlement clamp at 0 still means an over-matched order could lose value on-chain.

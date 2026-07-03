@@ -31,14 +31,33 @@ If the server isn't reachable it SKIPS (exit 0) so it never breaks CI, which has
 """
 import json
 import os
+import secrets
+import struct
 import sys
+import time
 import urllib.error
 import urllib.request
 
+try:
+    from nacl.signing import SigningKey
+except Exception:
+    print("SKIP — this test needs PyNaCl (orders and sealed commits are owner-signed now): "
+          "pip install pynacl")
+    sys.exit(0)
+
 URL = os.environ.get("JAMSWAP_URL", "http://127.0.0.1:8080").rstrip("/")
 MARKET, DOT, USDC = 1, 1, 0        # market 1 is DOT/USDC (base=DOT, quote=USDC)
-SELLER, BUYER = 700, 800           # fresh account handles (avoid collisions with the UI)
 QTY, PRICE = 10, 1                 # sell/buy 10 DOT @ 1 USDC
+SCALE = 10_000                     # atomic fixed-point scale (matches the service)
+KEYS = {}                          # handle -> SigningKey
+
+
+def canon(action, *parts):         # must match canon() in server.py / the service
+    return b"jamswap:v1:" + action + b"".join(parts)
+
+
+def p32(x): return struct.pack("<I", x)
+def p64(x): return struct.pack("<Q", x)
 
 
 def call(method, path, body=None):
@@ -60,12 +79,48 @@ def balance(account, asset):
     return get(f"/api/balance?account={account}&asset={asset}")["balance"]
 
 
+def register():
+    # a FRESH random key per run → a fresh handle with clean balances and seq floors
+    sk = SigningKey(secrets.token_bytes(32))
+    pk = bytes(sk.verify_key)
+    post("/api/register", {"pubkey": pk.hex(), "sig": sk.sign(canon(b"register", pk)).signature.hex()})
+    for _ in range(30):                          # registration lands with the next block
+        h = get(f"/api/handle?pubkey={pk.hex()}").get("handle")
+        if h:
+            KEYS[h] = sk
+            return h
+        time.sleep(1)
+    raise RuntimeError("registration didn't land on-chain")
+
+
+def next_seq():
+    # ms wall clock: strictly rising per account across runs (the on-chain floor persists)
+    return int(time.time() * 1000)
+
+
 def place(account, side, sealed):
-    r = post("/api/order", {"market": MARKET, "base": DOT, "quote": USDC, "account": account,
-                            "side": side, "qty": QTY, "price": PRICE, "type": "limit",
-                            "sealed": sealed})
+    # orders (and, for sealed, the on-chain commitment) are OWNER-SIGNED — the service
+    # verifies both, so this test manages real keys like the UI does.
+    sk = KEYS[account]
+    seq = next_seq()
+    msg = canon(b"order", p32(account), p32(MARKET), bytes([0 if side == "buy" else 1]),
+                p32(QTY * SCALE), b"\0", bytes([1 if sealed else 0]),
+                p32(PRICE * SCALE), p64(seq))
+    body = {"market": MARKET, "base": DOT, "quote": USDC, "account": account,
+            "side": side, "qty": QTY, "price": PRICE, "type": "limit",
+            "sealed": sealed, "seq": seq, "sig": sk.sign(msg).signature.hex()}
+    if sealed:
+        prep = post("/api/seal_prepare", {"market": MARKET, "account": account, "side": side,
+                                          "qty": QTY, "price": PRICE, "type": "limit"})
+        if prep.get("error"):
+            raise RuntimeError(f"seal_prepare rejected: {prep['error']}")
+        cseq = max(next_seq(), seq + 1)
+        cmsg = canon(b"commit", p32(MARKET), p32(account), bytes.fromhex(prep["commit"]), p64(cseq))
+        body.update({"oid": prep["oid"], "commit_seq": cseq,
+                     "commit_sig": sk.sign(cmsg).signature.hex()})
+    r = post("/api/order", body)
     if r.get("error"):
-        raise RuntimeError(f"order rejected: {r['error']} (run the server with REQUIRE_ORDER_SIG=0)")
+        raise RuntimeError(f"order rejected: {r['error']}")
     return r
 
 
@@ -85,6 +140,11 @@ def main():
               f"Bring up `docker compose up` and set JAMSWAP_URL. This test needs a live node.")
         return 0
     print(f"sealing mode: {st.get('seal_mode')}")
+
+    # fresh keys → fresh handles (orders + sealed commits are owner-signed now)
+    SELLER = register()
+    BUYER = register()
+    print(f"registered seller -> handle {SELLER}, buyer -> handle {BUYER}")
 
     # fund the two sides (faucet; no signing needed)
     deposit(SELLER, DOT, QTY)      # seller needs base to sell

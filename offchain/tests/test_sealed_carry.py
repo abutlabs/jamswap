@@ -39,7 +39,8 @@ class SealedCarry(unittest.TestCase):
         oid = server.next_oid[0]; server.next_oid[0] += 1
         o = {"account": 7, "oid": oid, "side": BUY, "price": price * S, "qty": qty * S,
              "type": "limit", "sealed": True, "address": ""}
-        server._post_seal(1, o)
+        o["commit"] = server._seal_material(1, o)   # placement posts an owner-signed commit;
+        # here the chain is mocked, so attaching the reveal material is all the round needs.
         server.order_expiry[(1, 7, oid)] = time.time() + ttl
         server.pending.setdefault(1, []).append(o)
         return oid

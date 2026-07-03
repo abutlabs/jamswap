@@ -117,13 +117,28 @@ def main():
     submit(deposit(2, TOKA, 1000));   line("Bob:   +1000 TOKA")
     submit(deposit(4, TOKB, 1000));   line("Dave:  +1000 TOKB")
 
-    h("Market A = TOKA/USD — a SEALED round (commit, then reveal+match)")
+    h("Market A = TOKA/USD — a SEALED round (owner-signed commit, then reveal+match)")
     a_orders = [(order(1, 1, BUY, 100, 10), b"alice-A-nonce-padding-32bytes-aa"),
                 (order(2, 2, SELL, 100, 6), b"bob---A-nonce-padding-32bytes-bb")]
-    for o, n in a_orders:
-        submit(bytes([2]) + struct.pack("<II", M_A, struct.unpack_from("<I", o)[0]) + hashlib.blake2s(o + n).digest())
-    line("committed Alice buy + Bob sell (hidden — only hashes on-chain)")
-    commits = storage(b"commits" + struct.pack("<I", M_A))
+    def signed_commit(sk, acct, market, cid, seq):
+        # canon(commit, market, account, commit_id, seq) — nobody can seal onto another account
+        cmsg = canon(b"commit", struct.pack("<I", market), struct.pack("<I", acct), cid,
+                     struct.pack("<Q", seq))
+        return (bytes([2]) + struct.pack("<II", market, acct) + cid
+                + struct.pack("<Q", seq) + sk.sign(cmsg).signature)
+    for (o, n), sk in zip(a_orders, (ALICE, BOB)):
+        acct = struct.unpack_from("<I", o)[0]
+        SEQ[acct] = SEQ.get(acct, 0) + 1
+        submit(signed_commit(sk, acct, M_A, hashlib.blake2s(o + n).digest(), SEQ[acct]))
+    line("committed Alice buy + Bob sell (hidden — only OWNER-SIGNED hashes on-chain)")
+    # a commit for Alice's account signed by MALLORY's key is rejected on-chain
+    stored_before = len(storage(b"commits" + struct.pack("<I", M_A)))
+    submit(signed_commit(key("not-alice-mallory-key"), 1, M_A, hashlib.blake2s(b"forged").digest(), 999))
+    ok = len(storage(b"commits" + struct.pack("<I", M_A))) == stored_before
+    line(f"Mallory tries to seal an order onto Alice's account -> {'REJECTED ✓' if ok else 'ACCEPTED ✗'}")
+    # the round input carries the 32-byte hashes; on-chain entries are hash(32)‖account(4)
+    stored = storage(b"commits" + struct.pack("<I", M_A))
+    commits = b"".join(stored[i * 36:i * 36 + 32] for i in range(len(stored) // 36))
     reveals = b"".join(o + n for o, n in a_orders)
     # unified sealed round: commits ‖ reveals ‖ signed public section (no new public orders)
     rest = storage(b"book" + struct.pack("<I", M_A))

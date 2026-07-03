@@ -11,8 +11,9 @@
 //! The committee is deterministic (fixed member seeds) so setup/encrypt/round agree on keys —
 //! a real deployment runs an interactive DKG across independent operators instead.
 
+use blake2::{Blake2s256, Digest};
 use ed25519_compact::{KeyPair, Seed};
-use match_engine::wire;
+use match_engine::{auth, wire};
 use vdec::{encrypt, joint_pk, keygen, pack_committee, partial_decrypt, Member, POINT_LEN};
 
 const MARKET_UNUSED: u32 = 0; // (documentation: market is passed per-command)
@@ -178,21 +179,46 @@ fn scenario(_gov_byte: u8) {
 
     println!("setup {}", hex(&setup_payload(&blob, 0)));
 
-    let buy = ord_bytes(8, 1, true, 100, 5);
-    let sell = ord_bytes(7, 2, false, 100, 5);
+    // trader keys: registration order fixes the handles on a fresh chain (buyer → 1,
+    // seller → 2). Commits are OWNER-SIGNED — the service rejects a sealed commitment
+    // that isn't signed by the account's registered key.
+    let buyer_kp = KeyPair::from_seed(Seed::new([0xB1; 32]));
+    let seller_kp = KeyPair::from_seed(Seed::new([0xB2; 32]));
+    let reg = |kp: &KeyPair| {
+        let msg = auth::canon(b"register", &[kp.pk.as_ref()]);
+        let mut p = vec![7u8]; // TAG_REGISTER
+        p.extend_from_slice(kp.pk.as_ref());
+        p.extend_from_slice(&*kp.sk.sign(&msg, None));
+        p
+    };
+    println!("register_buy {}", hex(&reg(&buyer_kp)));
+    println!("register_sell {}", hex(&reg(&seller_kp)));
+
+    let buy = ord_bytes(1, 1, true, 100, 5);
+    let sell = ord_bytes(2, 2, false, 100, 5);
     let (c1b, bb) = encrypt(&buy, &joint, b"seed-buy");
     let (c1s, bs) = encrypt(&sell, &joint, b"seed-sell");
     let ct_buy = [c1b.to_vec(), bb.clone()].concat();
     let ct_sell = [c1s.to_vec(), bs.clone()].concat();
-    let mk_commit = |ct: &[u8]| {
+    let mk_commit = |ct: &[u8], account: u32, kp: &KeyPair, seq: u64| {
+        // commit id = blake2s(C1‖body), matching the service's commitment(); the owner signs
+        // canon(commit, market, account, id, seq) — the same message for both sealing modes.
+        let mut h = Blake2s256::new();
+        h.update(ct);
+        let mut id = [0u8; 32];
+        id.copy_from_slice(&h.finalize());
+        let msg = auth::commit_msg(market, account, &id, seq);
         let mut c = Vec::new();
-        c.push(10u8);
+        c.push(10u8); // TAG_ENC_COMMIT
         c.extend_from_slice(&market.to_le_bytes());
         c.extend_from_slice(ct);
+        c.extend_from_slice(&account.to_le_bytes());
+        c.extend_from_slice(&seq.to_le_bytes());
+        c.extend_from_slice(&*kp.sk.sign(&msg, None));
         c
     };
-    println!("commit_buy {}", hex(&mk_commit(&ct_buy)));
-    println!("commit_sell {}", hex(&mk_commit(&ct_sell)));
+    println!("commit_buy {}", hex(&mk_commit(&ct_buy, 1, &buyer_kp, 1)));
+    println!("commit_sell {}", hex(&mk_commit(&ct_sell, 2, &seller_kp, 1)));
 
     let cts = vec![(c1b.to_vec(), bb.clone()), (c1s.to_vec(), bs.clone())];
     // honest
@@ -218,7 +244,7 @@ fn scenario(_gov_byte: u8) {
         hex(&assemble_round(&evil_members, &evil_blob, market, base, quote, &evil_cts, &EMPTY_SECTION))
     );
     // injected: a third ciphertext never committed on-chain -> accumulate consume-or-reject
-    let inject = ord_bytes(9, 3, true, 105, 5);
+    let inject = ord_bytes(1, 3, true, 105, 5);
     let (c1i, bi) = encrypt(&inject, &joint, b"seed-inject-uncommitted");
     let mut cts3 = cts.clone();
     cts3.push((c1i.to_vec(), bi));

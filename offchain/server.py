@@ -25,6 +25,10 @@ TAG_ENC_SETUP, TAG_ENC_COMMIT, TAG_ENC_ROUND = 9, 10, 11
 # builder can no longer inject an order nobody signed). See service/src/lib.rs.
 TAG_SMATCH = 12
 FLAG_MARKET = 1  # order-type flag carried beside a signed order (part of the signed message)
+# Sealed commits are OWNER-SIGNED (verified in the service; commit/enc set entries bind
+# hash‖account). Carry-forward re-seals are builder-posted but allowance-gated on-chain.
+TAG_CARRY_COMMIT, TAG_CARRY_ENC_COMMIT = 13, 14
+SET_ENTRY_LEN = 36  # commit/enc set entries: hash(32) ‖ account(4)
 FEE_ACCOUNT = 0xFFFFFFFF               # treasury handle (matches FEE_ACCOUNT in the service)
 
 # Encrypt-until-batch (option 2): if a committee sidecar binary is available, sealed orders are
@@ -326,23 +330,62 @@ def open_order_count(m, acct):
         if a == acct:
             n += 1
     return n
-def _post_seal(m, o):
-    # Post a fresh on-chain commitment/ciphertext for a sealed order dict
-    # {account,oid,side,price,qty}, hiding its terms. Used both at placement AND to re-seal the
-    # unfilled remainder of a partially-filled order so it carries forward (still hidden).
+def _seal_material(m, o):
+    # Build the hiding material for a sealed order dict {account,oid,side,price,qty}: the
+    # ciphertext (encrypt-until-batch) or reveal preimage (commit–reveal). Returns the 32-byte
+    # commit id the chain will store — H(C1‖body) or H(order‖nonce) — which is also what the
+    # OWNER SIGNS (canon(commit, market, account, commit_id, seq)) to authorize the placement.
     ob = order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"])
     if ENC_MODE:
-        # encrypt-until-batch: ECIES-encrypt to the committee key; the terms never touch the
-        # chain in the clear until they clear. No nonce/reveal needed.
         seed = secrets.token_bytes(32).hex()
         d = committee_run("encrypt", m, ob.hex(), seed)
         o["ciphertext"] = d["ciphertext"]
-        submit(bytes.fromhex(d["commit"]))
+        return commitment(bytes.fromhex(d["ciphertext"]))
+    nonce = secrets.token_bytes(32)
+    o["reveal"] = ob + nonce
+    return commitment(o["reveal"])
+# Sealed drafts awaiting the owner's commit signature: (market, oid) -> order dict.
+# Created by /api/seal_prepare, consumed by /api/order (two-phase placement: prepare ->
+# the browser signs the commit id -> order). Never posted on-chain unsigned.
+seal_drafts = {}
+def api_seal_prepare(b):
+    m, acct = int(b["market"]), int(b["account"])
+    side = BUY if b["side"] == "buy" else SELL
+    otype = b.get("type", "limit")
+    qty = to_atomic(b["qty"])
+    if otype == "market":
+        lp = mstate(b"lp", m)
+        if lp <= 0:
+            raise ValueError("no reference price yet on this market — place a limit order")
+        price = int(round(lp * (1 + MARKET_BAND))) if side == BUY else max(1, int(round(lp * (1 - MARKET_BAND))))
     else:
-        # commit-reveal: publish ONLY the hash now (order hidden), reveal at the round it crosses.
-        nonce = secrets.token_bytes(32)
-        o["reveal"] = ob + nonce
-        submit(bytes([TAG_COMMIT]) + struct.pack("<II", m, o["account"]) + commitment(o["reveal"]))
+        price = to_atomic(b["price"])
+    oid = next_oid[0]; next_oid[0] += 1
+    o = {"account": acct, "oid": oid, "side": side, "price": price, "qty": qty,
+         "type": otype, "sealed": True}
+    o["commit"] = _seal_material(m, o)
+    seal_drafts[(m, oid)] = o
+    return {"ok": True, "oid": oid, "commit": o["commit"].hex()}
+def _submit_signed_commit(m, draft, commit_seq, commit_sig):
+    # the owner-signed on-chain commitment for a prepared sealed order
+    acct = draft["account"]
+    tail = struct.pack("<Q", commit_seq) + commit_sig
+    if ENC_MODE:
+        ct = bytes.fromhex(draft["ciphertext"])
+        submit(bytes([TAG_ENC_COMMIT]) + struct.pack("<I", m) + ct + struct.pack("<I", acct) + tail)
+    else:
+        submit(bytes([TAG_COMMIT]) + struct.pack("<II", m, acct) + draft["commit"] + tail)
+def _post_carry_seal(m, o):
+    # Re-seal the unfilled remainder of a partially-filled sealed order so it carries forward
+    # (still hidden). The owner is offline, so this is builder-posted — the service accepts it
+    # only against the carry allowance the settling round just minted for this account.
+    cid = _seal_material(m, o)
+    o["commit"] = cid
+    if ENC_MODE:
+        submit(bytes([TAG_CARRY_ENC_COMMIT]) + struct.pack("<I", m)
+               + bytes.fromhex(o["ciphertext"]) + struct.pack("<I", o["account"]))
+    else:
+        submit(bytes([TAG_CARRY_COMMIT]) + struct.pack("<II", m, o["account"]) + cid)
     return o
 def api_order(b):
     m = int(b["market"])
@@ -379,6 +422,20 @@ def api_order(b):
     seq = int(b.get("seq", 0) or 0)
     sig = bytes.fromhex(b.get("sig", "") or "")
     sealed_flag = bool(b.get("sealed"))
+    draft = None
+    if sealed_flag:
+        # two-phase sealed placement: the draft (from /api/seal_prepare) holds the committed
+        # terms + hiding material; the owner's commit signature authorizes it on-chain.
+        draft = seal_drafts.pop((m, int(b.get("oid", -1))), None)
+        if draft is None:
+            raise ValueError("sealed order needs /api/seal_prepare first (draft missing or already used)")
+        if draft["account"] != acct:
+            raise ValueError("sealed draft belongs to a different account")
+        price, qty = draft["price"], draft["qty"]   # the committed terms are canonical
+        if not pub:
+            raise ValueError("account not registered — connect a wallet and register first")
+        if len(bytes.fromhex(b.get("commit_sig", "") or "")) != 64 or not int(b.get("commit_seq", 0) or 0):
+            raise ValueError("sealed orders must carry an owner commit signature (commit_sig, commit_seq)")
     signed_price = 0 if otype == "market" else price
     if not sealed_flag:
         # public orders CANNOT settle unsigned any more — fail fast at the door
@@ -407,8 +464,10 @@ def api_order(b):
     if MAX_OPEN_ORDERS > 0 and open_order_count(m, acct) >= MAX_OPEN_ORDERS:
         raise ValueError(f"open-order limit reached ({MAX_OPEN_ORDERS} per market) — "
                          f"cancel or let some clear before placing more")
-    oid = next_oid[0]; next_oid[0] += 1
-    sealed = bool(b.get("sealed"))
+    oid = draft["oid"] if draft else next_oid[0]
+    if not draft:
+        next_oid[0] += 1
+    sealed = sealed_flag
     # EVERY order gets an automatic expiry — there is no rest-forever GTC. A user-supplied TTL may
     # only make it SHORTER, never longer than the rent-funded lifetime (so spam self-expires and the
     # JAMKB it consumes is always reclaimed). "GTC" (ttl=0) means "rest until the rent budget runs out".
@@ -420,8 +479,11 @@ def api_order(b):
          "sealed": sealed, "address": b.get("address", ""),
          # the trustless-order material carried into the work package (public orders)
          "sig": sig, "pubkey": pub or b"\x00" * 32, "seq": seq, "signed_price": signed_price}
-    if o["sealed"]:
-        _post_seal(m, o)               # post a fresh on-chain commitment/ciphertext (terms hidden)
+    if draft:
+        # post the OWNER-SIGNED commitment/ciphertext (terms hidden; the service verifies
+        # the signature against the account's registered key + the monotonic seq floor).
+        _submit_signed_commit(m, draft, int(b["commit_seq"]), bytes.fromhex(b["commit_sig"]))
+        o.update({k: draft[k] for k in ("reveal", "ciphertext", "commit") if k in draft})
     with _lock:
         pending.setdefault(m, []).append(o)
         n = len(pending[m])
@@ -531,7 +593,7 @@ def api_round(b):
         if rem > 0 and not (exp and exp <= now):
             r = {"account": o["account"], "oid": o["oid"], "side": o["side"], "price": o["price"],
                  "qty": rem, "type": o.get("type", "limit"), "sealed": True, "address": o.get("address", "")}
-            _post_seal(m, r)
+            _post_carry_seal(m, r)     # allowance-gated: the round just minted this credit
             carried.append(r)
             o["_carried"] = rem        # mark for the execution report (partial-carried, not cancelled)
     if carried:
@@ -561,7 +623,7 @@ def api_state(q):
     # sealed orders live on-chain as commit hashes (option 3) or ciphertexts (option 2); both
     # are 32-byte / fixed-size entries in per-market sets — count whichever this mode uses.
     seal_key = b"encset" if ENC_MODE else b"commits"
-    onchain_sealed = len(storage(seal_key + struct.pack("<I", m))) // 32
+    onchain_sealed = len(storage(seal_key + struct.pack("<I", m))) // SET_ENTRY_LEN
     return {"price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)), "book": book_of(m),
             "pending": len(pending.get(m, [])), "mempool": mempool, "sealed_onchain": onchain_sealed,
             "seal_mode": "encrypt-until-batch" if ENC_MODE else "commit-reveal",
@@ -609,6 +671,7 @@ def api_footprint(q):
 
 ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
                "/api/list": api_list, "/api/order": api_order, "/api/round": api_round,
+               "/api/seal_prepare": api_seal_prepare,
                "/api/cancel_pending": api_cancel_pending, "/api/register": api_register,
                "/api/cancel": api_cancel, "/api/treasury": api_treasury,
                "/api/beneficiary_sweep": api_beneficiary_sweep,

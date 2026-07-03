@@ -419,6 +419,7 @@ const isConn = () => !!state.wallet;
 const myAcct = () => (state.wallet && state.handle!=null) ? state.handle : null;
 const sleep = ms => new Promise(r=>setTimeout(r,ms));
 const hexRaw = u8 => Array.from(u8).map(b=>b.toString(16).padStart(2,"0")).join("");
+const fromHex = h => new Uint8Array((h.match(/../g)||[]).map(x=>parseInt(x,16)));
 const hexToBytes = h => { h=h.replace(/^0x/,""); const a=new Uint8Array(h.length/2); for(let i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16); return a; };
 const te = new TextEncoder();
 function concatB(...arrs){ let n=arrs.reduce((s,a)=>s+a.length,0),o=new Uint8Array(n),p=0; for(const a of arrs){o.set(a,p);p+=a.length;} return o; }
@@ -617,6 +618,17 @@ async function placeOrder(){
       address:state.wallet.selected.address, side, qty, type:otype, sealed, sig:hexRaw(sig), seq};
     if (otype==="limit") body.price = price;
     body.ttl = parseInt(state.tif) || 0;   // good-till-cancelled (0) or a timed expiry (sealed too)
+    if (sealed){
+      // two-phase sealed placement: the server prepares the hiding material and returns the
+      // 32-byte commit id; the OWNER signs it (canon commit ‖ market ‖ account ‖ id ‖ seq) —
+      // the service accepts no unsigned sealed commit, so nobody can seal onto your account.
+      const prep = await api("/api/seal_prepare", {market:market.id, account:myAcct(), side, qty,
+        type:otype, ...(otype==="limit" ? {price} : {})});
+      if (prep.error){ toast(prep.error, "err"); $("place").disabled=false; return; }
+      const cseq = Math.max(Date.now(), (state.lastSeq||0)+1); state.lastSeq = cseq;
+      const cmsg = canonBytes("commit", u32le(market.id), u32le(myAcct()), fromHex(prep.commit), u64le(cseq));
+      body.oid = prep.oid; body.commit_seq = cseq; body.commit_sig = hexRaw(await signBytes(cmsg));
+    }
     const r = await api("/api/order", body);
     if (r.error){ toast(r.error, "err"); $("place").disabled=false; return; }
     const tifLabel = body.ttl ? " · expires in "+(body.ttl>=3600?body.ttl/3600+"h":body.ttl>=60?body.ttl/60+"m":body.ttl+"s") : "";

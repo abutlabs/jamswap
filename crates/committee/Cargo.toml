@@ -14,3 +14,4 @@ vdec = { path = "../vdec" }
 match-engine = { path = "../match-engine" }
 ed25519-compact = { version = "2", default-features = false }
 ark-bn254 = { version = "0.5", default-features = false, features = ["curve"] }
+blake2 = { version = "0.10", default-features = false }

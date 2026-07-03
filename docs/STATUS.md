@@ -9,6 +9,12 @@ resting orders, sealing, and the trading layer on top.
 
 ## Done
 
+- ✅ **Owner-signed sealed commits (2026-07-03)** — `TAG_COMMIT`/`TAG_ENC_COMMIT` carry the
+  owner's signature (verified in accumulate, zero refine gas); commit/enc set entries are
+  `hash‖account` and consumption matches both, so a sealed order settles only for its
+  committer. Carry-forward re-seals are **allowance-gated** (one credit per genuine partial
+  fill). Verified e2e: forged commits, unsigned commits, and no-allowance carries all
+  rejected; partial-fill carry clears across auctions.
 - ✅ **Trustless public orders (2026-07-03)** — every public order carries `pubkey+sig`
   and is **ed25519-verified per-order in `refine`** (`TAG_SMATCH`; unsigned `TAG_MATCH`
   deleted). Accumulate binds the key to the registry, enforces per-account replay floors,

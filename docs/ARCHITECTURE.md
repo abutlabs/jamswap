@@ -37,15 +37,17 @@ books, sharing one global balance ledger.
 |---|---|---|---|---|
 | 0 | — | **RETIRED** (was unsigned `MATCH` — deleted so there is no unsigned downgrade path) | — | — |
 | 1 | `DEPOSIT` | account ‖ asset_id ‖ amount(u64) | echo | credit `(asset_id, account)` (Phase-2 faucet; real custody = Phase 3) |
-| 2 | `COMMIT` | market ‖ account ‖ commitment(32) | echo | append commitment to the market's pending set |
+| 2 | `COMMIT` | market ‖ account ‖ commitment(32) ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature + seq floor, then append `commitment‖account` to the market's set |
 | 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) ‖ *public section* | admit only orders whose `H(order‖nonce)` ∈ commits, verify the public section, then clear | auth-trailer checks (below) **and** consume-or-reject the commitments, then settle |
 | 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
 | 5 | `WITHDRAW` | account ‖ asset_id ‖ amount(u64) | echo | debit balance + custody, **only if funded** (no overdraft) |
 | 6 | `LIST` | market ‖ base ‖ quote | echo | register a market's canonical assets (+ index it). A round for an unlisted or asset-mismatched market is **rejected**. |
 | 9 | `ENC_SETUP` | n ‖ committee_pks(n·32) ‖ nonce(8) ‖ sig(64) | echo | **gov-signed**: commit the encrypt-until-batch committee keys on-chain (nonce-protected) |
-| 10 | `ENC_COMMIT` | market ‖ C1(32) ‖ body(17) | echo | append `id = H(C1‖body)` to the market's encrypted-order set |
+| 10 | `ENC_COMMIT` | market ‖ C1(32) ‖ body(17) ‖ account ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature (over `id = H(C1‖body)`) + seq floor, then append `id‖account` to the encset |
 | 11 | `ENC_ROUND` | committee keys ‖ ciphertexts ‖ proven partials ‖ *public section* | verify every partial's proof against the committee keys, decrypt each order, verify the public section, clear | verify committee-hash == on-chain committee, auth-trailer checks, consume-or-reject the ciphertext ids, then settle |
 | 12 | `SMATCH` | `market‖base‖quote` ‖ *public section* | **verify each order's ed25519 sig** (and limit price == signed price), then clear | auth-trailer checks (below), then settle + store the book |
+| 13 | `CARRY_COMMIT` | market ‖ account ‖ commitment(32) | echo | **allowance-gated** re-seal of a partially-filled sealed order's remainder (one credit per genuine partial fill, minted by the settling round) |
+| 14 | `CARRY_ENC_COMMIT` | market ‖ C1(32) ‖ body(17) ‖ account | echo | same allowance gate, encrypt-until-batch mode |
 
 **The signed public section (trustless orders — every round type carries it).** New public
 orders travel as `order(17) ‖ flags ‖ signed_price ‖ seq(8) ‖ pubkey(32) ‖ sig(64)`; the

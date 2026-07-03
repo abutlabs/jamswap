@@ -44,12 +44,14 @@ def scenario():
     out = subprocess.run([COMMITTEE, "scenario", "0"], capture_output=True, text=True, check=True).stdout
     return {line.split()[0]: line.split()[1] for line in out.strip().splitlines()}
 
-def setup_chain(sid):
+def setup_chain(sid, s):
+    # register the trader keys FIRST (registration order fixes handles: buyer → 1, seller → 2);
+    # sealed commits are owner-signed, so unregistered accounts can't commit at all.
+    submit(sid, s["register_buy"])
+    submit(sid, s["register_sell"])
     submit(sid, (bytes([6]) + u32(MARKET) + u32(BASE) + u32(QUOTE)).hex())        # LIST
-    submit(sid, (bytes([1]) + u32(8) + u32(QUOTE) + u64(10_000 * SCALE)).hex())   # fund buyer quote
-    submit(sid, (bytes([1]) + u32(7) + u32(BASE) + u64(10_000 * SCALE)).hex())    # fund seller base
-    submit(sid, (bytes([1]) + u32(9) + u32(QUOTE) + u64(10_000 * SCALE)).hex())   # attacker quote
-    submit(sid, (bytes([1]) + u32(9) + u32(BASE) + u64(10_000 * SCALE)).hex())    # attacker base
+    submit(sid, (bytes([1]) + u32(1) + u32(QUOTE) + u64(10_000 * SCALE)).hex())   # fund buyer quote
+    submit(sid, (bytes([1]) + u32(2) + u32(BASE) + u64(10_000 * SCALE)).hex())    # fund seller base
 
 def commit_pair(sid, s):
     submit(sid, s["commit_buy"])
@@ -57,7 +59,7 @@ def commit_pair(sid, s):
 
 def deploy_fresh(s):
     sid = rpc("POST", "/v1/service", {"jam_hex": open(JAM, "rb").read().hex()})["service_id"]
-    setup_chain(sid)
+    setup_chain(sid, s)
     submit(sid, s["setup"])
     assert len(storage(sid, b"committee")) == 1 + 2 * 32, "committee must be committed on-chain"
     return sid
@@ -71,10 +73,10 @@ def main():
                       ("round_injected", "accumulate consume-or-reject on an uncommitted ciphertext")]:
         sid = deploy_fresh(s)
         commit_pair(sid, s)
-        before = (bal(sid, BASE, 8), bal(sid, QUOTE, 7))
+        before = (bal(sid, BASE, 1), bal(sid, QUOTE, 2))
         n_before = len(encset(sid))
         submit(sid, s[name])
-        after = (bal(sid, BASE, 8), bal(sid, QUOTE, 7))
+        after = (bal(sid, BASE, 1), bal(sid, QUOTE, 2))
         assert after == (0, 0) == before, f"{name}: NO settlement expected, got {after}"
         assert len(encset(sid)) == n_before, f"{name}: encset must be untouched"
         print(f"{name:22s} REJECTED, no settlement, encset intact  ({why})")
@@ -82,10 +84,10 @@ def main():
     # --- honest round settles ---
     sid = deploy_fresh(s)
     commit_pair(sid, s)
-    assert len(encset(sid)) == 2 * 32, "two ciphertexts committed"
+    assert len(encset(sid)) == 2 * 36, "two ciphertexts committed"
     r = submit(sid, s["round"])
-    buyer_base = bal(sid, BASE, 8)
-    seller_quote = bal(sid, QUOTE, 7)
+    buyer_base = bal(sid, BASE, 1)
+    seller_quote = bal(sid, QUOTE, 2)
     FEE = 300  # flat per-filled-order fee in the base asset (FEE_FLAT in the service)
     assert buyer_base == 5 * SCALE - FEE, f"buyer must receive 5 base − fee, got {buyer_base}"
     assert seller_quote > 0, f"seller must receive quote proceeds, got {seller_quote}"

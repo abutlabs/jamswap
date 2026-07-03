@@ -55,6 +55,18 @@ pub fn order_msg(
     )
 }
 
+/// Canonical message a trader signs to post a SEALED order's on-chain commitment, so nobody
+/// (builder included) can seal an order onto someone else's account. `commit_id` is what the
+/// chain stores: the reveal commitment H(order‖nonce) in commit–reveal mode, or the ciphertext
+/// id H(C1‖body) in encrypt-until-batch mode — one action covers both. Same per-account
+/// monotonic `seq` floor as orders (replay-proof).
+pub fn commit_msg(market: u32, account: u32, commit_id: &[u8; 32], seq: u64) -> Vec<u8> {
+    canon(
+        b"commit",
+        &[&market.to_le_bytes(), &account.to_le_bytes(), commit_id, &seq.to_le_bytes()],
+    )
+}
+
 /// Verify an ed25519 signature over `msg` by `pubkey`. Rejects malformed keys/signatures, and
 /// (like any JAM guarantor or auditor re-running this) is deterministic. Accepts the `<Bytes>`
 /// framing so a message signed via `signRaw` verifies against the same canonical `msg`.

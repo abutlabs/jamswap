@@ -10,7 +10,7 @@ use jam_pvm_common::jam_types::*;
 use jam_pvm_common::{declare_service, Service};
 
 use blake2::{Blake2s256, Digest};
-use match_engine::auth::{canon, order_msg, verify_signed};
+use match_engine::auth::{canon, commit_msg, order_msg, verify_signed};
 use match_engine::{clear, resting, wire, Order, Side};
 
 declare_service!(Jamswap);
@@ -41,6 +41,15 @@ const TAG_ENC_COMMIT: u8 = 10; // [tag][market(4)][C1(32)][body(ORDER_LEN)] — 
 const TAG_ENC_ROUND: u8 = 11; // sealed-encrypted round — see enc_round_output() for the wire layout
 // --- trustless public orders: per-order ed25519 verified IN REFINE (no builder trust) ---
 const TAG_SMATCH: u8 = 12; // signed public round — see parse_public_section() / smatch_output()
+// --- trustless sealed placement: commits are OWNER-SIGNED (verified in accumulate, zero
+// refine gas) and the commit/enc sets bind each entry to its account, so a sealed order can
+// only ever settle for the account that signed its commitment. Carry-forward remainder
+// commits are builder-posted but ALLOWANCE-GATED: a round that partially fills an account's
+// sealed order mints exactly one carry credit for that account (see docs/SECURITY.md).
+const TAG_CARRY_COMMIT: u8 = 13; // [tag][market][account][commitment(32)] — allowance-gated re-seal
+const TAG_CARRY_ENC_COMMIT: u8 = 14; // [tag][market][C1][body][account] — allowance-gated re-seal
+// commit/enc set entries are hash(32) ‖ account(4): consumption must match BOTH.
+const SET_ENTRY_LEN: usize = 36;
 
 // Governance key authorised to sweep the fee treasury AND commit the encrypt-until-batch
 // committee. Derived from the documented demo seed b"jamswap:demo:governance:key:v1!!"
@@ -310,7 +319,8 @@ fn smatch_output(market: u32, base: u32, quote: u32, ps: &PublicSection) -> Vec<
 //
 // Output: [TAG_REVEAL][market][base][quote]
 //         [settle_len:u32][settle]            — all fills, at the uniform price
-//         [consumed_len:u32][consumed(32×k)]  — commitment hashes this round consumed
+//         [consumed_len:u32][consumed(36×k)]  — (hash ‖ account) entries this round consumed
+//         [ncar:u16][carry accounts(4×ncar)]  — sealed orders with an unfilled remainder
 //         [nb:u16][bindings][book_hash(32)]   — auth trailer (see push_auth_trailer)
 //         [book]                              — new resting book (sealed remainder excluded)
 fn reveal_output(
@@ -319,7 +329,7 @@ fn reveal_output(
     quote: u32,
     ps: &PublicSection,
     sealed: &[Order],
-    consumed: &[[u8; 32]],
+    consumed: &[u8],
 ) -> Vec<u8> {
     let mut all: Vec<Order> = Vec::with_capacity(ps.book.len() + ps.new_orders.len() + sealed.len());
     all.extend_from_slice(&ps.book);
@@ -327,21 +337,33 @@ fn reveal_output(
     all.extend_from_slice(sealed);
     let c = clear(&all);
     let settle = wire::encode_settlement(c.price, &all, &c);
-    // resting = remainder of everything EXCEPT sealed orders (IOC: sealed remainder expires)
+    // resting = remainder of everything EXCEPT sealed orders (IOC: sealed remainder expires
+    // from the PUBLIC book — the builder re-seals it, spending the carry credit minted here)
     let rest = resting(&all, &c);
-    let public_rest: Vec<Order> =
-        rest.into_iter().filter(|o| !sealed.iter().any(|s| s.id == o.id)).collect();
+    let mut carry: Vec<u32> = Vec::new();
+    let public_rest: Vec<Order> = rest
+        .into_iter()
+        .filter(|o| {
+            let is_sealed = sealed.iter().any(|s| s.id == o.id);
+            if is_sealed {
+                carry.push(o.account); // a genuine unfilled sealed remainder → one carry credit
+            }
+            !is_sealed
+        })
+        .collect();
     let book = wire::encode_orders(&public_rest);
-    let mut out = Vec::with_capacity(55 + settle.len() + consumed.len() * 32 + book.len());
+    let mut out = Vec::with_capacity(57 + settle.len() + consumed.len() + carry.len() * 4 + book.len());
     out.push(TAG_REVEAL);
     out.extend_from_slice(&market.to_le_bytes());
     out.extend_from_slice(&base.to_le_bytes());
     out.extend_from_slice(&quote.to_le_bytes());
     out.extend_from_slice(&(settle.len() as u32).to_le_bytes());
     out.extend_from_slice(&settle);
-    out.extend_from_slice(&((consumed.len() * 32) as u32).to_le_bytes());
-    for h in consumed {
-        out.extend_from_slice(h);
+    out.extend_from_slice(&(consumed.len() as u32).to_le_bytes());
+    out.extend_from_slice(consumed);
+    out.extend_from_slice(&(carry.len() as u16).to_le_bytes());
+    for a in &carry {
+        out.extend_from_slice(&a.to_le_bytes());
     }
     push_auth_trailer(&mut out, &ps.bindings, &ps.book_hash, &book);
     out
@@ -355,8 +377,9 @@ fn reveal_output(
 //
 // Output: [TAG_ENC_ROUND][market][base][quote]
 //         [settle_len:u32][settle]
-//         [consumed_len:u32][consumed(32×k)]   — ciphertext ids consumed
+//         [consumed_len:u32][consumed(36×k)]   — (ciphertext id ‖ account) entries consumed
 //         [committee_hash(32)]                 — committee refine used (accumulate verifies)
+//         [ncar:u16][carry accounts(4×ncar)]   — sealed orders with an unfilled remainder
 //         [nb:u16][bindings][book_hash(32)]    — auth trailer (see push_auth_trailer)
 //         [book]                               — new resting book (sealed remainder excluded)
 fn enc_round_output(
@@ -365,7 +388,7 @@ fn enc_round_output(
     quote: u32,
     ps: &PublicSection,
     sealed: &[Order],
-    consumed: &[[u8; 32]],
+    consumed: &[u8],
     committee_h: &[u8; 32],
 ) -> Vec<u8> {
     let mut all: Vec<Order> = Vec::with_capacity(ps.book.len() + ps.new_orders.len() + sealed.len());
@@ -375,21 +398,33 @@ fn enc_round_output(
     let c = clear(&all);
     let settle = wire::encode_settlement(c.price, &all, &c);
     let rest = resting(&all, &c);
-    let public_rest: Vec<Order> =
-        rest.into_iter().filter(|o| !sealed.iter().any(|s| s.id == o.id)).collect();
+    let mut carry: Vec<u32> = Vec::new();
+    let public_rest: Vec<Order> = rest
+        .into_iter()
+        .filter(|o| {
+            let is_sealed = sealed.iter().any(|s| s.id == o.id);
+            if is_sealed {
+                carry.push(o.account);
+            }
+            !is_sealed
+        })
+        .collect();
     let book = wire::encode_orders(&public_rest);
-    let mut out = Vec::with_capacity(55 + settle.len() + consumed.len() * 32 + 32 + book.len());
+    let mut out =
+        Vec::with_capacity(57 + settle.len() + consumed.len() + 32 + carry.len() * 4 + book.len());
     out.push(TAG_ENC_ROUND);
     out.extend_from_slice(&market.to_le_bytes());
     out.extend_from_slice(&base.to_le_bytes());
     out.extend_from_slice(&quote.to_le_bytes());
     out.extend_from_slice(&(settle.len() as u32).to_le_bytes());
     out.extend_from_slice(&settle);
-    out.extend_from_slice(&((consumed.len() * 32) as u32).to_le_bytes());
-    for h in consumed {
-        out.extend_from_slice(h);
-    }
+    out.extend_from_slice(&(consumed.len() as u32).to_le_bytes());
+    out.extend_from_slice(consumed);
     out.extend_from_slice(committee_h);
+    out.extend_from_slice(&(carry.len() as u16).to_le_bytes());
+    for a in &carry {
+        out.extend_from_slice(&a.to_le_bytes());
+    }
     push_auth_trailer(&mut out, &ps.bindings, &ps.book_hash, &book);
     out
 }
@@ -413,24 +448,26 @@ fn apply_settlement(base: u32, quote: u32, market: u32, settle: &[u8]) {
     set_storage(&mkey(b"cv", market), &cum.to_le_bytes()).ok();
 }
 
-// Verify each 32-byte hash in `consumed` against a stored id-set blob (each consumed hash
-// must claim a DISTINCT stored entry), then remove the matched entries. Entries NOT touched
-// this round are preserved — no wholesale wipe, so an order committed-but-not-yet-settled
-// (e.g. cancelled in the mempool) isn't destroyed. Returns false — leaving storage untouched
-// — if any consumed hash has no stored match: refine only checks against the BUILDER-supplied
-// set, so a hash missing on-chain means the builder injected an order/ciphertext that was
-// never committed, and the whole round must be rejected rather than settled. Shared by the
-// commit–reveal (b"commits") and encrypt-until-batch (b"encset") paths.
+// Verify each 36-byte entry (hash(32) ‖ account(4)) in `consumed` against a stored id-set
+// blob (each consumed entry must claim a DISTINCT stored entry, matching BOTH the hash and
+// the account — so a sealed order can only settle for the account that signed its commit),
+// then remove the matched entries. Entries NOT touched this round are preserved — no
+// wholesale wipe, so an order committed-but-not-yet-settled (e.g. cancelled in the mempool)
+// isn't destroyed. Returns false — leaving storage untouched — if any consumed entry has no
+// stored match: refine only checks against the BUILDER-supplied set, so a mismatch means the
+// builder injected an order/ciphertext that was never committed (or forged its account), and
+// the whole round must be rejected rather than settled. Shared by the commit–reveal
+// (b"commits") and encrypt-until-batch (b"encset") paths.
 fn consume_set(key: &[u8], consumed: &[u8]) -> bool {
     let stored = get_storage(key).unwrap_or_default();
-    let n = stored.len() / 32;
+    let n = stored.len() / SET_ENTRY_LEN;
     let mut removed = Vec::new();
     removed.resize(n, false);
-    for c in 0..(consumed.len() / 32) {
-        let h = &consumed[c * 32..c * 32 + 32];
+    for c in 0..(consumed.len() / SET_ENTRY_LEN) {
+        let e = &consumed[c * SET_ENTRY_LEN..(c + 1) * SET_ENTRY_LEN];
         let mut found = false;
         for j in 0..n {
-            if !removed[j] && &stored[j * 32..j * 32 + 32] == h {
+            if !removed[j] && &stored[j * SET_ENTRY_LEN..(j + 1) * SET_ENTRY_LEN] == e {
                 removed[j] = true;
                 found = true;
                 break;
@@ -443,11 +480,32 @@ fn consume_set(key: &[u8], consumed: &[u8]) -> bool {
     let mut out = Vec::with_capacity(stored.len());
     for j in 0..n {
         if !removed[j] {
-            out.extend_from_slice(&stored[j * 32..j * 32 + 32]);
+            out.extend_from_slice(&stored[j * SET_ENTRY_LEN..(j + 1) * SET_ENTRY_LEN]);
         }
     }
     set_storage(key, &out).ok();
     true
+}
+
+// Carry-forward allowance (b"cw"‖market‖account → u32): a sealed order that PARTIALLY fills
+// mints one credit for its account (refine reports it; consumption above proves the account
+// really had a sealed order in the round), and the builder spends one credit to post the
+// re-sealed remainder WITHOUT an owner signature (the trader is offline — that's the whole
+// point of fire-and-forget sealing). Bounded builder trust: at most one unauthorized-looking
+// commit per genuine partial fill, and its settlement still binds to the same account. The
+// full fix (proving the remainder's terms) is the rung-1 ZK linkage — documented.
+fn cw_key(market: u32, account: u32) -> Vec<u8> {
+    let mut k = Vec::with_capacity(10);
+    k.extend_from_slice(b"cw");
+    k.extend_from_slice(&market.to_le_bytes());
+    k.extend_from_slice(&account.to_le_bytes());
+    k
+}
+fn carry_allowance(market: u32, account: u32) -> u32 {
+    get_storage(&cw_key(market, account)).filter(|v| v.len() >= 4).map(|v| ru32(&v, 0)).unwrap_or(0)
+}
+fn set_carry_allowance(market: u32, account: u32, v: u32) {
+    set_storage(&cw_key(market, account), &v.to_le_bytes()).ok();
 }
 
 // Read a big-endian... no: little-endian u16 (all jamswap wire ints are LE).
@@ -561,7 +619,7 @@ fn refine_enc_round(data: &[u8]) -> Option<Vec<u8>> {
     let ps = parse_public_section(data, off, market)?;
 
     let mut sealed: Vec<Order> = Vec::with_capacity(m);
-    let mut consumed: Vec<[u8; 32]> = Vec::with_capacity(m);
+    let mut consumed: Vec<u8> = Vec::with_capacity(m * SET_ENTRY_LEN);
     for i in 0..m {
         let (c1, body) = ciphertexts[i];
         let parts = &partials_blob[i * n * vdec::PARTIAL_LEN..(i + 1) * n * vdec::PARTIAL_LEN];
@@ -570,12 +628,14 @@ fn refine_enc_round(data: &[u8]) -> Option<Vec<u8>> {
         // nobody, not even the builder, can substitute a plaintext for a committed ciphertext.
         let order_bytes = vdec::verify_and_decrypt(c1, body, &pks, parts)?;
         let o = wire::decode_orders(&order_bytes).into_iter().next()?;
-        sealed.push(o);
-        // ciphertext id = H(C1 ‖ body): accumulate consumes exactly these from the encset.
+        // consumed entry = H(C1 ‖ body) ‖ decrypted account: accumulate matches BOTH against
+        // the owner-signed encset entry, so this ciphertext can only settle for its committer.
         let mut idbuf = Vec::with_capacity(c1.len() + body.len());
         idbuf.extend_from_slice(c1);
         idbuf.extend_from_slice(body);
-        consumed.push(commitment(&idbuf));
+        consumed.extend_from_slice(&commitment(&idbuf));
+        consumed.extend_from_slice(&o.account.to_le_bytes());
+        sealed.push(o);
     }
     // committee hash over exactly [n][pks] — the bytes accumulate stores/checks.
     let mut blob = Vec::with_capacity(1 + n * vdec::POINT_LEN);
@@ -611,7 +671,8 @@ impl Service for Jamswap {
             }
             // echoes for accumulate (auth + state changes happen there, where storage lives)
             TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_LIST | TAG_REGISTER
-            | TAG_TREASURY | TAG_ENC_SETUP | TAG_ENC_COMMIT => data.into(),
+            | TAG_TREASURY | TAG_ENC_SETUP | TAG_ENC_COMMIT | TAG_CARRY_COMMIT
+            | TAG_CARRY_ENC_COMMIT => data.into(),
             // Sealed-encrypted round (encrypt-until-batch): the committee has decrypted, so
             // refine verifies each partial against the builder-supplied committee keys,
             // recovers each order, and clears — no reveal round, no owner liveness. accumulate
@@ -640,7 +701,7 @@ impl Service for Jamswap {
                 };
                 let n_commit = commits.len() / 32;
                 let mut verified: Vec<Order> = Vec::new();
-                let mut consumed: Vec<[u8; 32]> = Vec::new();
+                let mut consumed: Vec<u8> = Vec::new();
                 for i in 0..(reveals.len() / REVEAL_LEN) {
                     let r = &reveals[i * REVEAL_LEN..(i + 1) * REVEAL_LEN];
                     let h = commitment(r);
@@ -652,12 +713,14 @@ impl Service for Jamswap {
                         }
                     }
                     // admit only orders whose hash matches an on-chain commitment (uncommitted
-                    // orders are rejected — the MEV-resistance property), and record the hash so
-                    // accumulate consumes exactly this commitment.
+                    // orders are rejected — the MEV-resistance property). The consumed entry is
+                    // hash ‖ revealed account: accumulate matches both against the owner-signed
+                    // commit, so a reveal can only settle for the account that signed it.
                     if ok {
                         if let Some(o) = wire::decode_orders(&r[..wire::ORDER_LEN]).into_iter().next() {
+                            consumed.extend_from_slice(&h);
+                            consumed.extend_from_slice(&o.account.to_le_bytes());
                             verified.push(o);
-                            consumed.push(h);
                         }
                     }
                 }
@@ -712,12 +775,46 @@ impl Service for Jamswap {
                         set_cust(asset, get_cust(asset).saturating_sub(amount));
                     }
                 }
-                // [tag][market][account][commitment(32)]
-                TAG_COMMIT if out.len() >= 1 + 4 + 4 + 32 => {
+                // OWNER-SIGNED sealed commit: [tag][market(4)][account(4)][commitment(32)]
+                // [seq(8)][sig(64)] — only the account's registered key can seal an order onto
+                // it (sig over canon(commit, market, account, commitment, seq); same monotonic
+                // seq floor as orders, so a captured commit signature can't be replayed).
+                TAG_COMMIT if out.len() >= 1 + 4 + 4 + 32 + 8 + 64 => {
                     let market = ru32(&out, 1);
+                    let account = ru32(&out, 5);
+                    let mut cid = [0u8; 32];
+                    cid.copy_from_slice(&out[9..41]);
+                    let seq = le_u64(&out[41..49]);
+                    let sig = sig64(&out, 49);
+                    let Some(pk) = pubkey_of(account) else { continue };
+                    if seq <= get_seq_floor(account)
+                        || !verify_signed(&pk, &commit_msg(market, account, &cid, seq), &sig)
+                    {
+                        continue; // forged, replayed, or not the account owner
+                    }
+                    set_seq_floor(account, seq);
                     let key = mkey(b"commits", market);
                     let mut commits = get_storage(&key).unwrap_or_default();
-                    commits.extend_from_slice(&out[9..9 + 32]);
+                    commits.extend_from_slice(&cid);
+                    commits.extend_from_slice(&account.to_le_bytes());
+                    set_storage(&key, &commits).ok();
+                }
+                // builder-posted re-seal of a partially-filled sealed order's remainder:
+                // [tag][market(4)][account(4)][commitment(32)] — ALLOWANCE-GATED: spends one
+                // carry credit minted by a round that genuinely partially filled this
+                // account's sealed order. No credit → rejected.
+                TAG_CARRY_COMMIT if out.len() >= 1 + 4 + 4 + 32 => {
+                    let market = ru32(&out, 1);
+                    let account = ru32(&out, 5);
+                    let cw = carry_allowance(market, account);
+                    if cw == 0 {
+                        continue;
+                    }
+                    set_carry_allowance(market, account, cw - 1);
+                    let key = mkey(b"commits", market);
+                    let mut commits = get_storage(&key).unwrap_or_default();
+                    commits.extend_from_slice(&out[9..41]);
+                    commits.extend_from_slice(&account.to_le_bytes());
                     set_storage(&key, &commits).ok();
                 }
                 // signed cancel: [tag][handle(4)][market(4)][order_id(4)][nonce(8)][sig(64)]
@@ -813,8 +910,14 @@ impl Service for Jamswap {
                         continue;
                     }
                     let consumed = &out[consumed_off..consumed_off + consumed_len];
-                    let nb = ru16(&out, consumed_off + consumed_len) as usize;
-                    let b_off = consumed_off + consumed_len + 2;
+                    let ncar = ru16(&out, consumed_off + consumed_len) as usize;
+                    let car_off = consumed_off + consumed_len + 2;
+                    if out.len() < car_off + ncar * 4 + 2 {
+                        continue;
+                    }
+                    let carry = &out[car_off..car_off + ncar * 4];
+                    let nb = ru16(&out, car_off + ncar * 4) as usize;
+                    let b_off = car_off + ncar * 4 + 2;
                     if out.len() < b_off + nb * wire::BINDING_LEN + 32 {
                         continue;
                     }
@@ -825,12 +928,18 @@ impl Service for Jamswap {
                     let Some(floors) = check_round_auth(market, bindings, book_hash) else {
                         continue; // forged pubkey binding / replayed seq / fabricated book
                     };
-                    // consume-or-reject BEFORE settling: every revealed commitment must exist
-                    // on-chain, else the builder smuggled in an uncommitted order.
+                    // consume-or-reject BEFORE settling: every revealed (commitment ‖ account)
+                    // must exist on-chain — an uncommitted order OR a forged account rejects.
                     if !consume_set(&mkey(b"commits", market), consumed) {
                         continue;
                     }
                     commit_seq_floors(&floors);
+                    // mint carry credits: one per genuinely partially-filled sealed order, so
+                    // the builder can re-seal each remainder (TAG_CARRY_COMMIT) for its owner.
+                    for i in 0..ncar {
+                        let a = ru32(carry, i * 4);
+                        set_carry_allowance(market, a, carry_allowance(market, a).saturating_add(1));
+                    }
                     set_storage(&mkey(b"book", market), book).ok();
                     apply_settlement(base, quote, market, settle);
                 }
@@ -887,15 +996,52 @@ impl Service for Jamswap {
                     blob.extend_from_slice(pks);
                     set_storage(b"committee", &blob).ok();
                 }
-                // encrypted-order commit: [tag][market(4)][C1(32)][body(ORDER_LEN)]
-                // — record id = H(C1‖body) in the market's encset. The ciphertext reveals
-                // nothing until the committee decrypts it in a round.
-                TAG_ENC_COMMIT if out.len() >= 1 + 4 + vdec::POINT_LEN + wire::ORDER_LEN => {
+                // OWNER-SIGNED encrypted-order commit:
+                // [tag][market(4)][C1(32)][body(ORDER_LEN)][account(4)][seq(8)][sig(64)]
+                // — record id = H(C1‖body) ‖ account in the market's encset; the sig (over the
+                // same canon(commit, market, account, id, seq) as commit–reveal) proves the
+                // account owner posted this ciphertext. The ciphertext reveals nothing until
+                // the committee decrypts it in a round — and it can only settle for `account`.
+                TAG_ENC_COMMIT
+                    if out.len() >= 1 + 4 + vdec::POINT_LEN + wire::ORDER_LEN + 4 + 8 + 64 =>
+                {
                     let market = ru32(&out, 1);
-                    let id = commitment(&out[5..5 + vdec::POINT_LEN + wire::ORDER_LEN]);
+                    let ct_end = 5 + vdec::POINT_LEN + wire::ORDER_LEN;
+                    let id = commitment(&out[5..ct_end]);
+                    let account = ru32(&out, ct_end);
+                    let seq = le_u64(&out[ct_end + 4..ct_end + 12]);
+                    let sig = sig64(&out, ct_end + 12);
+                    let Some(pk) = pubkey_of(account) else { continue };
+                    if seq <= get_seq_floor(account)
+                        || !verify_signed(&pk, &commit_msg(market, account, &id, seq), &sig)
+                    {
+                        continue;
+                    }
+                    set_seq_floor(account, seq);
                     let key = mkey(b"encset", market);
                     let mut set = get_storage(&key).unwrap_or_default();
                     set.extend_from_slice(&id);
+                    set.extend_from_slice(&account.to_le_bytes());
+                    set_storage(&key, &set).ok();
+                }
+                // builder-posted re-seal (encrypt-until-batch): [tag][market(4)][C1(32)]
+                // [body(ORDER_LEN)][account(4)] — allowance-gated, same as TAG_CARRY_COMMIT.
+                TAG_CARRY_ENC_COMMIT
+                    if out.len() >= 1 + 4 + vdec::POINT_LEN + wire::ORDER_LEN + 4 =>
+                {
+                    let market = ru32(&out, 1);
+                    let ct_end = 5 + vdec::POINT_LEN + wire::ORDER_LEN;
+                    let id = commitment(&out[5..ct_end]);
+                    let account = ru32(&out, ct_end);
+                    let cw = carry_allowance(market, account);
+                    if cw == 0 {
+                        continue;
+                    }
+                    set_carry_allowance(market, account, cw - 1);
+                    let key = mkey(b"encset", market);
+                    let mut set = get_storage(&key).unwrap_or_default();
+                    set.extend_from_slice(&id);
+                    set.extend_from_slice(&account.to_le_bytes());
                     set_storage(&key, &set).ok();
                 }
                 // sealed-encrypted round: [tag][market][base][quote][settle_len][settle]
@@ -920,8 +1066,14 @@ impl Service for Jamswap {
                     }
                     let consumed = &out[consumed_off..consumed_off + consumed_len];
                     let ch = &out[consumed_off + consumed_len..consumed_off + consumed_len + 32];
-                    let nb = ru16(&out, consumed_off + consumed_len + 32) as usize;
-                    let b_off = consumed_off + consumed_len + 34;
+                    let ncar = ru16(&out, consumed_off + consumed_len + 32) as usize;
+                    let car_off = consumed_off + consumed_len + 34;
+                    if out.len() < car_off + ncar * 4 + 2 {
+                        continue;
+                    }
+                    let carry = &out[car_off..car_off + ncar * 4];
+                    let nb = ru16(&out, car_off + ncar * 4) as usize;
+                    let b_off = car_off + ncar * 4 + 2;
                     if out.len() < b_off + nb * wire::BINDING_LEN + 32 {
                         continue;
                     }
@@ -939,11 +1091,16 @@ impl Service for Jamswap {
                     let Some(floors) = check_round_auth(market, bindings, book_hash) else {
                         continue;
                     };
-                    // (3) consume-or-reject: every ciphertext id must exist in the encset.
+                    // (3) consume-or-reject: every (ciphertext id ‖ decrypted account) must
+                    // exist in the owner-signed encset — forged accounts reject the round.
                     if !consume_set(&mkey(b"encset", market), consumed) {
                         continue;
                     }
                     commit_seq_floors(&floors);
+                    for i in 0..ncar {
+                        let a = ru32(carry, i * 4);
+                        set_carry_allowance(market, a, carry_allowance(market, a).saturating_add(1));
+                    }
                     set_storage(&mkey(b"book", market), book).ok();
                     apply_settlement(base, quote, market, settle);
                 }
