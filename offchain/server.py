@@ -91,6 +91,14 @@ _lock = threading.Lock()              # guards the pending books across request 
 _next_auction = [0.0]                 # wall-clock of the next auction tick (for the UI countdown)
 
 RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
+# Standard-service path. When BUILDER_URL is set, work-items are submitted through the
+# JAMNP-S builder daemon (which wraps each payload in a GP work-package and submits it
+# to the node's guarantor over CE-133/QUIC — refine -> accumulate), instead of the node's
+# operator-RPC /item route. This is what makes jamswap a STANDARD JAM service: it reaches
+# the chain through the published network protocol, not a lasair-specific API. Service
+# DEPLOY and all storage READS still use the node RPC (deploy is an operator action; the
+# guarantor shares the node's in-process service registry, so state settles in one place).
+BUILDER_URL = os.environ.get("BUILDER_URL", "").rstrip("/")
 # Service id: an explicit SERVICE_ID wins; otherwise we DEPLOY the blob ($JAM) at
 # startup and use whatever id the node assigns. Deploying here (rather than trusting a
 # hardcoded id) is what keeps the UI pointed at THIS service — node service ids are
@@ -134,7 +142,18 @@ def node(path, body=None):
         headers={"content-type": "application/json"}, method="POST" if data else "GET")
     return json.loads(urllib.request.urlopen(req, timeout=30).read())
 def order_bytes(a, oid, side, p, q): return struct.pack("<IIBII", a, oid, side, p, q)
-def submit(payload): return node(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
+def _post_json(url, body):
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data,
+        headers={"content-type": "application/json"}, method="POST")
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+def submit(payload):
+    # STANDARD path when BUILDER_URL is set: the builder daemon wraps this payload in a
+    # GP work-package and submits it to the guarantor over CE-133/QUIC. Otherwise the
+    # operator-RPC /item route (single-node harness / backward-compatible).
+    if BUILDER_URL:
+        return _post_json(BUILDER_URL + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
+    return node(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
 def storage(key):
     r = node(f"/v1/service/{SID}/storage/{key.hex()}")
     return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
