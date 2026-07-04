@@ -46,6 +46,7 @@ services:
       LASAIR_GUARANTOR_HOST: lasair-node
       LASAIR_GUARANTOR_PORT: "40100"
       LASAIR_JAMNP_GENESIS_HEX: *genesis
+      LASAIR_NODE_RPC: http://lasair-node:19900   # fetch each service's code hash to commit to
     depends_on:
       lasair-node:
         condition: service_healthy
