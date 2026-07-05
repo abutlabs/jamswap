@@ -1,0 +1,35 @@
+# Mixed-network PolkaJam image: a PolkaJam validator node AND the shared-spec
+# generator (ROLE=init|validator; see mixed/pj-entrypoint.sh).
+#
+# COMPLIANCE: PolkaJam is BLACK-BOX. Its binary is fetched from the PUBLIC
+# paritytech/polkajam-releases at BUILD time and is NEVER committed or pushed to
+# our registry — this image is BUILT LOCALLY by `docker compose` on the user's
+# machine, exactly like differential/Dockerfile.polkajam. The lasair `mixed_keys`
+# tool is copied from the published lasair image so the init step can derive
+# lasair validators' genesis entries. See lasair docs/DISCLOSURES.md.
+#
+# Multi-arch: fetches the linux-<arch> release matching the build platform
+# (aarch64 / x86_64), so it runs natively on both Apple Silicon and Intel Linux —
+# provided Parity publishes that arch for the pinned release.
+
+ARG MESH_IMAGE=ghcr.io/abutlabs/lasair:latest
+FROM ${MESH_IMAGE} AS mesh
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates jq python3 bash && rm -rf /var/lib/apt/lists/*
+ARG PJ_RELEASE=nightly-2026-07-04
+RUN arch=$(uname -m | sed s/arm64/aarch64/) \
+ && url=$(curl -fsSL "https://api.github.com/repos/paritytech/polkajam-releases/releases/tags/${PJ_RELEASE}" \
+      | jq -r ".assets[] | select(.name | test(\"linux-${arch}\")) | .browser_download_url") \
+ && echo "fetching ${url}" \
+ && curl -fsSL "$url" | tar xz -C /usr/local/bin --strip-components=1 \
+ && /usr/local/bin/polkajam --version
+# lasair mixed_keys (+ its FFI libs) so ROLE=init can derive lasair validator keys
+COPY --from=mesh /usr/local/bin/mixed_keys /usr/local/bin/mixed_keys
+COPY --from=mesh /usr/local/lib/libbandersnatch_ffi.so /usr/local/lib/libed25519_ffi.so /usr/local/lib/
+RUN ldconfig
+COPY mixed/gen-spec.py /gen-spec.py
+COPY mixed/pj-entrypoint.sh /pj-entrypoint.sh
+RUN chmod +x /pj-entrypoint.sh
+ENTRYPOINT ["/pj-entrypoint.sh"]

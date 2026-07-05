@@ -304,6 +304,85 @@ Now every order is gossiped and included in a block, the batch is cleared in `re
 byte-identically, and settlement — imported and re-executed by all six validators —
 lands a slot or two later at the real 6-second cadence.
 
+### Run it on a MIXED-client chain — lasair **and** PolkaJam, one command
+
+The testnet above is six of the *same* client. JAM's real promise is a network of
+**different** client implementations agreeing on one chain. This compose runs exactly
+that: six validators split across **two independent JAM clients** — [lasair](https://github.com/abutlabs/lasair)
+(our OCaml client) and **PolkaJam** (Parity's) — co-authoring **one** Safrole chain,
+with **leadership rotating across clients** and each client re-executing the other's
+blocks to a byte-identical state root.
+
+```sh
+docker compose -f docker-compose.mixed.yml up
+```
+
+That's it — one line brings up a **multi-architecture** (Apple Silicon **and** Intel
+Linux) mixed-client JAM testnet:
+
+- `pj0 pj1 pj2` — PolkaJam validators (indices 0,1,2)
+- `lm3 lm4 lm5` — lasair validators (indices 3,4,5)
+- `spec-init` — mints the **shared genesis** both clients load (identical bytes → identical state root)
+- `watch` — prints the chain advancing
+
+Watch leadership rotate across clients, and confirm both agree on state:
+
+```sh
+# who authored each block — lasair's slots (val 3/4/5) interleave with PolkaJam's
+docker compose -f docker-compose.mixed.yml logs lm3 lm4 lm5 | grep authored
+
+# both clients on ONE chain: a lasair-authored block, re-derived by PolkaJam to the
+# SAME state root (RPC on the host):
+docker compose -f docker-compose.mixed.yml logs watch          # PolkaJam's view of the chain
+```
+
+Typical output — a single chain whose blocks alternate authorship:
+
+```
+lm5 | 🚀 authored slot 7918603 (val 5) height 1 …
+lm4 | 🚀 authored slot 7918606 (val 4) height 4 …
+lm3 | 🚀 authored slot 7918614 (val 3) height 12 …
+      (PolkaJam authored heights 2,3,5,6,7,9,10,11 in between)
+CROSS-CLIENT ROTATION — both clients co-author one chain; PolkaJam re-derives
+every lasair-authored block's state root: MATCH ✓
+```
+
+**How it works, and what it proves.** Both clients load one operator-defined genesis
+(`gen-spec`), whose validator set carries each node's real keys — PolkaJam's for
+indices 0–2, lasair's for 3–5. Each node authors **only its own** Safrole slots (the
+leader is resolved from on-chain state, so a node signs a slot *iff* it owns that
+slot's leader) and imports every other slot over the **spec JAMNP-S/QUIC** transport
+both clients speak. Because both are GP-v0.7.2-conformant, they agree on the fallback
+leader schedule and re-execute to identical state. It's the strongest possible
+interop result: two from-scratch client implementations running **one** blockchain.
+
+**Options.**
+
+```sh
+# use a specific published lasair client image, or your locally-built one:
+LASAIR_IMAGE=ghcr.io/abutlabs/lasair:0.1.0 docker compose -f docker-compose.mixed.yml up
+LASAIR_IMAGE=lasair:local                  docker compose -f docker-compose.mixed.yml up   # built from the lasair repo
+
+# pin the PolkaJam release fetched (black-box) at build time:
+PJ_RELEASE=nightly-2026-07-04 docker compose -f docker-compose.mixed.yml up
+
+# change the client split (which indices each client owns):
+LAYOUT=lasair,lasair,polkajam,polkajam,lasair,polkajam docker compose -f docker-compose.mixed.yml up
+```
+
+> **Scope.** This compose demonstrates the **consensus layer** — the mixed-client
+> chain jamswap runs *on*: both clients co-authoring one rotating chain and agreeing
+> on state. Deploying the jamswap **service** onto that mixed chain (so DEX orders are
+> guaranteed and settled across both clients) is the next milestone; today the full
+> DEX trading flow runs on the single-client harnesses above (`docker compose up` /
+> `docker-compose.testnet.yml`).
+
+> **On PolkaJam & compliance.** PolkaJam is used **black-box**: its binary is fetched
+> from the public [`paritytech/polkajam-releases`](https://github.com/paritytech/polkajam-releases)
+> at image-build time on *your* machine and is never committed or redistributed. The
+> lasair client image is a normal multi-arch pull. See
+> [`mixed/`](./mixed) and lasair's [`docs/MIXED_CLIENT_NETWORK.md`](https://github.com/abutlabs/lasair/blob/main/docs/MIXED_CLIENT_NETWORK.md).
+
 ### Options
 
 ```sh
@@ -335,6 +414,7 @@ the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
 | Doc | What's in it |
 |-----|--------------|
 | [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md) | The three order-hiding approaches, ELI5 — what each protects and its state today |
+| [`docs/DIFFERENTIAL_TESTNET.md`](docs/DIFFERENTIAL_TESTNET.md) | **Mixed-client rig:** the same blob on lasair + PolkaJam, byte-identical state, forgery rejected by both (green 2026-07-04) |
 | [`docs/LOCAL_BUILDER.md`](docs/LOCAL_BUILDER.md) | Run your own builder + UI — full sealed-order privacy from everyone, including us (verified two-builder mode) |
 | [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md) | **Open work:** how the decryption committee goes from today's simulation to n independent operators on a real JAM testnet |
 | [`docs/JAMKB.md`](docs/JAMKB.md) | JAMKB explained + how Jamswap is a live worked example of it |

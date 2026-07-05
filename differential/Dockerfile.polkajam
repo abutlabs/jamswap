@@ -1,0 +1,19 @@
+# PolkaJam differential lane — fetches the PUBLIC binary-only release at BUILD time.
+# Compliance (see lasair docs/DISCLOSURES.md, decision Aodh 2026-06-26): PolkaJam is used
+# as a BLACK BOX only; the binary is fetched from paritytech/polkajam-releases and is
+# never committed to this repo. Pin the release with --build-arg PJ_RELEASE=<tag>.
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      curl ca-certificates jq python3 python3-nacl && rm -rf /var/lib/apt/lists/*
+ARG PJ_RELEASE=nightly-2026-07-04
+RUN arch=$(uname -m | sed s/arm64/aarch64/) \
+ && url=$(curl -fsSL "https://api.github.com/repos/paritytech/polkajam-releases/releases/tags/${PJ_RELEASE}" \
+      | jq -r ".assets[] | select(.name | test(\"linux-${arch}\")) | .browser_download_url") \
+ && echo "fetching ${url}" \
+ && curl -fsSL "$url" | tar xz -C /usr/local/bin --strip-components=1 \
+ && /usr/local/bin/polkajam --version
+COPY differential/driver.py /driver/driver.py
+COPY service/jamswap-service.jam /work/jamswap-service.jam
+# start a local polkajam validator testnet, then run the differential driver against it
+# and the lasair lane (LASAIR_RPC) — exits 0 only if both clients agree byte-for-byte.
+CMD ["bash", "-c", "polkajam-testnet > /tmp/pj.log 2>&1 & sleep 25 && python3 /driver/driver.py"]
