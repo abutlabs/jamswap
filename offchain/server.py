@@ -91,10 +91,27 @@ _lock = threading.Lock()              # guards the pending books across request 
 _next_auction = [0.0]                 # wall-clock of the next auction tick (for the UI countdown)
 
 RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
-# Service id: an explicit SERVICE_ID wins; otherwise we DEPLOY the blob ($JAM) at
-# startup and use whatever id the node assigns. Deploying here (rather than trusting a
-# hardcoded id) is what keeps the UI pointed at THIS service — node service ids are
-# assigned sequentially, so a node reused across runs drifts 1729 -> 1730 -> ...
+# Standard-service path. When BUILDER_URL is set, work-items are submitted through the
+# JAMNP-S builder daemon (which wraps each payload in a GP work-package and submits it
+# to the node's guarantor over CE-133/QUIC — refine -> accumulate), instead of the node's
+# operator-RPC /item route. This is what makes jamswap a STANDARD JAM service: it reaches
+# the chain through the published network protocol, not a lasair-specific API. Service
+# DEPLOY and all storage READS still use the node RPC (deploy is an operator action; the
+# guarantor shares the node's in-process service registry, so state settles in one place).
+BUILDER_URL = os.environ.get("BUILDER_URL", "").rstrip("/")
+# Storage READS: when READER_URL is set, on-chain service storage is read through the
+# lasair-reader daemon (which turns each GET into a JAMNP-S CE-129 state request to the
+# node over QUIC), instead of the node's operator-RPC storage route. Together with
+# BUILDER_URL (submit -> CE-133), this makes jamswap reach the chain ENTIRELY through
+# the published QUIC/JAMNP protocol — no lasair-specific HTTP API. In this mode the
+# service is DEPLOYED by being seeded into genesis (Chain.seed_service), so its id is
+# fixed and SERVICE_ID is required (there is no runtime deploy over QUIC).
+READER_URL = os.environ.get("READER_URL", "").rstrip("/")
+QUIC_MODE = bool(READER_URL or BUILDER_URL)
+# Service id: an explicit SERVICE_ID wins; otherwise (node-RPC mode only) we DEPLOY the
+# blob ($JAM) at startup and use whatever id the node assigns. Deploying here (rather
+# than trusting a hardcoded id) is what keeps the UI pointed at THIS service — node
+# service ids are assigned sequentially, so a node reused across runs drifts 1729 -> ...
 SID = int(os.environ["SERVICE_ID"]) if os.environ.get("SERVICE_ID") else None
 PORT = int(os.environ.get("PORT", "8080"))
 WEB = os.path.join(os.path.dirname(__file__), "web")
@@ -133,9 +150,29 @@ def node(path, body=None):
     req = urllib.request.Request(RPC + path, data=data,
         headers={"content-type": "application/json"}, method="POST" if data else "GET")
     return json.loads(urllib.request.urlopen(req, timeout=30).read())
+def reader_get(path):
+    # local HTTP bridge to the lasair-reader daemon -> CE-129/QUIC to the node
+    req = urllib.request.Request(READER_URL + path, method="GET")
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
 def order_bytes(a, oid, side, p, q): return struct.pack("<IIBII", a, oid, side, p, q)
-def submit(payload): return node(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
+def _post_json(url, body):
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(url, data=data,
+        headers={"content-type": "application/json"}, method="POST")
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+def submit(payload):
+    # STANDARD path when BUILDER_URL is set: the builder daemon wraps this payload in a
+    # GP work-package and submits it to the guarantor over CE-133/QUIC. Otherwise the
+    # operator-RPC /item route (single-node harness / backward-compatible).
+    if BUILDER_URL:
+        return _post_json(BUILDER_URL + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
+    return node(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
 def storage(key):
+    # STANDARD path when READER_URL is set: read the key from the node's on-chain
+    # State_db over CE-129/QUIC via the reader bridge. Otherwise the operator-RPC route.
+    if READER_URL:
+        r = reader_get(f"/read?service={SID}&key={key.hex()}")
+        return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
     r = node(f"/v1/service/{SID}/storage/{key.hex()}")
     return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
 def bal(asset, acct):
@@ -186,6 +223,9 @@ def api_nonce(q):
 def footprint_octets():
     # the service's live state footprint in octets (validator RAM), from the node. 0 if
     # the node predates the footprint endpoint (rent then reads as 0 — fail-open, honest).
+    # QUIC mode has no CE for the account footprint yet -> 0 (same fail-open).
+    if QUIC_MODE:
+        return 0
     try:
         return int(node(f"/v1/service/{SID}/footprint").get("octets", 0))
     except Exception:
@@ -663,6 +703,9 @@ def api_footprint(q):
     # JAMKB is a READ-ONLY tracker for now: 1 JAMKB = 1 KB of footprint. This is a
     # measurement only — nothing is held, funded, or consumed. Whether to enforce a
     # reserve/consumption model in the node is a deferred protocol decision (docs/JAMKB.md).
+    if QUIC_MODE:
+        # no CE-129 account-footprint read yet — degrade gracefully
+        return {"available": False}
     try:
         fp = node(f"/v1/service/{SID}/footprint")
     except Exception:
@@ -931,9 +974,13 @@ class H(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "no route"}).encode())
 
 def wait_for_node():
+    # QUIC mode: wait for the reader bridge to have learned a chain head (so CE-129
+    # reads will succeed). Node-RPC mode: wait for the operator /v1/healthz.
     for _ in range(60):
         try:
-            if "ok" in str(node("/v1/healthz")): return
+            if READER_URL:
+                if reader_get("/healthz").get("head_hex"): return
+            elif "ok" in str(node("/v1/healthz")): return
         except Exception: pass
         time.sleep(1)
 
@@ -943,12 +990,20 @@ def deploy_jam():
     return int(r["service_id"])
 
 if __name__ == "__main__":
+    if SID is None and QUIC_MODE:
+        raise SystemExit("QUIC mode (BUILDER_URL/READER_URL set) requires SERVICE_ID: "
+                         "the service is seeded into genesis (Chain.seed_service), not "
+                         "deployed at runtime. Set SERVICE_ID to the seeded id.")
     if SID is None and os.environ.get("JAM"):
         wait_for_node()
         SID = deploy_jam()                      # use the id THIS deploy was assigned
         print(f"deployed jamswap-service -> service id {SID}")
     elif SID is None:
         SID = 1729                              # last-resort default (first deploy on a fresh node)
+    elif QUIC_MODE:
+        # explicit, genesis-seeded id — just wait for the chain to be reachable
+        print(f"jamswap-service pre-seeded in genesis at id {SID} (QUIC mode); waiting for head ...")
+        wait_for_node()
     print(f"jamswap off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
     load_trades(); load_execs()
     try: ensure_markets(); ensure_reserve(); print("listed default markets:", DEFAULT_MARKETS)

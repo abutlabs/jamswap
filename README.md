@@ -1,14 +1,12 @@
 # Jamswap
 
-> A real order-book exchange that runs **trustlessly on a blockchain** — the kind of
+> An order-book exchange that runs **trustlessly on a blockchain** — the kind of
 > matching engine that until now only centralized exchanges could afford to run.
 
 Jamswap is a **decentralized exchange (DEX)** built on [JAM](https://jam.web3.foundation).
 It lets you trade one token for another the way a stock exchange or a company like
 Coinbase does — using a live **order book** and a proper **matching engine** — but with
-no company in the middle. You keep custody of your own funds, and every trade is
-checked by the network: independent validators re-run the matching under JAM's
-audit protocol, and settlement is re-executed by every node.
+no company in the middle.
 
 **New here? Start with the three sections below** — what it is, how it works, and how
 it hides your orders. Then [try it in one command](#try-it-in-one-command).
@@ -73,21 +71,11 @@ JAM has no built-in wallets, so Jamswap gives your account its own cryptographic
 (held in your browser, exportable). Your orders are signed by that key; withdrawing or
 cancelling is verified against it. No exchange can move your money — only you can.
 
-> **The wallet work-around, in short:** JAM wallet standards haven't been finalized and
-> publicly released yet (JAM itself is pre-launch), so to prototype the service today the
-> browser generates a **temporary ed25519 account key** (WebCrypto, kept in localStorage,
-> export/importable). Registering binds it on-chain to a compact account handle, and every
-> action — orders, sealed commits, cancels, withdrawals — is a signed message the service
-> verifies against that registered key (replay-protected by per-account sequence floors).
-> This is a stop-gap, not the architecture: accounts in JAM live in *service* state, so
-> when JAM wallets arrive, "your account" simply becomes a key your wallet holds — nothing
-> in the service changes. Two practical notes shaped the prototype: signature checks run
-> in-PVM (there's no signature host call in GP 0.7.2, our conformance target), which makes
-> **ed25519** the affordable curve — Talisman's default **sr25519** accounts are expensive
-> to verify there, so today the extension is used for identity/connection while the
-> ed25519 key signs (the verifier already accepts `signRaw`'s `<Bytes>` framing, so a
-> wallet's ed25519 account can sign directly once wired). No extension is required to
-> trade the prototype.
+> **Note:** JAM wallet standards aren't finalized yet (JAM is pre-launch), so the browser
+> key is a stop-gap, not the architecture — when JAM wallets arrive, "your account" simply
+> becomes a key your wallet holds; nothing in the service changes. The full work-around
+> (why ed25519, how registration binds the key on-chain, replay protection):
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) → "Accounts & signing".
 
 Once matched, any part of your order that didn't fill can **rest in the order book** and
 fill later when a matching order arrives — a true continuous exchange, not a one-shot
@@ -142,142 +130,44 @@ when* — not whether it cleared honestly.
 
 ---
 
-## Throughput & costs (measured, per 6-second batch)
+## Throughput, costs & JAMKB — in brief
 
-All numbers measured in Lasair's PVM (`spikes/crypto-gas/`, `spikes/fba-zk/`,
-`spikes/vdec-gas/`), per work package on **one core** at the full-spec refine budget
-(5×10⁹ gas). The matching itself is never the limit (7,476 gas cleared 3 orders) —
-what binds is per-order *validation*:
+Two resources, two meters: **compute** is bought per-slot (refine gas), **state** is
+bought per-byte (**JAMKB** — JAM's proposed token pricing validator RAM at 1 JAMKB = 1 KB).
 
-The 880 is how many committee-share verifications fit in one batch's gas budget.
-``` 
-5,000,000,000 gas   (one core's refine budget per 6s work package, full spec)
-÷     ~5,680,000 gas (measured cost to verify ONE committee member's decryption share)
-≈           880      share-verifications per batch
-```
-Then the /n: each sealed order needs all n members' shares verified (that's what removes trust in the committee — every share is proven honest, per order). So one order consumes n of your 880 verification "slots":
-
-```
-- n = 1 → 880 orders/batch
-- n = 5 → 880 ÷ 5 = 176 orders/batch
-- n = 10 → 88 orders/batch
-```
-
-| Order type | Refine cost per order | Binding limit | ~Orders per batch | Scales with |
-|---|---|---|---|---|
-| **Public** (signed; ed25519 verified in `refine`) | 1.31 M gas | refine gas | **~3,800** | **cores** — more markets on more cores, linear |
-| **Sealed — commit–reveal** (rung 3) | 2.7k gas reveal check (+1.31 M if sig-verified) | refine gas | **~3,800** | cores |
-| **Sealed — encrypt-until-batch** (rung 2, default) | ~n × 5.6 M gas (n = committee size) | refine gas | **~880/n** (n=5 → ~176) | **cores × (880 ÷ n)** — inversely with committee size: every member proves per order, so a bigger committee buys trust/liveness at the direct cost of throughput; the scaling answer is rung 1 |
-| **Sealed — ZK dark-pool** (rung 1, spiked) | ~0 — one 60.1 M-gas proof settles the batch, flat | input size (W_B ≈ 13.15 MiB) | **~27,500–68,900** | cores × prover capacity; on-chain cost flat in order count |
-
-Two independent resources, two meters: **compute** is bought per-slot (coretime/gas —
-the table above), **state** is bought per-byte (JAMKB, below). A *filled* order leaves
-almost no lasting state; a *resting* public order occupies 17 B of validator RAM
-(~60 orders/KB), a resting sealed commitment 32 B (32/KB) — prepaid by rent and
-reclaimed at expiry, so a bigger book costs rent, not gas, and the two never compete.
-
----
-
-## A practical use for JAMKB (pricing JAM's memory)
-
-JAM's designer, Gavin Wood, has proposed a token called **JAMKB** to price a scarce
-resource: **the memory (RAM) that a service occupies across every validator**. The rule
-is simple — **1 JAMKB lets a service keep 1 KB of state**. It's a proposal; nobody has a
-running example of what it would actually feel like.
-
-**Jamswap is that worked example.** A live exchange is *made of* state that sits in
-validator RAM — the order book, the sealed commitments, the balances. And that state
-**visibly breathes**:
-
-- Placing an order **grows** the footprint (a sealed order writes a 32-byte commitment;
-  a resting order takes 17 bytes).
-- Every 6-second auction **clears** orders → the book and commitments shrink → the
-  footprint **falls again**.
-
-So Jamswap is a **live meter of JAM state being consumed and released** — and because
-JAMKB is *also* one of the tradable tokens on the exchange, **the cost of state gets a
-real market price**. The DEX trades the very token that would pay for the DEX's memory.
-It even surfaces a genuine tradeoff: **sealed (private) orders cost more state** than
-plain ones, so privacy has a measurable JAMKB price.
-
-**The exchange even pays its own rent.** A small, cost-based trading fee funds a treasury
-that must first cover the service's JAMKB state rent (`ceil(footprint ÷ 1 KB)` JAMKB);
-only the **surplus** is withdrawable profit, and only by the owner. So the DEX earns fees,
-buys the JAMKB that pays for its own RAM, and hands the rest to its operator — a complete
-self-funding loop. Details: [`docs/REVENUE.md`](docs/REVENUE.md).
-
-**How does a service actually get and keep its JAMKB?** That's the practical question the
-proposal leaves open, so we wrote it down as a standard. A service is **deployed with an
-endowment** (so it's solvent from block zero), then **self-funds through use** (fees refill
-the reserve — the steady-state target), with **beneficiary top-ups** as the runway/backstop
-for early life and growth. When a service holds more state than its JAMKB covers, the
-standard applies **backpressure** — it refuses to grow state further until usage frees it or
-the reserve is topped up. Jamswap implements all of this at the service level (endowment,
-self-funding fee, `Top up reserve` control, solvency backpressure, a live footprint→JAMKB
-meter). The full thesis and the day-to-day mechanics are in
-[`docs/JAMKB_STANDARD.md`](docs/JAMKB_STANDARD.md).
-
-We built the **measurement**, the worked example, and the service-level standard — but we
-deliberately **do not enforce** JAMKB in the node. Pricing JAM's state is a protocol-wide
-economic decision for the community, not something one client should impose. The full
-understanding and the proposal-for-discussion are in [`docs/JAMKB.md`](docs/JAMKB.md).
-
-### No order rests forever — orders pay rent to stay alive
-
-Because every resting order sits in validator RAM, it **costs JAMKB state rent for as long
-as it rests** — whether or not it ever trades. That makes an unbounded *good-till-cancelled*
-order a spam/griefing vector: flood the book with far-from-market orders that never fill,
-never expire, and bloat the footprint (and every auction's matching work) **forever**,
-driving JAMKB usage up indefinitely for free.
-
-So in Jamswap **there is no rest-forever order**. Every order — even "GTC" — is given an
-**automatic, rent-funded expiry**:
-
-- **Its fee funds its lifetime.** An order rests only as long as the minimum profit from its
-  fee can subsidize the state rent it accrues. When that budget is exhausted, the order
-  **auto-expires and its state is reclaimed** (the JAMKB it held is freed).
-- **Bigger footprint dies sooner.** A sealed order's on-chain commitment (32 B) costs more
-  RAM than a public order (17 B), so it burns its budget faster — **sealed orders expire
-  sooner than public ones**, a direct consequence of "sealed costs more JAMKB."
-- **A hard cap** bounds the maximum resting time no matter what (so nothing lingers), and a
-  **per-account open-order limit** stops any single actor from stuffing the book at once.
-- **You can only shorten, never extend.** Picking a TTL sets an *earlier* expiry; you can
-  never rest longer than the rent-funded lifetime.
-
-The result: the book is **self-pruning**. Spam and stale liquidity clear themselves, and
-JAMKB usage from resting orders is always bounded and reclaimed — the state you occupy is
-state you're paying for. The knobs (`ORDER_RENT_BUDGET_KBS`, `MAX_RESTING_SECS`,
-`MAX_OPEN_ORDERS`) are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md); the
-guards are tested in `offchain/tests/test_order_lifetime.py`. The live UI shows each order's
-countdown and the current policy under **Time in force**.
-
-### Big orders accumulate liquidity across batches
-
-A single 6-second auction rarely has enough crossing supply to fill a large order at once —
-a 250-lot buy against 10-lot asks fills 10 this round. So a big order **keeps working across
-successive auctions**, filling more each round until it's complete or expires, rather than
-grabbing 2% and giving up. Public (and market) orders do this by **resting in the book**;
-sealed orders do it privately — the builder **re-seals each round's unfilled remainder into a
-fresh hidden commitment and carries it forward**, so a large sealed order accumulates fills
-while staying hidden (never resting exposed). The **Execution report** shows it happening:
-`filled 10 @ 1.30 · 240 working`, then `filled 10 @ 1.20 · 230 working`, and so on. See
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) → "Partial fills"; tested in
-`offchain/tests/test_sealed_carry.py`.
+- **Throughput (measured in lasair's PVM):** a public-order batch is gas-bound at
+  **~3,800 orders per 6-second batch per core**; committee-sealed orders at **~880/n**
+  (n = committee size); the ZK dark-pool clears **~27,500–68,900** orders with one flat
+  proof. The full tables, what binds each privacy rung, and how big orders accumulate
+  fills across batches: [`docs/THROUGHPUT.md`](docs/THROUGHPUT.md).
+- **JAMKB:** Jamswap aims to be a grounded example in how JAMKB will be utilized in a 
+  JAM network. the order book visibly grows and shrinks the RAM footprint, every order 
+  pays state rent so nothing rests forever, JAMKB itself trades on the exchange, and fees 
+  fund the service's own rent — a self-funding loop: [`docs/JAMKB_IN_PRACTICE.md`](docs/JAMKB_IN_PRACTICE.md).
 
 ---
 
 ## Try it in one command
 
-You **don't need the JAM client's source code.** The node is pulled as a published,
-**multi-arch** image (`ghcr.io/abutlabs/lasair-node`). Clone this repo and:
+You **don't need the JAM client's source code.** Everything chain-side runs from one
+published, **multi-arch** image (`ghcr.io/abutlabs/lasair`). Clone this repo and:
 
 ```sh
 docker compose up            # trading UI at http://localhost:8080
 ```
 
-This starts a single dev node, deploys the Jamswap service onto it (the compiled
-`service/jamswap-service.jam` ships in the repo — nothing to build), and serves the
-**trading UI**. Open `http://localhost:8080` and you can:
+**All networking is spec JAMNP-S over QUIC** — in the single node here and in the
+networked testnet below. Orders reach the chain as work-packages over **CE-133**, state
+is read back over **CE-129**, and the service is **seeded into genesis** — there is no
+client-specific HTTP node RPC anywhere.
+
+| Compose file | Run it | Scenario |
+|---|---|---|
+| [`docker-compose.yml`](docker-compose.yml) | `docker compose up` | **Quickstart** — one lasair process authors all six dev validators' slots and hosts the service; a CE-133 builder and a CE-129 reader bridge the DEX to the chain. Trading UI at `:8080`; nothing to build. |
+| [`docker-compose.mixed.yml`](docker-compose.mixed.yml) | `docker compose -f docker-compose.mixed.yml up` | **Networked testnet — mixed-client** — six validators split across **two independent JAM clients** (lasair + PolkaJam) co-authoring one Safrole chain over JAMNP-S/QUIC, leadership rotating across clients. Consensus layer only for now — see [the section below](#run-it-on-a-mixed-client-chain--lasair-and-polkajam-one-command). |
+
+The quickstart serves the **trading UI** on top of that chain (the compiled
+`service/jamswap-service.jam` ships in the repo). Open `http://localhost:8080` and you can:
 
 1. **Create an account** — an ed25519 keypair your browser holds (exportable/importable).
 2. **Fund it** in the Faucet tab — assets are **USDC, DOT, JAMKB**, trading across three
@@ -290,26 +180,88 @@ Toggle the **mempool** view to see the data actually sitting in the service: ope
 are tagged 🌐 LIMIT / ⚡ MARKET (terms visible) or 🔒 SEALED (only a commitment on-chain,
 terms hidden until they clear).
 
-### Run it against real JAM consensus (6 validators)
+### Run it on a MIXED-client chain — lasair **and** PolkaJam, one command
 
-The single node above is a dev harness. To run against a real multi-validator network —
-six validators with block gossip, wall-clock leader rotation, 6-second slots, and full
-state-transition import (PolkaJam-style):
+The quickstart above runs one client. JAM's real promise is a network of
+**different** client implementations agreeing on one chain. This compose runs exactly
+that: six validators split across **two independent JAM clients** — [lasair](https://github.com/abutlabs/lasair)
+(our OCaml client) and **PolkaJam** (Parity's) — co-authoring **one** Safrole chain,
+with **leadership rotating across clients** and each client re-executing the other's
+blocks to a byte-identical state root.
 
 ```sh
-docker compose -f docker-compose.testnet.yml up    # 6 validators + the same UI at :8080
+docker compose -f docker-compose.mixed.yml up
 ```
 
-Now every order is gossiped and included in a block, the batch is cleared in `refine`
-byte-identically, and settlement — imported and re-executed by all six validators —
-lands a slot or two later at the real 6-second cadence.
+That's it — one line brings up a **multi-architecture** (Apple Silicon **and** Intel
+Linux) mixed-client JAM testnet:
+
+- `pj0 pj1 pj2` — PolkaJam validators (indices 0,1,2)
+- `lm3 lm4 lm5` — lasair validators (indices 3,4,5)
+- `spec-init` — mints the **shared genesis** both clients load (identical bytes → identical state root)
+- `watch` — prints the chain advancing
+
+Watch leadership rotate across clients, and confirm both agree on state:
+
+```sh
+# who authored each block — lasair's slots (val 3/4/5) interleave with PolkaJam's
+docker compose -f docker-compose.mixed.yml logs lm3 lm4 lm5 | grep authored
+
+# both clients on ONE chain: a lasair-authored block, re-derived by PolkaJam to the
+# SAME state root (RPC on the host):
+docker compose -f docker-compose.mixed.yml logs watch          # PolkaJam's view of the chain
+```
+
+Typical output — a single chain whose blocks alternate authorship:
+
+```
+lm5 | 🚀 authored slot 7918603 (val 5) height 1 …
+lm4 | 🚀 authored slot 7918606 (val 4) height 4 …
+lm3 | 🚀 authored slot 7918614 (val 3) height 12 …
+      (PolkaJam authored heights 2,3,5,6,7,9,10,11 in between)
+CROSS-CLIENT ROTATION — both clients co-author one chain; PolkaJam re-derives
+every lasair-authored block's state root: MATCH ✓
+```
+
+**How it works, and what it proves.** Both clients load one operator-defined genesis
+(`gen-spec`), whose validator set carries each node's real keys — PolkaJam's for
+indices 0–2, lasair's for 3–5. Each node authors **only its own** Safrole slots (the
+leader is resolved from on-chain state, so a node signs a slot *iff* it owns that
+slot's leader) and imports every other slot over the **spec JAMNP-S/QUIC** transport
+both clients speak. Because both are GP-v0.7.2-conformant, they agree on the fallback
+leader schedule and re-execute to identical state. It's the strongest possible
+interop result: two from-scratch client implementations running **one** blockchain.
+
+**Options.**
+
+```sh
+# use a specific published lasair client image, or your locally-built one:
+LASAIR_IMAGE=ghcr.io/abutlabs/lasair:0.1.0 docker compose -f docker-compose.mixed.yml up
+LASAIR_IMAGE=lasair:local                  docker compose -f docker-compose.mixed.yml up   # built from the lasair repo
+
+# pin the PolkaJam release fetched (black-box) at build time:
+PJ_RELEASE=nightly-2026-07-04 docker compose -f docker-compose.mixed.yml up
+
+# change the client split (which indices each client owns):
+LAYOUT=lasair,lasair,polkajam,polkajam,lasair,polkajam docker compose -f docker-compose.mixed.yml up
+```
+
+> **Scope.** This compose demonstrates the **consensus layer** — the mixed-client
+> chain jamswap runs *on*: both clients co-authoring one rotating chain and agreeing
+> on state. Deploying the jamswap **service** onto that mixed chain (so DEX orders are
+> guaranteed and settled across both clients) is the next milestone; today the full
+> DEX trading flow runs on the single-client quickstart above (`docker compose up`).
+
+> **On PolkaJam & compliance.** PolkaJam is used **black-box**: its binary is fetched
+> from the public [`paritytech/polkajam-releases`](https://github.com/paritytech/polkajam-releases)
+> at image-build time on *your* machine and is never committed or redistributed. The
+> lasair client image is a normal multi-arch pull. See
+> [`mixed/`](./mixed) and lasair's [`docs/MIXED_CLIENT_NETWORK.md`](https://github.com/abutlabs/lasair/blob/main/docs/MIXED_CLIENT_NETWORK.md).
 
 ### Options
 
 ```sh
-LASAIR_NODE_TAG=0.4.2 docker compose up         # pin a node version instead of :latest
-                                                # (GHCR tags strip the git-tag prefix: node-v0.4.2 -> 0.4.2)
-docker compose --profile demo run --rm demo     # run the narrated CLI walkthrough (see sim/demo.py)
+LASAIR_TAG=1.6.1 docker compose up              # pin the client version instead of :latest
 ```
 
 Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to
@@ -324,9 +276,10 @@ the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
 | **arm64 without an arm64 image yet** | emulated | add `--platform linux/amd64` (slower, but works) |
 
 > **Running your own JAM node?** Jamswap is a fully self-contained JAM **service** —
-> nothing is baked into the client. Point `LASAIR_RPC` at any conformant node with a
-> deploy/work-item RPC and run the same flow. Build the blob yourself with
-> `cd service && jam-pvm-build -m service`. lasair is just the node we ship it on.
+> nothing is baked into the client. Any conformant node that speaks JAMNP-S (CE-133
+> work-package submission, CE-129 storage reads) can host it and run the same flow.
+> Build the blob yourself with `cd service && jam-pvm-build -m service`. lasair is
+> just the node we ship it on.
 
 ---
 
@@ -335,8 +288,11 @@ the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
 | Doc | What's in it |
 |-----|--------------|
 | [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md) | The three order-hiding approaches, ELI5 — what each protects and its state today |
+| [`docs/DIFFERENTIAL_TESTNET.md`](docs/DIFFERENTIAL_TESTNET.md) | **Differential milestone** (historical): the same blob on lasair + PolkaJam, byte-identical state, forgery rejected by both — green 2026-07-04; its HTTP-RPC rig has since been retired |
 | [`docs/LOCAL_BUILDER.md`](docs/LOCAL_BUILDER.md) | Run your own builder + UI — full sealed-order privacy from everyone, including us (verified two-builder mode) |
 | [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md) | **Open work:** how the decryption committee goes from today's simulation to n independent operators on a real JAM testnet |
+| [`docs/THROUGHPUT.md`](docs/THROUGHPUT.md) | **Measured throughput & costs** per 6-second batch — what binds each order type, and how big orders accumulate fills across batches |
+| [`docs/JAMKB_IN_PRACTICE.md`](docs/JAMKB_IN_PRACTICE.md) | **JAMKB in practice** — Jamswap as the live worked example: the breathing footprint, rent-funded order expiry, the self-funding loop |
 | [`docs/JAMKB.md`](docs/JAMKB.md) | JAMKB explained + how Jamswap is a live worked example of it |
 | [`docs/JAMKB_STANDARD.md`](docs/JAMKB_STANDARD.md) | The standard — how a service receives, holds, tops up, and is held accountable for its JAMKB |
 | [`docs/REVENUE.md`](docs/REVENUE.md) | The self-funding treasury — fees pay the JAMKB rent, owner takes the profit |
