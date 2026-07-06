@@ -1,69 +1,90 @@
-# Run the Jamswap DEX end-to-end — one command, NO lasair source needed:
+# Jamswap DEX — the default. One command, NO lasair source needed:
 #
-#   docker compose up                   # -> single-node dev harness + trading UI :8080
-#   docker compose --profile demo run --rm demo   # the narrated CLI scenario
+#   docker compose up                  # -> trading UI on :8080
 #
-# For a REAL 6-validator JAM testnet (consensus, TCP gossip, leader rotation, 6s slots)
-# instead of this single-node harness, use the sibling compose file:
-#   docker compose -f docker-compose.testnet.yml up      # -> 6 validators + UI :8080
+# QUIC-only — the HTTP operator RPC (the old lasair-node package) is retired.
+# Everything reaches the chain through the PUBLISHED JAMNP-S/QUIC protocol (per JAM
+# docs), not a lasair-specific HTTP API:
 #
-# The JAM node is pulled as a published multi-arch image (ghcr.io/abutlabs/lasair-node),
-# so this runs natively on amd64 AND arm64 (Apple Silicon) — see README "Run it".
-# It deploys the Jamswap service onto that node and serves the off-chain builder +
-# trading UI: place orders, run an auction round, watch the uniform-price clearing +
-# balances. See docs/ARCHITECTURE.md.
+#   dex (server.py) --HTTP /submit--> builder (jamnp-builder) --CE-133/QUIC--> chain
+#   dex (server.py) --HTTP /read----> reader  (lasair-reader) --CE-129/QUIC--> chain
 #
-# Pin a version instead of :latest with  LASAIR_NODE_TAG=0.4.2 docker compose up
-# (GHCR image tags strip the git-tag prefix: lasair tag node-v0.4.2 -> image tag 0.4.2)
+# `chain` is ONE lasair process authoring all 6 dev-account validators' slots and
+# hosting the jamswap service on-chain: the service is SEEDED INTO GENESIS
+# (Chain.seed_service — the genesis-config "deploy"; there is no runtime deploy over
+# QUIC), so its id is fixed (SERVICE_ID below). Submitted work-items accumulate into
+# the gossiped State_db via the guarantee->assurance dance; the reader serves that
+# same State_db over CE-129. See lasair/bin/{lasair_client,jamnp_builder,lasair_reader}.ml.
+#
+# All three chain-side services are the ONE `lasair` image (bundles lasair +
+# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=1.6.1 docker compose ...
+
+x-lasair-genesis: &genesis
+  # first 4 bytes of blake2b256("lasair-mixed-network-genesis-v1\0") — the client's
+  # default freerun genesis header hash; the builder/reader ALPN must match the chain.
+  LASAIR_JAMNP_GENESIS_HEX: e83bdec4
 
 services:
-  lasair-node:                        # the JAM client, pulled (not built) — any arch
-    image: ghcr.io/abutlabs/lasair-node:${LASAIR_NODE_TAG:-latest}
-    ports:
-      - "19900:19900"
+  chain:                              # one lasair process = all 6 validators + service host
+    image: ghcr.io/abutlabs/lasair:${LASAIR_TAG:-latest}
+    entrypoint: ["/usr/local/bin/lasair"]
+    command:
+      - "--own"
+      - "0,1,2,3,4,5"
+      - "--service"
+      - "/work/jamswap-service.jam"
+      - "--service-id"
+      - "100"
+      - "--port"
+      - "40010"
+      - "--builder-port"
+      - "40011"
+      - "--interval"
+      - "0.4"
+    volumes:
+      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
     restart: unless-stopped
 
-  dex:                              # off-chain builder API + trading UI
-    # Built (not pulled) so the encrypt-until-batch committee sidecar (Rust) is AVAILABLE in
-    # the image. Default sealing is commit–reveal (rung 3 — the permissionless base state, no
-    # committee); set ENC_MODE=1 below to opt in to the rung-2 committee (simulated — see
-    # docs/COMMITTEE_DEPLOYMENT.md). The build compiles the committee binary once (arkworks)
-    # then runs the stdlib-only Python server.
+  builder:                            # CE-133 submit bridge (local HTTP /submit -> QUIC)
+    image: ghcr.io/abutlabs/lasair:${LASAIR_TAG:-latest}
+    entrypoint: ["/usr/local/bin/jamnp-builder"]
+    environment:
+      <<: *genesis
+      LASAIR_GUARANTOR_HOST: chain
+      LASAIR_GUARANTOR_PORT: "40011"
+      LASAIR_NODE_RPC: ""             # no code-hash lookup: guarantor resolves service by id
+      LASAIR_BUILDER_HTTP_PORT: "19980"
+    depends_on: [chain]
+    restart: unless-stopped
+
+  reader:                             # CE-129 storage-read bridge (local HTTP /read -> QUIC)
+    image: ghcr.io/abutlabs/lasair:${LASAIR_TAG:-latest}
+    entrypoint: ["/usr/local/bin/lasair-reader"]
+    environment:
+      <<: *genesis
+      LASAIR_NODE_HOST: chain
+      LASAIR_NODE_PORT: "40010"
+      LASAIR_READER_HTTP_PORT: "19990"
+    depends_on: [chain]
+    restart: unless-stopped
+
+  dex:                                # off-chain round builder + trading UI
     build:
       context: .
       dockerfile: offchain/Dockerfile
-    depends_on:
-      lasair-node:
-        condition: service_healthy
-    # The UI server DEPLOYS the service itself on startup and uses the id the node
-    # assigns — so it always points at the right service even if the node is reused
-    # across runs (sequential ids would otherwise drift 1729 -> 1730 -> ...).
+    depends_on: [builder, reader]
     environment:
-      LASAIR_RPC: http://lasair-node:19900
-      JAM: /work/jamswap-service.jam
+      SERVICE_ID: "100"               # the genesis-seeded id (matches chain --service-id)
+      BUILDER_URL: http://builder:19980
+      READER_URL: http://reader:19990
       PORT: "8080"
-      PYTHONUNBUFFERED: "1"           # so the "deployed -> service id N" line shows in `docker compose logs`
-      # ENC_MODE: "1"                 # uncomment to OPT IN to the rung-2 committee (encrypt-until-batch)
+      PYTHONUNBUFFERED: "1"
+      # ENC_MODE: "1"                 # opt in to the rung-2 encrypt-until-batch committee
     volumes:
-      - ./offchain:/app:ro            # live-edit the server; the committee binary lives in /usr/local/bin
+      - ./offchain:/app:ro
       - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
     working_dir: /app
     command: ["python3", "server.py"]
     ports:
       - "8080:8080"
     restart: unless-stopped
-
-  demo:                             # the narrated CLI scenario (opt-in profile)
-    image: python:3-slim
-    profiles: ["demo"]
-    depends_on:
-      lasair-node:
-        condition: service_healthy
-    environment:
-      LASAIR_RPC: http://lasair-node:19900
-      JAM: /work/jamswap-service.jam
-    volumes:
-      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
-      - ./sim/demo.py:/work/demo.py:ro
-    command: ["python3", "/work/demo.py"]
-    restart: "no"

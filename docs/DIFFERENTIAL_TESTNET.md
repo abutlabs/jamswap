@@ -5,9 +5,12 @@
 > trustless scenario, produced **byte-identical on-chain state** — and both PVMs rejected
 > the same forged order.
 
-```sh
-docker compose -f docker-compose.differential.yml up --build --abort-on-container-exit
-```
+> **Rig retired.** This document records a completed milestone. The
+> `docker-compose.differential.yml` rig it describes was removed when jamswap retired
+> the HTTP operator RPC (everything now runs over JAMNP-S/QUIC); the result above
+> stands as recorded, and the driver survives in [`differential/`](../differential/).
+> The successor cross-client story is the live mixed-client chain
+> (`docker-compose.mixed.yml` — see the README).
 
 ## What it proves (and why it beats static vectors)
 

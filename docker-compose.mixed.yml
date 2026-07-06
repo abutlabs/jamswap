@@ -28,14 +28,14 @@ x-polkajam: &polkajam
     context: .
     dockerfile: mixed/Dockerfile.polkajam
     args:
-      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.5.1}
+      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.1}
       PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-07-04}
   image: jamswap-pj-mixed:local
   restart: unless-stopped
   volumes: [ "shared:/shared" ]
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.5.1}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.1}
   restart: unless-stopped
   volumes: [ "shared:/shared" ]
 
@@ -68,7 +68,10 @@ services:
     environment: { ROLE: validator, INDEX: "2", SHARED: /shared }
     networks: { mixnet: { ipv4_address: 172.28.0.12 } }
 
-  # 3) lasair validators (indices 3,4,5) — each dials every other validator by IP
+  # 3) lasair validators (indices 3,4,5). Each reads /shared/peers_<OWN>.txt (written
+  #    by spec-init with every peer's runtime peer_id) and applies the JAMNP-S
+  #    Preferred Initiator: one side of each pair dials, so links never churn. The
+  #    PEERS env below is the id-less fallback used only if that file is missing.
   lm3:
     <<: *mesh
     depends_on: { spec-init: { condition: service_completed_successfully } }

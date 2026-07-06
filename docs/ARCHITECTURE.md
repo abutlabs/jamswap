@@ -241,6 +241,24 @@ The book is thus **self-pruning**: JAMKB usage from resting orders is always bou
 reclaimed. `/api/state.order_life` surfaces the policy and `/api/mine[].expires_in` the
 per-order countdown for the UI. Tested in `offchain/tests/test_order_lifetime.py`.
 
+## Accounts & signing — the wallet stop-gap
+
+JAM wallet standards haven't been finalized and publicly released yet (JAM itself is
+pre-launch), so to prototype the service today the browser generates a **temporary
+ed25519 account key** (WebCrypto, kept in localStorage, export/importable). Registering
+binds it on-chain to a compact account handle, and every action — orders, sealed
+commits, cancels, withdrawals — is a signed message the service verifies against that
+registered key (replay-protected by per-account sequence floors). This is a stop-gap,
+not the architecture: accounts in JAM live in *service* state, so when JAM wallets
+arrive, "your account" simply becomes a key your wallet holds — nothing in the service
+changes. Two practical notes shaped the prototype: signature checks run in-PVM (there's
+no signature host call in GP 0.7.2, our conformance target), which makes **ed25519**
+the affordable curve — Talisman's default **sr25519** accounts are expensive to verify
+there, so today the extension is used for identity/connection while the ed25519 key
+signs (the verifier already accepts `signRaw`'s `<Bytes>` framing, so a wallet's
+ed25519 account can sign directly once wired). No extension is required to trade the
+prototype.
+
 ## MEV-resistance
 
 Two layers, both proven e2e:

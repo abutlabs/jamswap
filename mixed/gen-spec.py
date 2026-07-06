@@ -126,6 +126,15 @@ topo = {"nodes": nodes, "bootnode": "%s@%s:%d" % (boot["peer_id"], boot["host"],
         "base_port": BASE, "rpc_base": RPCBASE}
 json.dump(topo, open(os.path.join(SHARED, "nodes.json"), "w"), indent=2)
 
+# Per-node peer list WITH each peer's peer_id (ip:port@peer_id). lasair reads its own
+# file and applies the JAMNP-S Preferred Initiator: exactly one side of every pair
+# dials, so a lasair<->PolkaJam link never churns. PolkaJam peer_ids are random per
+# run, hence resolved here rather than hardcoded in the compose file.
+for n in nodes:
+    peers = ["%s:%d@%s" % (m["host"], m["port"], m["peer_id"])
+             for m in nodes if m["index"] != n["index"]]
+    open(os.path.join(SHARED, "peers_%d.txt" % n["index"]), "w").write(",".join(peers))
+
 spec = json.load(open(spec_path))
 assert "genesis_header" in spec and "genesis_state" in spec, list(spec.keys())
 open(os.path.join(SHARED, "ready"), "w").write("ok")
