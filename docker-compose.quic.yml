@@ -1,0 +1,89 @@
+# Jamswap DEX — QUIC-ONLY, no HTTP operator RPC (the retired lasair-node package).
+#
+#   docker compose -f docker-compose.quic.yml up     # -> trading UI on :8080
+#
+# Everything reaches the chain through the PUBLISHED JAMNP-S/QUIC protocol (per JAM
+# docs), not a lasair-specific HTTP API:
+#
+#   dex (server.py) --HTTP /submit--> builder (jamnp-builder) --CE-133/QUIC--> chain
+#   dex (server.py) --HTTP /read----> reader  (lasair-reader) --CE-129/QUIC--> chain
+#
+# `chain` is ONE lasair process authoring all 6 dev-account validators' slots and
+# hosting the jamswap service on-chain: the service is SEEDED INTO GENESIS
+# (Chain.seed_service — the genesis-config "deploy"; there is no runtime deploy over
+# QUIC), so its id is fixed (SERVICE_ID below). Submitted work-items accumulate into
+# the gossiped State_db via the guarantee->assurance dance; the reader serves that
+# same State_db over CE-129. See lasair/bin/{lasair_client,jamnp_builder,lasair_reader}.ml.
+#
+# All three chain-side services are the ONE `lasair` image (bundles lasair +
+# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=1.6.0 docker compose ...
+
+x-lasair-genesis: &genesis
+  # first 4 bytes of blake2b256("lasair-mixed-network-genesis-v1\0") — the client's
+  # default freerun genesis header hash; the builder/reader ALPN must match the chain.
+  LASAIR_JAMNP_GENESIS_HEX: e83bdec4
+
+services:
+  chain:                              # one lasair process = all 6 validators + service host
+    image: ghcr.io/abutlabs/lasair:${LASAIR_TAG:-latest}
+    entrypoint: ["/usr/local/bin/lasair"]
+    command:
+      - "--own"
+      - "0,1,2,3,4,5"
+      - "--service"
+      - "/work/jamswap-service.jam"
+      - "--service-id"
+      - "100"
+      - "--port"
+      - "40010"
+      - "--builder-port"
+      - "40011"
+      - "--interval"
+      - "0.4"
+    volumes:
+      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
+    restart: unless-stopped
+
+  builder:                            # CE-133 submit bridge (local HTTP /submit -> QUIC)
+    image: ghcr.io/abutlabs/lasair:${LASAIR_TAG:-latest}
+    entrypoint: ["/usr/local/bin/jamnp-builder"]
+    environment:
+      <<: *genesis
+      LASAIR_GUARANTOR_HOST: chain
+      LASAIR_GUARANTOR_PORT: "40011"
+      LASAIR_NODE_RPC: ""             # no code-hash lookup: guarantor resolves service by id
+      LASAIR_BUILDER_HTTP_PORT: "19980"
+    depends_on: [chain]
+    restart: unless-stopped
+
+  reader:                             # CE-129 storage-read bridge (local HTTP /read -> QUIC)
+    image: ghcr.io/abutlabs/lasair:${LASAIR_TAG:-latest}
+    entrypoint: ["/usr/local/bin/lasair-reader"]
+    environment:
+      <<: *genesis
+      LASAIR_NODE_HOST: chain
+      LASAIR_NODE_PORT: "40010"
+      LASAIR_READER_HTTP_PORT: "19990"
+    depends_on: [chain]
+    restart: unless-stopped
+
+  dex:                                # off-chain round builder + trading UI
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
+    depends_on: [builder, reader]
+    environment:
+      SERVICE_ID: "100"               # the genesis-seeded id (matches chain --service-id)
+      BUILDER_URL: http://builder:19980
+      READER_URL: http://reader:19990
+      PORT: "8080"
+      PYTHONUNBUFFERED: "1"
+      # ENC_MODE: "1"                 # opt in to the rung-2 encrypt-until-batch committee
+    volumes:
+      - ./offchain:/app:ro
+      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
+    working_dir: /app
+    command: ["python3", "server.py"]
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
