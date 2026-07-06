@@ -35,6 +35,9 @@
     <div style="width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 8px rgba(74,222,128,.9);animation:pulse 2s infinite;flex-shrink:0;"></div>
     <span>lasair · localhost</span>
   </div>
+  <select id="who" title="Trade as a standard JAM dev account (Alice, Bob, …) — swap identities in one browser to watch open orders from every side" style="margin-right:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#f0f0ff;font-size:13px;font-weight:600;padding:8px 12px;border-radius:12px;outline:none;cursor:pointer;font-family:inherit;flex-shrink:0;">
+    <option value="browser">Browser key</option>
+  </select>
   <button id="connect"><span id="wallet-label">Create account</span></button>
 </nav>
 
@@ -464,6 +467,8 @@ async function registerAccount(){
 // (a `jam:` WalletConnect namespace, or wallets signing ed25519 for services) can slot in later.
 async function connectAccount(){
   try {
+    localStorage.setItem("jamswap_identity", "browser");
+    const who = $("who"); if (who) who.value = "browser";
     const kp = await loadOrCreateKey("default");
     const address = "jam:" + hexRaw(kp.pub).slice(0, 16);
     state.wallet = { key: kp.key, pub: kp.pub, selected: { address, name: "JAM account" } };
@@ -471,6 +476,57 @@ async function connectAccount(){
     else toast("Registration pending — click your account again in a moment.", "err");
     renderWallet(); refreshBals(); refreshMine(); refreshExecs();
   } catch(e){ toast("Account setup failed: "+(e && e.message ? e.message : e)+" — this browser needs WebCrypto Ed25519 (Chrome 137+/Safari 17+).", "err"); }
+}
+
+// ═══════════════════ standard JAM dev accounts ═══════════════════
+// The six canonical dev accounts (Alice..Fergie; docs.jamcha.in/basics/dev-accounts) —
+// the SAME validators lasair and PolkaJam run. Their ed25519 keys are public dev keys,
+// so we can hold them in-browser and let you trade AS any of them, then swap in one
+// browser to watch the same order book from every counterparty's side. `seed` is the
+// 32-byte RFC-8032 ed25519 secret; `pub` is its public key (verified against the docs).
+const DEV_ACCOUNTS = [
+  {name:"Alice",  seed:"996542becdf1e78278dc795679c825faca2e9ed2bf101bf3c4a236d3ed79cf59", pub:"4418fb8c85bb3985394a8c2756d3643457ce614546202a2f50b093d762499ace"},
+  {name:"Bob",    seed:"b81e308145d97464d2bc92d35d227a9e62241a16451af6da5053e309be4f91d7", pub:"ad93247bd01307550ec7acd757ce6fb805fcf73db364063265b30a949e90d933"},
+  {name:"Carol",  seed:"0093c8c10a88ebbc99b35b72897a26d259313ee9bad97436a437d2e43aaafa0f", pub:"cab2b9ff25c2410fbe9b8a717abb298c716a03983c98ceb4def2087500b8e341"},
+  {name:"David",  seed:"69b3a7031787e12bfbdcac1b7a737b3e5a9f9450c37e215f6d3b57730e21001a", pub:"f30aa5444688b3cab47697b37d5cac5707bb3289e986b19b17db437206931a8d"},
+  {name:"Eve",    seed:"b4de9ebf8db5428930baa5a98d26679ab2a03eae7c791d582e6b75b7f018d0d4", pub:"8b8c5d436f92ecf605421e873a99ec528761eb52a88a2f9a057b3b3003e6f32a"},
+  {name:"Fergie", seed:"4a6482f8f479e3ba2b845f8cef284f4b3208ba3241ed82caa1b5ce9fc6281730", pub:"ab0084d01534b31c1dd87c81645fd762482a90027754041ca1b56133d0466c06"},
+];
+// Import a raw 32-byte ed25519 seed into WebCrypto by wrapping it in the standard
+// PKCS#8 DER prefix for an Ed25519 private key (302e020100300506032b657004220420 ++ seed).
+async function loadDevKey(seedHex){
+  const pkcs8 = fromHex("302e020100300506032b657004220420" + seedHex);
+  return crypto.subtle.importKey("pkcs8", pkcs8, {name:"Ed25519"}, true, ["sign"]);
+}
+// Populate the identity dropdown and restore the last-selected identity.
+function initIdentity(){
+  const sel = $("who");
+  DEV_ACCOUNTS.forEach((a,i) => {
+    const o = document.createElement("option"); o.value = String(i); o.textContent = a.name; sel.appendChild(o);
+  });
+  const saved = localStorage.getItem("jamswap_identity") || "browser";
+  sel.value = saved;
+  sel.onchange = () => switchIdentity(sel.value);
+  if (saved !== "browser") switchIdentity(saved);
+}
+// Swap the active signer. "browser" = the random per-browser key (connectAccount);
+// otherwise become dev account [idx]: load its key, register, and refresh so this
+// account's balances + OPEN ORDERS show. The 6 s poll then keeps them live.
+async function switchIdentity(sel){
+  localStorage.setItem("jamswap_identity", sel);
+  $("who").value = sel;
+  if (sel === "browser"){ return connectAccount(); }
+  const acct = DEV_ACCOUNTS[+sel];
+  if (!acct) return connectAccount();
+  try {
+    const key = await loadDevKey(acct.seed);
+    const pub = fromHex(acct.pub);
+    state.wallet = { key, pub, selected:{ address:"jam:"+acct.pub.slice(0,16), name:acct.name } };
+    state.handle = null; renderWallet();
+    if (await registerAccount()) toast("Trading as "+acct.name+".", "ok");
+    else toast(acct.name+" registration pending — reselect in a moment.", "err");
+    renderWallet(); refreshBals(); refreshMine(); refreshExecs();
+  } catch(e){ toast("Switch to "+acct.name+" failed: "+(e && e.message ? e.message : e), "err"); }
 }
 // Export the account keypair (so it survives a browser wipe / moves to another device).
 function exportAccount(){
@@ -1026,6 +1082,7 @@ $("price-in").oninput = renderSummaryFee;
 renderTabs(); renderWallet(); renderMarketTabs(); renderMarketDeps();
 renderSide(); renderType(); renderSeal(); renderBook(); renderMempool(); renderTrades();
 renderBals(); renderMine(); renderFp(); renderFaucetTabs();
+initIdentity();   // populate the dev-account dropdown + restore the last-selected identity
 
 // live feeds
 subscribe(); refresh(); refreshFp(); refreshTrades(); refreshExecs();
