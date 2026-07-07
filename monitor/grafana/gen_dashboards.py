@@ -166,14 +166,69 @@ network = dashboard("jam-mixed", "JAM mixed network", [
     # ---- consensus view: GP validator statistics (pi), decoded from on-chain
     # state via pj's RPC. The SAME numbers from any node, for BOTH clients'
     # validators — what the chain credited each validator with, not what a
-    # client says about itself. The apples-to-apples row.
-    bargauge("π blocks credited by consensus (current epoch)",
-             [{"expr": "jam_pi_blocks{epoch=\"current\"}", "legendFormat": "{{node}}"}],
-             0, 28, 12, overrides=node_overrides),
-    bargauge("π tickets on-chain (current epoch) — lasair at 0 = its ticket "
-             "extrinsics never land",
-             [{"expr": "jam_pi_tickets{epoch=\"current\"}", "legendFormat": "{{node}}"}],
-             12, 28, 12, overrides=node_overrides),
+    # client says about itself. The apples-to-apples row. Cumulative = each
+    # epoch's finals folded into a counter by the exporter (pi itself resets
+    # per epoch); counts start at the exporter's start.
+    bargauge("π blocks credited by consensus — cumulative",
+             [{"expr": "sum by (node) (jam_pi_blocks_cumulative_total)",
+               "legendFormat": "{{node}}"}],
+             0, 28, 8, overrides=node_overrides),
+    bargauge("π guarantees (acted as guarantor) — cumulative",
+             [{"expr": "sum by (node) (jam_pi_guarantees_cumulative_total)",
+               "legendFormat": "{{node}}"}],
+             8, 28, 8, overrides=node_overrides),
+    bargauge("π tickets landed on-chain — cumulative",
+             [{"expr": "sum by (node) (jam_pi_tickets_cumulative_total)",
+               "legendFormat": "{{node}}"}],
+             16, 28, 8, overrides=node_overrides),
+])
+
+# ═══════════════ CLIENT AVERAGES VIEW ═══════════════
+# Every metric averaged across each client's nodes — the per-CLIENT health
+# comparison, built to stay meaningful as more client implementations join.
+client_overrides = [override(c, col) for c, col in CLIENT_COLOR.items()]
+
+clients_view = dashboard("jam-clients", "JAM clients (averages)", [
+    stat("lasair — blocks/min (avg per validator)",
+         "avg(rate(lasair_blocks_authored_total[5m])) * 60", 0, 6,
+         color="#c98500"),
+    stat("polkajam — blocks/min (avg per validator)",
+         "avg(rate(jam_authored_total{client=\"polkajam\"}[5m])) * 60", 6, 6,
+         color="#3987e5"),
+    stat("lasair — π blocks cumulative (avg)",
+         "avg(jam_pi_blocks_cumulative_total{client=\"lasair\"})", 12, 6,
+         color="#c98500"),
+    stat("polkajam — π blocks cumulative (avg)",
+         "avg(jam_pi_blocks_cumulative_total{client=\"polkajam\"})", 18, 6,
+         color="#3987e5"),
+
+    ts("Authoring rate — avg per validator (blocks/min)",
+       [{"expr": "avg(rate(lasair_blocks_authored_total[2m])) * 60", "legendFormat": "lasair"},
+        {"expr": "avg(rate(jam_authored_total{client=\"polkajam\"}[2m])) * 60",
+         "legendFormat": "polkajam"}],
+       0, 4, 12, overrides=client_overrides),
+    ts("π blocks credited — cumulative, avg per validator",
+       [{"expr": "avg by (client) (jam_pi_blocks_cumulative_total)",
+         "legendFormat": "{{client}}"}],
+       12, 4, 12, overrides=client_overrides),
+
+    ts("π guarantees — cumulative, avg per validator",
+       [{"expr": "avg by (client) (jam_pi_guarantees_cumulative_total)",
+         "legendFormat": "{{client}}"}],
+       0, 12, 12, overrides=client_overrides),
+    ts("π tickets on-chain — cumulative, avg per validator",
+       [{"expr": "avg by (client) (jam_pi_tickets_cumulative_total)",
+         "legendFormat": "{{client}}"}],
+       12, 12, 12, overrides=client_overrides),
+
+    ts("Peers connected — avg per node",
+       [{"expr": "avg(lasair_peers_connected)", "legendFormat": "lasair"},
+        {"expr": "avg(jam_pj_peers)", "legendFormat": "polkajam"}],
+       0, 20, 12, overrides=client_overrides),
+    ts("Blocks imported/min — avg per node (native-instrumented clients only)",
+       [{"expr": "avg(rate(lasair_blocks_imported_total[2m])) * 60",
+         "legendFormat": "lasair"}],
+       12, 20, 12, overrides=client_overrides),
 ])
 
 # ═══════════════ NODE VIEW ═══════════════
@@ -239,7 +294,8 @@ node_view = dashboard("jam-node", "JAM node (lasair)", [
                   override("dropped", ROLE["rejected"])]),
 ], templating=node_var)
 
-for name, d in (("jam-mixed.json", network), ("jam-node.json", node_view)):
+for name, d in (("jam-mixed.json", network), ("jam-node.json", node_view),
+                ("jam-clients.json", clients_view)):
     path = os.path.join(OUT, name)
     json.dump(d, open(path, "w"), indent=2)
     print("wrote", path, "panels:", len(d["panels"]))

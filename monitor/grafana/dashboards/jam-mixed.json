@@ -1342,12 +1342,12 @@
     },
     {
       "type": "bargauge",
-      "title": "\u03c0 blocks credited by consensus (current epoch)",
+      "title": "\u03c0 blocks credited by consensus \u2014 cumulative",
       "id": 17,
       "gridPos": {
         "x": 0,
         "y": 28,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "datasource": {
@@ -1356,7 +1356,7 @@
       },
       "targets": [
         {
-          "expr": "jam_pi_blocks{epoch=\"current\"}",
+          "expr": "sum by (node) (jam_pi_blocks_cumulative_total)",
           "legendFormat": "{{node}}",
           "refId": "A",
           "instant": true
@@ -1478,12 +1478,12 @@
     },
     {
       "type": "bargauge",
-      "title": "\u03c0 tickets on-chain (current epoch) \u2014 lasair at 0 = its ticket extrinsics never land",
+      "title": "\u03c0 guarantees (acted as guarantor) \u2014 cumulative",
       "id": 18,
       "gridPos": {
-        "x": 12,
+        "x": 8,
         "y": 28,
-        "w": 12,
+        "w": 8,
         "h": 8
       },
       "datasource": {
@@ -1492,7 +1492,143 @@
       },
       "targets": [
         {
-          "expr": "jam_pi_tickets{epoch=\"current\"}",
+          "expr": "sum by (node) (jam_pi_guarantees_cumulative_total)",
+          "legendFormat": "{{node}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pj0"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pj1"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pj2"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm3"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm4"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm5"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "\u03c0 tickets landed on-chain \u2014 cumulative",
+      "id": 19,
+      "gridPos": {
+        "x": 16,
+        "y": 28,
+        "w": 8,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "sum by (node) (jam_pi_tickets_cumulative_total)",
           "legendFormat": "{{node}}",
           "refId": "A",
           "instant": true

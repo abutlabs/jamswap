@@ -163,6 +163,12 @@ VALIDATOR_NODES = os.environ.get(
     "VALIDATOR_NODES", "pj0,pj1,pj2,lm3,lm4,lm5").split(",")
 PI_FIELDS = ["blocks", "tickets", "preimages", "preimages_size",
              "guarantees", "assurances"]
+EPOCH_LEN = int(os.environ.get("EPOCH_LENGTH", "12"))
+_pi_epoch = [None]  # last epoch whose finals were folded into the cumulatives
+
+
+def client_of(node):
+    return "lasair" if node.startswith("lm") else "polkajam"
 
 
 def poll_rpc():
@@ -191,8 +197,24 @@ def poll_rpc():
                     rec = struct.unpack_from("<6I", raw, half + i * 24)
                     for f, val in zip(PI_FIELDS, rec):
                         setg("jam_pi_" + f,
-                             {"validator": str(i), "node": node, "epoch": epoch},
-                             val)
+                             {"validator": str(i), "node": node,
+                              "client": client_of(node), "epoch": epoch}, val)
+            # CUMULATIVE consensus credit: pi resets every epoch on-chain, so
+            # fold each epoch's FINAL numbers (the "last" half, once, when the
+            # epoch increments) into proper counters. Restarting the exporter
+            # restarts the count — increase()/rate() handle that; epochs that
+            # pass while the exporter is down are not recoverable from state.
+            head_epoch = int(best["slot"]) // EPOCH_LEN
+            if _pi_epoch[0] is None:
+                _pi_epoch[0] = head_epoch
+            elif head_epoch > _pi_epoch[0]:
+                for i, node in enumerate(VALIDATOR_NODES):
+                    rec = struct.unpack_from("<6I", raw, v * 24 + i * 24)
+                    for f, val in zip(PI_FIELDS, rec):
+                        bump("jam_pi_%s_cumulative_total" % f,
+                             {"validator": str(i), "node": node,
+                              "client": client_of(node)}, val)
+                _pi_epoch[0] = head_epoch
     except Exception:
         pass
 
@@ -235,6 +257,10 @@ if __name__ == "__main__":
     for svc, client in NODES.items():
         bump("jam_authored_total", {"node": svc, "client": client}, 0)
         bump("jam_pj_imported_total", {"node": svc}, 0)
+    for i, node in enumerate(VALIDATOR_NODES):
+        for f in PI_FIELDS:
+            bump("jam_pi_%s_cumulative_total" % f,
+                 {"validator": str(i), "node": node, "client": client_of(node)}, 0)
     print("jam mixed-net exporter on :%d (project=%s, rpc=%s)"
           % (PORT, COMPOSE_PROJECT, PJ_RPC), flush=True)
     http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
