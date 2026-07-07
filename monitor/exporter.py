@@ -225,6 +225,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    # Zero-seed the fault counters so a HEALTHY chain graphs flat zero lines
+    # instead of "No data" (a series that only appears once something breaks
+    # makes the faults panel unreadable as a baseline).
+    for svc, client in NODES.items():
+        if client == "lasair":
+            for m in ("jam_accept_errors_total", "jam_ring_failures_total",
+                      "jam_selfimport_dropped_total"):
+                bump(m, {"node": svc}, 0)
+            bump("jam_import_rejected_total", {"node": svc, "reason": "duplicate_package"}, 0)
     print("jam mixed-net exporter on :%d (project=%s, rpc=%s)"
           % (PORT, COMPOSE_PROJECT, PJ_RPC), flush=True)
     http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
