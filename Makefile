@@ -19,7 +19,9 @@ LASAIR_SRC   ?= ../lasair
 LOCAL_IMAGE  ?= lasair:local
 MIXED        = -f docker-compose.mixed.yml
 
-.PHONY: up down logs mixed mixed-down build-local local mixed-local verify verify-mixed
+MONITOR      = -f docker-compose.mixed.yml -f docker-compose.monitor.yml
+
+.PHONY: up down logs mixed mixed-down build-local local mixed-local verify verify-mixed monitor monitor-down
 
 up:
 	docker compose up -d
@@ -49,6 +51,14 @@ local: build-local
 
 mixed-local: build-local
 	LASAIR_IMAGE=$(LOCAL_IMAGE) docker compose $(MIXED) up -d --build --force-recreate
+
+# Prometheus + Grafana + exporter on TOP of the mixed net (starts it if down).
+# Grafana: http://localhost:3000 (no login) — dashboard "JAM mixed network".
+monitor:
+	docker compose $(MONITOR) up -d --build
+
+monitor-down:
+	docker compose $(MONITOR) down -v --remove-orphans
 
 # E2E smoke test against the RUNNING default stack: register -> handle, duplicate
 # work-packages survived, faucet deposit, signed withdraw. Fresh account per run.

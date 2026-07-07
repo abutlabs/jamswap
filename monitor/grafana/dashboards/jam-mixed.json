@@ -1,0 +1,141 @@
+{
+  "uid": "jam-mixed",
+  "title": "JAM mixed network",
+  "timezone": "browser",
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "editable": true,
+  "panels": [
+    {
+      "type": "stat", "title": "Head slot", "id": 1,
+      "gridPos": { "x": 0, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "jam_head_slot", "instant": true, "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "text" }, "decimals": 0 }, "overrides": [] },
+      "options": { "graphMode": "none", "colorMode": "value", "textMode": "value" }
+    },
+    {
+      "type": "stat", "title": "Chain height (lasair view)", "id": 2,
+      "gridPos": { "x": 5, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "max(jam_node_height)", "instant": true, "refId": "A" }],
+      "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "text" }, "decimals": 0 }, "overrides": [] },
+      "options": { "graphMode": "area", "colorMode": "value", "textMode": "value" }
+    },
+    {
+      "type": "stat", "title": "Finality lag (slots)", "id": 3,
+      "gridPos": { "x": 10, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "jam_head_slot - max(jam_finalized_slot)", "instant": true, "refId": "A" }],
+      "fieldConfig": { "defaults": { "decimals": 0, "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "green", "value": null }, { "color": "orange", "value": 6 }, { "color": "red", "value": 24 } ] } }, "overrides": [] },
+      "options": { "graphMode": "none", "colorMode": "value", "textMode": "value" }
+    },
+    {
+      "type": "stat", "title": "Validator peers (pj view, want 5)", "id": 4,
+      "gridPos": { "x": 15, "y": 0, "w": 5, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "min(jam_pj_vals)", "instant": true, "refId": "A" }],
+      "fieldConfig": { "defaults": { "decimals": 0, "color": { "mode": "thresholds" },
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "red", "value": null }, { "color": "green", "value": 5 } ] } }, "overrides": [] },
+      "options": { "graphMode": "none", "colorMode": "value", "textMode": "value" }
+    },
+    {
+      "type": "stat", "title": "RPC up", "id": 5,
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "jam_rpc_up", "instant": true, "refId": "A" }],
+      "fieldConfig": { "defaults": { "decimals": 0, "color": { "mode": "thresholds" },
+        "mappings": [ { "type": "value", "options": { "0": { "text": "DOWN" }, "1": { "text": "UP" } } } ],
+        "thresholds": { "mode": "absolute", "steps": [
+          { "color": "red", "value": null }, { "color": "green", "value": 1 } ] } }, "overrides": [] },
+      "options": { "graphMode": "none", "colorMode": "value", "textMode": "value" }
+    },
+
+    {
+      "type": "timeseries", "title": "lasair node height", "id": 10,
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "jam_node_height", "legendFormat": "{{node}}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "pointSize": 4, "showPoints": "never" },
+          "color": { "mode": "palette-classic" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "lm3" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } } ] },
+          { "matcher": { "id": "byName", "options": "lm4" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } } ] },
+          { "matcher": { "id": "byName", "options": "lm5" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } } ] }
+        ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+                   "tooltip": { "mode": "multi", "sort": "none" } }
+    },
+    {
+      "type": "timeseries", "title": "Authoring rate by client (blocks/s, 2m window)", "id": 11,
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (client) (rate(jam_authored_total[2m]))", "legendFormat": "{{client}}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 12, "pointSize": 4, "showPoints": "never" },
+          "min": 0, "color": { "mode": "palette-classic" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "polkajam" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } } ] },
+          { "matcher": { "id": "byName", "options": "lasair" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } } ] }
+        ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+                   "tooltip": { "mode": "multi", "sort": "none" } }
+    },
+
+    {
+      "type": "bargauge", "title": "Blocks authored per validator (since exporter start)", "id": 20,
+      "gridPos": { "x": 0, "y": 12, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "sum by (node) (jam_authored_total)", "legendFormat": "{{node}}", "instant": true, "refId": "A" }],
+      "fieldConfig": { "defaults": { "decimals": 0, "min": 0, "color": { "mode": "fixed", "fixedColor": "text" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "pj0" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#3987e5" } } ] },
+          { "matcher": { "id": "byName", "options": "pj1" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#199e70" } } ] },
+          { "matcher": { "id": "byName", "options": "pj2" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#c98500" } } ] },
+          { "matcher": { "id": "byName", "options": "lm3" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } } ] },
+          { "matcher": { "id": "byName", "options": "lm4" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } } ] },
+          { "matcher": { "id": "byName", "options": "lm5" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } } ] }
+        ] },
+      "options": { "orientation": "horizontal", "displayMode": "basic", "showUnfilled": true,
+                   "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "timeseries", "title": "Safrole ticket pool (lasair)", "id": 21,
+      "gridPos": { "x": 8, "y": 12, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [{ "expr": "jam_ticket_pool", "legendFormat": "{{node}}", "refId": "A" }],
+      "fieldConfig": { "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "pointSize": 4, "showPoints": "never" },
+          "min": 0, "color": { "mode": "palette-classic" } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "lm3" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#008300" } } ] },
+          { "matcher": { "id": "byName", "options": "lm4" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#9085e9" } } ] },
+          { "matcher": { "id": "byName", "options": "lm5" }, "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "#e66767" } } ] }
+        ] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+                   "tooltip": { "mode": "multi", "sort": "none" } }
+    },
+    {
+      "type": "timeseries", "title": "Faults (5m increase)", "id": 22,
+      "gridPos": { "x": 16, "y": 12, "w": 8, "h": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "expr": "sum by (reason) (increase(jam_import_rejected_total[5m]))", "legendFormat": "rejected: {{reason}}", "refId": "A" },
+        { "expr": "sum(increase(jam_accept_errors_total[5m]))", "legendFormat": "QUIC accept errors", "refId": "B" },
+        { "expr": "sum(increase(jam_ring_failures_total[5m]))", "legendFormat": "ring-key failures", "refId": "C" },
+        { "expr": "sum(increase(jam_selfimport_dropped_total[5m]))", "legendFormat": "work-items dropped", "refId": "D" }
+      ],
+      "fieldConfig": { "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 0, "pointSize": 4, "showPoints": "never" },
+          "min": 0, "color": { "mode": "palette-classic" } }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+                   "tooltip": { "mode": "multi", "sort": "none" } }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

@@ -286,6 +286,22 @@ Pre-push flow for a lasair change: `make local && make verify`, then
 `make mixed-local && make verify-mixed` (it waits for enough slots by itself) —
 only then tag `client-vX.Y.Z` and let CI publish.
 
+### Monitoring the mixed network
+
+```sh
+make monitor        # mixed net + Prometheus + Grafana; dashboards on :3000, no login
+make monitor-down
+```
+
+Neither client exposes metrics natively, so a tiny exporter (`monitor/exporter.py`,
+stdlib-only) derives them from what IS observable — lasair's stdout via the Docker
+log API (read-only socket mount; local dev tooling only) and PolkaJam's `bestBlock`
+RPC. The provisioned **JAM mixed network** dashboard shows the head slot, finality
+lag, per-node heights, authoring rate split by client (the rotation claim, live),
+blocks per validator, Safrole ticket pools, and the fault counters that flagged
+every bug found so far (`bad_seal`, QUIC accept errors, ring-key failures, dropped
+work-items). Prometheus itself is on :9090.
+
 Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to
 the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
 `ENC_MODE: "1"` under the `dex` service in `docker-compose.yml`.
