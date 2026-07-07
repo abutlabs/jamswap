@@ -224,7 +224,7 @@
     },
     {
       "type": "stat",
-      "title": "Faults (last 5m)",
+      "title": "Stalled lasair nodes (no import >30s)",
       "id": 6,
       "gridPos": {
         "x": 20,
@@ -238,7 +238,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(lasair_block_rejects_total[5m])) + sum(increase(lasair_accept_errors_total[5m])) + sum(increase(lasair_ring_key_failures_total[5m]))",
+          "expr": "sum((time() - lasair_last_import_time) > bool 30)",
           "instant": true,
           "refId": "A"
         }
@@ -257,7 +257,7 @@
                 "value": null
               },
               {
-                "color": "orange",
+                "color": "red",
                 "value": 1
               }
             ]
@@ -511,7 +511,7 @@
     },
     {
       "type": "bargauge",
-      "title": "Blocks authored (total since node start)",
+      "title": "Blocks authored (dashboard time range, restart-proof)",
       "id": 9,
       "gridPos": {
         "x": 0,
@@ -525,13 +525,13 @@
       },
       "targets": [
         {
-          "expr": "sum by (node) (lasair_blocks_authored_total)",
+          "expr": "sum by (node) (increase(lasair_blocks_authored_total[$__range]))",
           "legendFormat": "{{node}}",
           "refId": "A",
           "instant": true
         },
         {
-          "expr": "sum by (node) (jam_authored_total{client=\"polkajam\"})",
+          "expr": "sum by (node) (increase(jam_authored_total{client=\"polkajam\"}[$__range]))",
           "legendFormat": "{{node}}",
           "refId": "B",
           "instant": true
@@ -1151,9 +1151,199 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Seconds since last import \u2014 flat climb = frozen node",
+      "id": 15,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "time() - lasair_last_import_time",
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 4,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm3"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm4"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm5"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Status-thread heartbeat age (s)",
+      "id": 16,
+      "gridPos": {
+        "x": 12,
+        "y": 36,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "time() - lasair_status_alive_time",
+          "legendFormat": "{{node}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 4,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "unit": "s",
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm3"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm4"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lm5"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
       "type": "bargauge",
       "title": "\u03c0 blocks credited by consensus (current epoch)",
-      "id": 15,
+      "id": 17,
       "gridPos": {
         "x": 0,
         "y": 28,
@@ -1289,7 +1479,7 @@
     {
       "type": "bargauge",
       "title": "\u03c0 tickets on-chain (current epoch) \u2014 lasair at 0 = its ticket extrinsics never land",
-      "id": 16,
+      "id": 18,
       "gridPos": {
         "x": 12,
         "y": 28,

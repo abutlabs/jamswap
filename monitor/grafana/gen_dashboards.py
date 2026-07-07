@@ -34,7 +34,7 @@ def override(name, color):
             "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": color}}]}
 
 
-def stat(title, expr, x, w, color="text", thresholds=None, unit=None, mappings=None):
+def stat(title, expr, x, w, y=0, color="text", thresholds=None, unit=None, mappings=None):
     fc = {"decimals": 0}
     if thresholds:
         fc["color"] = {"mode": "thresholds"}
@@ -46,7 +46,7 @@ def stat(title, expr, x, w, color="text", thresholds=None, unit=None, mappings=N
     if mappings:
         fc["mappings"] = mappings
     return {"type": "stat", "title": title, "id": nid(),
-            "gridPos": {"x": x, "y": 0, "w": w, "h": 4}, "datasource": DS,
+            "gridPos": {"x": x, "y": y, "w": w, "h": 4}, "datasource": DS,
             "targets": [{"expr": expr, "instant": True, "refId": "A"}],
             "fieldConfig": {"defaults": fc, "overrides": []},
             "options": {"graphMode": "none", "colorMode": "value", "textMode": "value"}}
@@ -105,11 +105,9 @@ network = dashboard("jam-mixed", "JAM mixed network", [
          12, 4),
     stat("Validator peers (pj view)", "min(jam_pj_vals)", 16, 4,
          thresholds=[{"color": "red", "value": None}, {"color": "green", "value": 5}]),
-    stat("Faults (last 5m)",
-         "sum(increase(lasair_block_rejects_total[5m])) + sum(increase(lasair_accept_errors_total[5m]))"
-         " + sum(increase(lasair_ring_key_failures_total[5m]))",
-         20, 4,
-         thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 1}]),
+    stat("Stalled lasair nodes (no import >30s)",
+         "sum((time() - lasair_last_import_time) > bool 30)", 20, 4,
+         thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
 
     ts("Authoring rate per validator (blocks/min) — rotation, live",
        [{"expr": "sum by (node) (rate(lasair_blocks_authored_total[2m])) * 60",
@@ -121,9 +119,10 @@ network = dashboard("jam-mixed", "JAM mixed network", [
        [{"expr": "lasair_block_height", "legendFormat": "{{node}}"}],
        12, 4, 12, overrides=lm_overrides),
 
-    bargauge("Blocks authored (total since node start)",
-             [{"expr": "sum by (node) (lasair_blocks_authored_total)", "legendFormat": "{{node}}"},
-              {"expr": "sum by (node) (jam_authored_total{client=\"polkajam\"})",
+    bargauge("Blocks authored (dashboard time range, restart-proof)",
+             [{"expr": "sum by (node) (increase(lasair_blocks_authored_total[$__range]))",
+               "legendFormat": "{{node}}"},
+              {"expr": "sum by (node) (increase(jam_authored_total{client=\"polkajam\"}[$__range]))",
                "legendFormat": "{{node}}"}],
              0, 12, 8, overrides=node_overrides),
     ts("Blocks imported per lasair node (blocks/min)",
@@ -157,6 +156,13 @@ network = dashboard("jam-mixed", "JAM mixed network", [
                   override("guaranteed", ROLE["imported"]),
                   override("dropped", ROLE["rejected"])]),
 
+    ts("Seconds since last import — flat climb = frozen node",
+       [{"expr": "time() - lasair_last_import_time", "legendFormat": "{{node}}"}],
+       0, 36, 12, unit="s", overrides=lm_overrides),
+    ts("Status-thread heartbeat age (s)",
+       [{"expr": "time() - lasair_status_alive_time", "legendFormat": "{{node}}"}],
+       12, 36, 12, unit="s", overrides=lm_overrides),
+
     # ---- consensus view: GP validator statistics (pi), decoded from on-chain
     # state via pj's RPC. The SAME numbers from any node, for BOTH clients'
     # validators — what the chain credited each validator with, not what a
@@ -178,14 +184,20 @@ node_var = [{"name": "node", "label": "lasair node", "type": "query", "datasourc
              "sort": 1, "includeAll": False, "multi": False}]
 
 node_view = dashboard("jam-node", "JAM node (lasair)", [
-    stat("Height", f"lasair_block_height{sel}", 0, 4),
-    stat("Slot", f"lasair_slot{sel}", 4, 4),
-    stat("Peers connected", f"lasair_peers_connected{sel}", 8, 4,
+    stat("Height", f"lasair_block_height{sel}", 0, 3),
+    stat("Slot", f"lasair_slot{sel}", 3, 3),
+    stat("Since last import", f"time() - lasair_last_import_time{sel}", 6, 3, unit="s",
+         thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 30},
+                     {"color": "red", "value": 60}]),
+    stat("Status heartbeat", f"time() - lasair_status_alive_time{sel}", 9, 3, unit="s",
+         thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 15},
+                     {"color": "red", "value": 60}]),
+    stat("Peers", f"lasair_peers_connected{sel}", 12, 3,
          thresholds=[{"color": "red", "value": None}, {"color": "orange", "value": 3},
                      {"color": "green", "value": 5}]),
-    stat("Ticket pool", f"lasair_ticket_pool{sel}", 12, 4),
-    stat("Authored", f"sum(lasair_blocks_authored_total{sel})", 16, 4),
-    stat("Imported", f"sum(lasair_blocks_imported_total{sel})", 20, 4),
+    stat("Ticket pool", f"lasair_ticket_pool{sel}", 15, 3),
+    stat("Authored", f"sum(lasair_blocks_authored_total{sel})", 18, 3),
+    stat("Imported", f"sum(lasair_blocks_imported_total{sel})", 21, 3),
 
     ts("Block height",
        [{"expr": f"lasair_block_height{sel}", "legendFormat": "height"}],

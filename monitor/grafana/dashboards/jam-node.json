@@ -12,11 +12,11 @@
     {
       "type": "stat",
       "title": "Height",
-      "id": 17,
+      "id": 19,
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -49,11 +49,11 @@
     {
       "type": "stat",
       "title": "Slot",
-      "id": 18,
+      "id": 20,
       "gridPos": {
-        "x": 4,
+        "x": 3,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -85,12 +85,120 @@
     },
     {
       "type": "stat",
-      "title": "Peers connected",
-      "id": 19,
+      "title": "Since last import",
+      "id": 21,
       "gridPos": {
-        "x": 8,
+        "x": 6,
         "y": 0,
-        "w": 4,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "time() - lasair_last_import_time{node=~\"$node\"}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 30
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Status heartbeat",
+      "id": 22,
+      "gridPos": {
+        "x": 9,
+        "y": 0,
+        "w": 3,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "time() - lasair_status_alive_time{node=~\"$node\"}",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Peers",
+      "id": 23,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -139,11 +247,11 @@
     {
       "type": "stat",
       "title": "Ticket pool",
-      "id": 20,
+      "id": 24,
       "gridPos": {
-        "x": 12,
+        "x": 15,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -176,11 +284,11 @@
     {
       "type": "stat",
       "title": "Authored",
-      "id": 21,
+      "id": 25,
       "gridPos": {
-        "x": 16,
+        "x": 18,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -213,11 +321,11 @@
     {
       "type": "stat",
       "title": "Imported",
-      "id": 22,
+      "id": 26,
       "gridPos": {
-        "x": 20,
+        "x": 21,
         "y": 0,
-        "w": 4,
+        "w": 3,
         "h": 4
       },
       "datasource": {
@@ -250,7 +358,7 @@
     {
       "type": "timeseries",
       "title": "Block height",
-      "id": 23,
+      "id": 27,
       "gridPos": {
         "x": 0,
         "y": 4,
@@ -314,7 +422,7 @@
     {
       "type": "timeseries",
       "title": "Authoring vs import rate (blocks/min)",
-      "id": 24,
+      "id": 28,
       "gridPos": {
         "x": 12,
         "y": 4,
@@ -398,7 +506,7 @@
     {
       "type": "timeseries",
       "title": "Import rejects by reason (increase, 5m)",
-      "id": 25,
+      "id": 29,
       "gridPos": {
         "x": 0,
         "y": 12,
@@ -446,7 +554,7 @@
     {
       "type": "timeseries",
       "title": "Peer dial/connection failures by peer (per 5m) \u2014 sustained high = churn",
-      "id": 26,
+      "id": 30,
       "gridPos": {
         "x": 8,
         "y": 12,
@@ -494,7 +602,7 @@
     {
       "type": "timeseries",
       "title": "QUIC accepts & errors (per 5m)",
-      "id": 27,
+      "id": 31,
       "gridPos": {
         "x": 16,
         "y": 12,
@@ -578,7 +686,7 @@
     {
       "type": "timeseries",
       "title": "Safrole tickets",
-      "id": 28,
+      "id": 32,
       "gridPos": {
         "x": 0,
         "y": 20,
@@ -662,7 +770,7 @@
     {
       "type": "timeseries",
       "title": "CE-133 pipeline (items/min)",
-      "id": 29,
+      "id": 33,
       "gridPos": {
         "x": 12,
         "y": 20,
