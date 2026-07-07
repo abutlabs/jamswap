@@ -283,8 +283,8 @@ make down           # stop whichever stack is up
 ```
 
 Pre-push flow for a lasair change: `make local && make verify`, then
-`make mixed-local`, wait ~90 s of slots, `make verify-mixed` — only then tag
-`client-vX.Y.Z` and let CI publish.
+`make mixed-local && make verify-mixed` (it waits for enough slots by itself) —
+only then tag `client-vX.Y.Z` and let CI publish.
 
 Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to
 the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
