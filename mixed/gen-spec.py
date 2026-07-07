@@ -52,6 +52,18 @@ def ip_for(i):
 
 os.makedirs(SHARED, exist_ok=True)
 
+# IDEMPOTENT: a partial `docker compose up` (e.g. only the lm services recreated
+# after an LASAIR_IMAGE change) re-runs this one-shot init. Minting a NEW genesis
+# then splits the project in two — the still-running validators keep the old chain
+# and every cross-half QUIC dial dies with "peer doesn't support any known
+# protocol" (the ALPN embeds the genesis hash). If a genesis already exists in
+# the shared volume, REUSE it; `docker compose down -v` wipes it for a fresh net.
+if os.path.exists(os.path.join(SHARED, "ready")) and \
+   os.path.exists(os.path.join(SHARED, "spec.json")):
+    print("spec-init: /shared/spec.json exists — reusing the running genesis "
+          "(docker compose down -v for a fresh one)")
+    sys.exit(0)
+
 def lasair_dev_account(i):
     # `lasair --dev-account i` prints the OFFICIAL JAM dev account (docs.jamcha.in) —
     # the exact bandersnatch sealing key and ed25519 QUIC identity a lasair >=1.5.1
