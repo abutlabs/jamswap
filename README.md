@@ -262,7 +262,29 @@ LAYOUT=lasair,lasair,polkajam,polkajam,lasair,polkajam docker compose -f docker-
 
 ```sh
 LASAIR_TAG=1.6.2 docker compose up              # pin the client version instead of :latest
+LASAIR_IMAGE=lasair:local docker compose up     # any image ref — e.g. a local source build
 ```
+
+### Dev modes (Makefile)
+
+Public images by default; a local lasair source build on demand — so a lasair change
+can be verified end-to-end BEFORE tagging a release and waiting for the ~80-min
+multi-arch CI publish. Requires the (private) lasair checkout next to this repo
+(override with `LASAIR_SRC=…`):
+
+```sh
+make up             # default DEX stack, published image        (docker compose up)
+make mixed          # mixed lasair+PolkaJam net, published image
+make local          # build ../lasair -> lasair:local -> DEX stack
+make mixed-local    # same source build -> mixed net
+make verify         # e2e smoke test against the RUNNING DEX stack
+make verify-mixed   # health check against the RUNNING mixed net
+make down           # stop whichever stack is up
+```
+
+Pre-push flow for a lasair change: `make local && make verify`, then
+`make mixed-local`, wait ~90 s of slots, `make verify-mixed` — only then tag
+`client-vX.Y.Z` and let CI publish.
 
 Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to
 the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
