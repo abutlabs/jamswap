@@ -3,6 +3,19 @@ global:
   evaluation_interval: 5s
 
 scrape_configs:
+  # PolkaJam is a black box: the exporter derives its metrics from container
+  # logs + the bestBlock RPC (see monitor/exporter.py).
   - job_name: jam-mixed
     static_configs:
       - targets: ["exporter:9105"]
+
+  # lasair >=1.6.4 is natively instrumented: every node serves Prometheus
+  # /metrics itself (--metrics-port, on by default in the mesh entrypoint).
+  - job_name: lasair
+    static_configs:
+      - targets: ["lm3:9615"]
+        labels: { node: lm3, client: lasair }
+      - targets: ["lm4:9615"]
+        labels: { node: lm4, client: lasair }
+      - targets: ["lm5:9615"]
+        labels: { node: lm5, client: lasair }

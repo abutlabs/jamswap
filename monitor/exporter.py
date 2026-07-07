@@ -1,25 +1,29 @@
 #!/usr/bin/env python3
-"""Prometheus exporter for the mixed lasair+PolkaJam network.
+"""Prometheus exporter for the PolkaJam side of the mixed network.
 
-Neither client exposes metrics natively (lasair logs to stdout; PolkaJam is a
-black box with a JSON-RPC), so this exporter derives them from what IS
-observable, with no dependencies beyond the Python stdlib:
+lasair >=1.6.4 serves /metrics natively (prometheus.yml's `lasair` job);
+PolkaJam is a black box with no Prometheus endpoint (probed: no --prometheus
+flag, only the RPC listens). This exporter derives its metrics from what IS
+observable, stdlib-only:
 
   - the Docker Engine API (unix socket, read-only) — incremental log tails of
-    every compose service in NODES, parsed into counters/gauges;
-  - pj0's JSON-RPC `bestBlock` — the canonical head slot.
+    the pj containers (authored / imported / net status);
+  - the JSON-RPC — bestBlock, finalizedBlock, syncState, and `statistics`:
+    the on-chain GP validator statistics (pi), per-validator counters recorded
+    by CONSENSUS for both clients' validators — the apples-to-apples baseline
+    every client-side counter can be compared against.
 
-Serves /metrics on :9105. Counters are accumulated in-process from log lines
-strictly newer than the last processed timestamp (RFC3339Nano is lexically
-ordered), so restarts of the exporter reset counters — which Prometheus's
-rate()/increase() handle fine.
+Serves /metrics on :9105. Log-derived counters reset when the exporter
+restarts — which Prometheus's rate()/increase() handle fine.
 """
+import base64
 import http.client
 import http.server
 import json
 import os
 import re
 import socket
+import struct
 import threading
 import time
 import urllib.request
@@ -28,10 +32,10 @@ DOCKER_SOCK = os.environ.get("DOCKER_SOCK", "/var/run/docker.sock")
 COMPOSE_PROJECT = os.environ.get("COMPOSE_PROJECT", "jamswap")
 PJ_RPC = os.environ.get("PJ_RPC", "http://172.28.0.10:19890")
 PORT = int(os.environ.get("EXPORTER_PORT", "9105"))
-NODES = {  # compose service -> client
-    "lm3": "lasair", "lm4": "lasair", "lm5": "lasair",
-    "pj0": "polkajam", "pj1": "polkajam", "pj2": "polkajam",
-}
+# PolkaJam only: lasair >=1.6.4 serves Prometheus /metrics natively
+# (--metrics-port; see prometheus.yml's `lasair` job), so parsing its logs here
+# would double-count. This exporter covers what stays a black box.
+NODES = {"pj0": "polkajam", "pj1": "polkajam", "pj2": "polkajam"}
 
 # ---- docker engine API over the unix socket (stdlib http.client) -----------
 class UnixHTTPConnection(http.client.HTTPConnection):
@@ -102,57 +106,21 @@ def setg(name, labels, v):
     gauges[(name, tuple(sorted(labels.items())))] = v
 
 
-# what we recognise in each client's log lines
-RE_LASAIR_STATUS = re.compile(r"^STATUS height=(\d+) .*slot=(\d+)")
-RE_LASAIR_AUTHORED = re.compile(r"authored slot (\d+) \(val (\d+)\) height (\d+)")
-RE_LASAIR_REJECT = re.compile(r"import rejected slot \d+ .*: (\w+)")
-RE_LASAIR_POOL = re.compile(r"pool=(\d+)")
-RE_PJ_FINALIZED = re.compile(r"Finalized 0x[0-9a-f]+\.* \(#(\d+)\)")
+# what we recognise in PolkaJam's log lines
 RE_PJ_NET = re.compile(r"Net status: (\d+) peers \((\d+) vals\)")
 
 
 def parse_line(svc, client, line):
-    if client == "lasair":
-        m = RE_LASAIR_STATUS.search(line)
-        if m:
-            setg("jam_node_height", {"node": svc}, int(m.group(1)))
-            setg("jam_node_slot", {"node": svc}, int(m.group(2)))
-            return
-        m = RE_LASAIR_AUTHORED.search(line)
-        if m:
-            bump("jam_authored_total", {"node": svc, "client": client})
-            return
-        m = RE_LASAIR_REJECT.search(line)
-        if m:
-            bump("jam_import_rejected_total", {"node": svc, "reason": m.group(1)})
-            return
-        if "accept error" in line:
-            bump("jam_accept_errors_total", {"node": svc})
-            return
-        if "does not verify against on-chain gamma_z" in line:
-            bump("jam_ring_failures_total", {"node": svc})
-            return
-        if "rejected on self-import" in line:
-            bump("jam_selfimport_dropped_total", {"node": svc})
-            return
-        m = RE_LASAIR_POOL.search(line)
-        if m:
-            setg("jam_ticket_pool", {"node": svc}, int(m.group(1)))
-    else:  # polkajam
-        if "Authored block" in line:
-            bump("jam_authored_total", {"node": svc, "client": client})
-            return
-        if "Imported 0x" in line:
-            bump("jam_pj_imported_total", {"node": svc})
-            return
-        m = RE_PJ_FINALIZED.search(line)
-        if m:
-            setg("jam_finalized_slot", {"node": svc}, int(m.group(1)))
-            return
-        m = RE_PJ_NET.search(line)
-        if m:
-            setg("jam_pj_peers", {"node": svc}, int(m.group(1)))
-            setg("jam_pj_vals", {"node": svc}, int(m.group(2)))
+    if "Authored block" in line:
+        bump("jam_authored_total", {"node": svc, "client": client})
+        return
+    if "Imported 0x" in line:
+        bump("jam_pj_imported_total", {"node": svc})
+        return
+    m = RE_PJ_NET.search(line)
+    if m:
+        setg("jam_pj_peers", {"node": svc}, int(m.group(1)))
+        setg("jam_pj_vals", {"node": svc}, int(m.group(2)))
 
 
 def poll_logs():
@@ -179,17 +147,54 @@ def poll_logs():
         last_since[svc] = max(0, int(time.time()) - 2)
 
 
+def rpc(method, params=[]):
+    req = urllib.request.Request(
+        PJ_RPC, json.dumps({"jsonrpc": "2.0", "id": 1, "method": method,
+                            "params": params}).encode(),
+        {"Content-Type": "application/json"})
+    r = json.load(urllib.request.urlopen(req, timeout=3))
+    if "error" in r:
+        raise RuntimeError(r["error"])
+    return r["result"]
+
+
+# validator index -> node name for the on-chain pi statistics (matches LAYOUT)
+VALIDATOR_NODES = os.environ.get(
+    "VALIDATOR_NODES", "pj0,pj1,pj2,lm3,lm4,lm5").split(",")
+PI_FIELDS = ["blocks", "tickets", "preimages", "preimages_size",
+             "guarantees", "assurances"]
+
+
 def poll_rpc():
     try:
-        req = urllib.request.Request(
-            PJ_RPC, json.dumps({"jsonrpc": "2.0", "id": 1, "method": "bestBlock",
-                                "params": []}).encode(),
-            {"Content-Type": "application/json"})
-        d = json.load(urllib.request.urlopen(req, timeout=3))["result"]
-        setg("jam_head_slot", {}, int(d["slot"]))
+        best = rpc("bestBlock")
+        setg("jam_head_slot", {}, int(best["slot"]))
+        fin = rpc("finalizedBlock")
+        setg("jam_finalized_slot", {"node": "pj0"}, int(fin["slot"]))
+        sync = rpc("syncState")
+        setg("jam_pj_peers", {"node": "pj0"}, int(sync["num_peers"]))
         setg("jam_rpc_up", {}, 1)
     except Exception:
         setg("jam_rpc_up", {}, 0)
+        return
+    # On-chain validator statistics (GP pi): per-validator counters recorded by
+    # CONSENSUS — the same numbers from any node, for BOTH clients' validators.
+    # This is the apples-to-apples baseline; a client's own counters can then be
+    # compared against what the chain actually credited it with.
+    # Encoding: 2 epochs (current, last) x V records of 6 u32 LE fields.
+    try:
+        raw = base64.b64decode(rpc("statistics", [best["header_hash"]]))
+        v = len(VALIDATOR_NODES)
+        if len(raw) >= 2 * v * 24:
+            for half, epoch in ((0, "current"), (v * 24, "last")):
+                for i, node in enumerate(VALIDATOR_NODES):
+                    rec = struct.unpack_from("<6I", raw, half + i * 24)
+                    for f, val in zip(PI_FIELDS, rec):
+                        setg("jam_pi_" + f,
+                             {"validator": str(i), "node": node, "epoch": epoch},
+                             val)
+    except Exception:
+        pass
 
 
 def render():
@@ -225,15 +230,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    # Zero-seed the fault counters so a HEALTHY chain graphs flat zero lines
-    # instead of "No data" (a series that only appears once something breaks
-    # makes the faults panel unreadable as a baseline).
+    # Zero-seed the counters so pj series exist from the first scrape (a series
+    # that only appears once something happens graphs as "No data" baselines).
     for svc, client in NODES.items():
-        if client == "lasair":
-            for m in ("jam_accept_errors_total", "jam_ring_failures_total",
-                      "jam_selfimport_dropped_total"):
-                bump(m, {"node": svc}, 0)
-            bump("jam_import_rejected_total", {"node": svc, "reason": "duplicate_package"}, 0)
+        bump("jam_authored_total", {"node": svc, "client": client}, 0)
+        bump("jam_pj_imported_total", {"node": svc}, 0)
     print("jam mixed-net exporter on :%d (project=%s, rpc=%s)"
           % (PORT, COMPOSE_PROJECT, PJ_RPC), flush=True)
     http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
