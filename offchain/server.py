@@ -214,8 +214,13 @@ def api_cancel(b):
 def api_register(b):
     # bind an ed25519 pubkey to an account handle: canon(register, pubkey) signed by that key
     pubkey, sig = bytes.fromhex(b["pubkey"]), bytes.fromhex(b["sig"])
+    h = handle_of(pubkey)
+    if h is not None:
+        # already on-chain: re-submitting builds a work-package byte-identical to the one
+        # that registered this key, which GP rejects as duplicate_package — don't relay it
+        return {"ok": True, "handle": h}
     submit(bytes([TAG_REGISTER]) + pubkey + sig)
-    return {"ok": True, "handle": handle_of(pubkey)}   # None until accumulate lands
+    return {"ok": True, "handle": None}                # None until accumulate lands
 def api_handle(q):
     return {"handle": handle_of(bytes.fromhex(q["pubkey"]))}
 def api_nonce(q):

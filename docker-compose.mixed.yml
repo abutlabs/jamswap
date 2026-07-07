@@ -28,14 +28,14 @@ x-polkajam: &polkajam
     context: .
     dockerfile: mixed/Dockerfile.polkajam
     args:
-      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.1}
+      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.2}
       PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-07-04}
   image: jamswap-pj-mixed:local
   restart: unless-stopped
   volumes: [ "shared:/shared" ]
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.1}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.2}
   restart: unless-stopped
   volumes: [ "shared:/shared" ]
 

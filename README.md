@@ -261,7 +261,7 @@ LAYOUT=lasair,lasair,polkajam,polkajam,lasair,polkajam docker compose -f docker-
 ### Options
 
 ```sh
-LASAIR_TAG=1.6.1 docker compose up              # pin the client version instead of :latest
+LASAIR_TAG=1.6.2 docker compose up              # pin the client version instead of :latest
 ```
 
 Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to

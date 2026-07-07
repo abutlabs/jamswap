@@ -17,7 +17,7 @@
 # same State_db over CE-129. See lasair/bin/{lasair_client,jamnp_builder,lasair_reader}.ml.
 #
 # All three chain-side services are the ONE `lasair` image (bundles lasair +
-# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=1.6.1 docker compose ...
+# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=1.6.2 docker compose ...
 
 x-lasair-genesis: &genesis
   # first 4 bytes of blake2b256("lasair-mixed-network-genesis-v1\0") — the client's
