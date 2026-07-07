@@ -52,13 +52,15 @@ local: build-local
 mixed-local: build-local
 	LASAIR_IMAGE=$(LOCAL_IMAGE) docker compose $(MIXED) up -d --build --force-recreate
 
-# Prometheus + Grafana + exporter on TOP of the mixed net (starts it if down).
+# Prometheus + Grafana + exporter on TOP of an already-running mixed net.
 # Grafana: http://localhost:3000 (no login) — dashboard "JAM mixed network".
+# Only the three monitoring services are touched — the net itself (and whatever
+# image it runs, published or lasair:local) is left exactly as it is.
 monitor:
-	docker compose $(MONITOR) up -d --build
+	docker compose $(MONITOR) up -d --build exporter prometheus grafana
 
 monitor-down:
-	docker compose $(MONITOR) down -v --remove-orphans
+	docker compose $(MONITOR) rm -sf exporter prometheus grafana
 
 # E2E smoke test against the RUNNING default stack: register -> handle, duplicate
 # work-packages survived, faucet deposit, signed withdraw. Fresh account per run.
