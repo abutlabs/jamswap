@@ -25,9 +25,12 @@ RUN arch=$(uname -m | sed s/arm64/aarch64/) \
  && echo "fetching ${url}" \
  && curl -fsSL "$url" | tar xz -C /usr/local/bin --strip-components=1 \
  && /usr/local/bin/polkajam --version
-# lasair mixed_keys (+ its FFI libs) so ROLE=init can derive lasair validator keys
-COPY --from=mesh /usr/local/bin/mixed_keys /usr/local/bin/mixed_keys
-COPY --from=mesh /usr/local/lib/libbandersnatch_ffi.so /usr/local/lib/libed25519_ffi.so /usr/local/lib/
+# lasair client (+ its FFI libs) so ROLE=init can derive lasair validator keys:
+# `lasair --dev-account i` prints the STANDARD JAM dev account a >=1.5.1 validator
+# actually seals/identifies with (mixed_keys' raw seed derivation is NOT that).
+COPY --from=mesh /usr/local/bin/lasair /usr/local/bin/lasair
+COPY --from=mesh /usr/local/lib/libbandersnatch_ffi.so /usr/local/lib/libed25519_ffi.so \
+     /usr/local/lib/liberasure_ffi.so /usr/local/lib/libquic_ffi.so /usr/local/lib/
 RUN ldconfig
 COPY mixed/gen-spec.py /gen-spec.py
 COPY mixed/pj-entrypoint.sh /pj-entrypoint.sh

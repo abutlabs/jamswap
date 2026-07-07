@@ -16,18 +16,19 @@ the OWNING client's real keys, and writes:
 Key ownership stays split: each validator's genesis entry carries the OWNING
 client's public keys, and only that client ever holds the secret.
   - PolkaJam index i:  `gen-keys` -> peer_id + bandersnatch + a 32-byte seed file.
-  - lasair index i:    bandersnatch = lasair Bandersnatch(seed chr(i+5)) (its
-                       hardcoded sealing key for index i); peer_id = lasair
-                       N(k)="e"++base32_le(ed25519,52) for its QUIC identity seed
-                       chr(100+i). Both come from `mixed_keys` (from the lasair
-                       image, present in this container).
+  - lasair index i:    the STANDARD JAM dev account i (docs.jamcha.in/basics/
+                       dev-accounts, seed = u32-LE index x8): bandersnatch is its
+                       sealing key and peer_id its ed25519 QUIC identity — exactly
+                       the keys a lasair >=1.5.1 validator derives for --own i.
+                       Both come from `lasair --dev-account` (the lasair client
+                       binary, copied into this container from its image).
 
 Env:
   LAYOUT     comma list of clients per index (default polkajam,polkajam,polkajam,
              lasair,lasair,lasair). Length must equal the config size (6 = tiny).
   SHARED     output dir (default /shared)
   POLKAJAM   polkajam binary (default polkajam on PATH)
-  MIXED_KEYS lasair mixed_keys binary (default mixed_keys on PATH)
+  LASAIR_BIN lasair client binary (default lasair on PATH)
   BASE_PORT  first JAMNP-S UDP port (default 40060); index i -> BASE_PORT+i
   RPC_BASE   first PolkaJam RPC port (default 19890); index i -> RPC_BASE+i
 """
@@ -35,7 +36,7 @@ import os, sys, re, json, glob, time, shutil, subprocess
 
 SHARED   = os.environ.get("SHARED", "/shared")
 POLKAJAM = os.environ.get("POLKAJAM", "polkajam")
-MIXED    = os.environ.get("MIXED_KEYS", "mixed_keys")
+LASAIR   = os.environ.get("LASAIR_BIN", "lasair")
 LAYOUT   = os.environ.get("LAYOUT", "polkajam,polkajam,polkajam,lasair,lasair,lasair")
 BASE     = int(os.environ.get("BASE_PORT", "40060"))
 RPCBASE  = int(os.environ.get("RPC_BASE", "19890"))
@@ -51,8 +52,12 @@ def ip_for(i):
 
 os.makedirs(SHARED, exist_ok=True)
 
-def mixed_keys(seed_hex):
-    out = subprocess.run([MIXED, seed_hex], capture_output=True, text=True).stdout
+def lasair_dev_account(i):
+    # `lasair --dev-account i` prints the OFFICIAL JAM dev account (docs.jamcha.in) —
+    # the exact bandersnatch sealing key and ed25519 QUIC identity a lasair >=1.5.1
+    # validator derives for --own i. (mixed_keys' raw public_from_seed derivation
+    # yields DIFFERENT keys for the same seed hex — do not substitute it here.)
+    out = subprocess.run([LASAIR, "--dev-account", str(i)], capture_output=True, text=True).stdout
     g = lambda k: [l.split()[1] for l in out.splitlines() if l.startswith(k)][0]
     return g("bandersnatch:"), g("peer_id:")
 
@@ -94,10 +99,11 @@ for i, role in enumerate(layout):
     host = ip_for(i)                    # numeric IP (gen-spec + dialing require it)
     net  = "%s:%d" % (host, port)
     if role == "lasair":
-        seal  = ("%02x" % (i + 5)) * 32     # lasair index i seals with seed chr(i+5)
-        ident = ("%02x" % (100 + i)) * 32   # lasair QUIC identity seed for this node
-        ban, _   = mixed_keys(seal)
-        _, pid   = mixed_keys(ident)
+        # STANDARD JAM dev account i (docs.jamcha.in/basics/dev-accounts): seed is the
+        # index as a u32 LE repeated 8x. Since lasair client-v1.5.1 a validator seals
+        # with THIS key and presents THIS ed25519 as its QUIC identity — baking anything
+        # else makes every lasair seal bad_seal and every lasair cert a stranger.
+        ban, pid = lasair_dev_account(i)
         vals.append({"peer_id": pid, "bandersnatch": ban, "net_addr": net})
         nodes.append({"index": i, "role": "lasair", "host": host, "port": port,
                       "peer_id": pid, "identity": 100 + i, "own": i})
