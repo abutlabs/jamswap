@@ -7,8 +7,8 @@ is the tier-1 plan from
 [Research findings (2026-07-08)](#research-findings-2026-07-08--path-to-a-settling-33-chain):
 a fork-choice-aware guarantor (descend-check + re-guarantee on branch loss),
 **assure-any-pending-when-authoring**, and the builder fanning CE-133 out to all
-three lasair nodes. Requires lasair built from source (`make mixed-local`) until the
-next client release. The lasair-dominant `mixed-dex` overlay is no longer needed for
+three lasair nodes. Shipped in lasair **client-v1.7.0** (`ghcr.io/abutlabs/lasair:1.7.0`, the default
+image), so plain `make mixed` settles out of the box. The lasair-dominant `mixed-dex` overlay is no longer needed for
 settlement but remains as a near-linear-chain configuration. The body below is kept
 as the root-cause record and the map of longer-term avenues (real DA, CE-135/141).
 
@@ -125,10 +125,13 @@ slots. On an equal 3:3 chain:
 
 `verify` PASS = register / duplicate-survival / deposit / withdraw all accumulate.
 
-**Caveat:** even in the working 5:1 case, settlement only begins once the chain reaches
-**Safrole ticket-seal steady state (~1–2 epochs after launch)**. Running `verify`
-immediately after `up` times out during the AURA→ticket warm-up (not a failure of the
-mechanism — the chain just isn't linear yet).
+**Caveat:** settlement only begins once the chain reaches **Safrole ticket-seal steady
+state (~1–2 epochs after launch)**, and on the EQUAL split the first few minutes also
+carry extra fork churn while the DEX bootstrap items settle — a `verify` run right
+after `up` can time out on `register` even though the item accumulates a few minutes
+later (observed on the published 1.7.0 image: the first run's register settled late,
+the immediate re-run passed everything in-window). Not a failure of the mechanism —
+give the chain a few epochs, or just re-run `verify`.
 
 ---
 
@@ -318,7 +321,7 @@ window, with 1a's retry covering the tail.
 All three pieces landed (lasair working tree + this repo) and `verify` passes twice in a
 row on a fresh equal 3:3 chain. What changed:
 
-**lasair** (needs a source build until the next client release — `make mixed-local`):
+**lasair** (released as client-v1.7.0 / `ghcr.io/abutlabs/lasair:1.7.0`):
 
 - `jamnp/block_tree.ml` — new `is_ancestor` (descent test; `imported` membership is NOT
   canonicality, orphans stay in the table forever). Unit-tested in
@@ -362,9 +365,9 @@ evolution, real DA the long-term fix.
 ## How to reproduce
 
 ```sh
-# Equal split with the tier-1 fix — trades SETTLE (lasair from source until the
-# next client release; wait ~1-2 epochs for ticket-seal steady state):
-make mixed-local
+# Equal split with the tier-1 fix — trades SETTLE (lasair >= 1.7.0, the default
+# image; wait ~1-2 epochs for ticket-seal steady state):
+make mixed
 docker compose -f docker-compose.mixed.yml exec -T dex python3 /app/verify.py
 #   -> ALL PASS: register / duplicate-survival / deposit / withdraw
 #   watch the mechanism work:

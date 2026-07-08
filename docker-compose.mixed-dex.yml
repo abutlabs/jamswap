@@ -5,7 +5,7 @@
 #   (or: make mixed-dex / make mixed-dex-local)
 #
 # NOTE (2026-07-08): with the tier-1 settlement fix (fork-choice-aware guarantor +
-# assure-any-pending + builder fan-out; lasair source build) the EQUAL split settles
+# assure-any-pending + builder fan-out; lasair >= 1.7.0) the EQUAL split settles
 # trades too — this overlay is no longer required for settlement. It remains as the
 # near-linear-chain configuration. docs/mixed_chain_dex_settlement.md has the story.
 #
