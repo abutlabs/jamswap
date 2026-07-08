@@ -164,7 +164,7 @@ client-specific HTTP node RPC anywhere.
 | Compose file | Run it | Scenario |
 |---|---|---|
 | [`docker-compose.yml`](docker-compose.yml) | `docker compose up` | **Quickstart** — one lasair process authors all six dev validators' slots and hosts the service; a CE-133 builder and a CE-129 reader bridge the DEX to the chain. Trading UI at `:8080`; nothing to build. |
-| [`docker-compose.mixed.yml`](docker-compose.mixed.yml) | `docker compose -f docker-compose.mixed.yml up` | **Networked testnet — mixed-client** — six validators split across **two independent JAM clients** (lasair + PolkaJam) co-authoring one Safrole chain over JAMNP-S/QUIC, leadership rotating across clients. Consensus layer only for now — see [the section below](#run-it-on-a-mixed-client-chain--lasair-and-polkajam-one-command). |
+| [`docker-compose.mixed.yml`](docker-compose.mixed.yml) | `docker compose -f docker-compose.mixed.yml up` | **Networked testnet — mixed-client** — six validators split across **two independent JAM clients** (lasair + PolkaJam) co-authoring one Safrole chain over JAMNP-S/QUIC, leadership rotating across clients. The jamswap service is in the shared genesis; `make mixed-dex` settles trades on-chain, `make mixed` runs the equal-split consensus comparison — see [the section below](#run-it-on-a-mixed-client-chain--lasair-and-polkajam-one-command). |
 
 The quickstart serves the **trading UI** on top of that chain (the compiled
 `service/jamswap-service.jam` ships in the repo). Open `http://localhost:8080` and you can:
@@ -252,11 +252,26 @@ PJ_RELEASE=nightly-2026-07-04 docker compose -f docker-compose.mixed.yml up
 LAYOUT=lasair,lasair,polkajam,polkajam,lasair,polkajam docker compose -f docker-compose.mixed.yml up
 ```
 
-> **Scope.** This compose demonstrates the **consensus layer** — the mixed-client
-> chain jamswap runs *on*: both clients co-authoring one rotating chain and agreeing
-> on state. Deploying the jamswap **service** onto that mixed chain (so DEX orders are
-> guaranteed and settled across both clients) is the next milestone; today the full
-> DEX trading flow runs on the single-client quickstart above (`docker compose up`).
+> **Two mixed modes.** The jamswap **service** is deployed into the shared genesis of
+> the mixed chain (both clients start with it on-chain), and there are two ways to run it:
+>
+> - **`make mixed`** (this compose) — an **equal 3 PolkaJam / 3 lasair** split: a
+>   *consensus-comparison* testbed where both clients author, seal (Safrole tickets), and
+>   import each other's blocks apples-to-apples — what the Grafana dashboards measure. The
+>   DEX UI is live and work-items are *guaranteed*, but trades **don't settle on-chain**:
+>   a work-report only accumulates once it is *available* (a >2/3 super-majority of
+>   assurances on the canonical branch within the 5-slot window), and only lasair can
+>   produce those assurances — on a contested 3:3 chain its guarantee/assurance blocks
+>   lose the fork-choice race before the window closes.
+> - **`make mixed-dex`** — a **lasair-dominant** overlay where lasair authors the
+>   canonical chain, so reports become available and **register / deposit / withdraw
+>   accumulate on-chain**. PolkaJam (pj0) still runs the independent client and derives
+>   the same state; it just authors negligibly. This is the mixed chain running the **full
+>   DEX trading flow**. See [`docker-compose.mixed-dex.yml`](docker-compose.mixed-dex.yml)
+>   for the why. (Trades settle once the chain reaches Safrole ticket-seal steady state,
+>   ~1–2 epochs after launch.)
+>
+> The single-client quickstart above (`docker compose up`) also runs the full trading flow.
 
 > **On PolkaJam & compliance.** PolkaJam is used **black-box**: its binary is fetched
 > from the public [`paritytech/polkajam-releases`](https://github.com/paritytech/polkajam-releases)
@@ -280,10 +295,12 @@ multi-arch CI publish. Requires the (private) lasair checkout next to this repo
 
 ```sh
 make up             # default DEX stack, published image        (docker compose up)
-make mixed          # mixed lasair+PolkaJam net, published image
+make mixed          # mixed net, EQUAL 3 PolkaJam / 3 lasair (consensus comparison)
+make mixed-dex      # mixed net, lasair-dominant — DEX SETTLES TRADES on-chain
 make local          # build ../lasair -> lasair:local -> DEX stack
-make mixed-local    # same source build -> mixed net
-make verify         # e2e smoke test against the RUNNING DEX stack
+make mixed-local    # same source build -> equal-split mixed net
+make mixed-dex-local# same source build -> functional-DEX mixed net
+make verify         # e2e smoke test against the RUNNING DEX stack (works on mixed-dex too)
 make verify-mixed   # health check against the RUNNING mixed net
 make down           # stop whichever stack is up
 ```

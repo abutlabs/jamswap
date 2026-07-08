@@ -1,15 +1,24 @@
 # Jamswap dev modes — public images by default, local lasair source builds on demand.
 #
 #   make up             # default DEX stack, published lasair image      (:8080)
-#   make mixed          # mixed lasair+PolkaJam net, published image
+#   make mixed          # mixed net, EQUAL 3 PolkaJam / 3 lasair (consensus comparison)
+#   make mixed-dex      # mixed net, lasair-dominant — the DEX SETTLES TRADES on-chain
 #   make local          # build ../lasair from source -> lasair:local -> DEX stack
-#   make mixed-local    # same source build -> mixed net
-#   make verify         # e2e smoke test against the RUNNING DEX stack
+#   make mixed-local    # source build -> equal-split mixed net
+#   make mixed-dex-local# source build -> functional-DEX mixed net
+#   make verify         # e2e smoke test against the RUNNING DEX stack (:8080)
 #   make verify-mixed   # health check against the RUNNING mixed net
-#   make down           # stop whichever stack is up (both compose files)
+#   make down           # stop whichever stack is up (all compose files)
+#
+# TWO MIXED MODES (a mixed chain can't be both at once — see docker-compose.mixed-dex.yml):
+#   mixed      EQUAL split: both clients author/seal/import apples-to-apples; the
+#              Grafana dashboards compare them. DEX service deployed + UI live, but
+#              trades DON'T settle (availability can't reach >2/3 on a contested chain).
+#   mixed-dex  lasair authors the canonical chain so work-reports become available
+#              and register/deposit/withdraw ACCUMULATE. pj0 co-validates (imports).
 #
 # Pre-push flow for a lasair change:  make local && make verify
-#                                     make mixed-local && sleep 90 && make verify-mixed
+#                                     make mixed-dex-local && make verify   (after ~1 epoch)
 # — only then tag client-vX.Y.Z and let CI publish (~80 min).
 #
 # LASAIR_SRC   path to the (private) lasair checkout      (default ../lasair)
@@ -18,10 +27,11 @@
 LASAIR_SRC   ?= ../lasair
 LOCAL_IMAGE  ?= lasair:local
 MIXED        = -f docker-compose.mixed.yml
+MIXED_DEX    = -f docker-compose.mixed.yml -f docker-compose.mixed-dex.yml
 
 MONITOR      = -f docker-compose.mixed.yml -f docker-compose.monitor.yml
 
-.PHONY: up down logs mixed mixed-down build-local local mixed-local verify verify-mixed monitor monitor-down
+.PHONY: up down logs mixed mixed-down mixed-dex mixed-dex-down build-local local mixed-local mixed-dex-local verify verify-mixed monitor monitor-down
 
 up:
 	docker compose up -d
@@ -39,6 +49,13 @@ mixed:
 mixed-down:
 	docker compose $(MIXED) down -v --remove-orphans
 
+# Functional-DEX mixed net (lasair-dominant): trades actually settle on-chain.
+mixed-dex:
+	docker compose $(MIXED_DEX) up -d --build
+
+mixed-dex-down:
+	docker compose $(MIXED_DEX) down -v --remove-orphans
+
 # Build the lasair image from source (Dockerfile.mesh = the exact image CI publishes).
 # Requires the private lasair checkout next to this repo (or LASAIR_SRC=...).
 build-local:
@@ -51,6 +68,9 @@ local: build-local
 
 mixed-local: build-local
 	LASAIR_IMAGE=$(LOCAL_IMAGE) docker compose $(MIXED) up -d --build --force-recreate
+
+mixed-dex-local: build-local
+	LASAIR_IMAGE=$(LOCAL_IMAGE) docker compose $(MIXED_DEX) up -d --build --force-recreate
 
 # Prometheus + Grafana + exporter on TOP of an already-running mixed net.
 # Grafana: http://localhost:3000 (no login) — dashboard "JAM mixed network".

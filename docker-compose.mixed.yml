@@ -37,7 +37,9 @@ x-polkajam: &polkajam
 x-mesh: &mesh
   image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.2}
   restart: unless-stopped
-  volumes: [ "shared:/shared" ]
+  volumes:
+    - "shared:/shared"
+    - "./service/jamswap-service.jam:/work/jamswap-service.jam:ro"
 
 services:
   # 1) mint the shared genesis both clients load (runs once, then exits 0)
@@ -48,6 +50,11 @@ services:
       ROLE: init
       SHARED: /shared
       LAYOUT: ${LAYOUT:-polkajam,polkajam,polkajam,lasair,lasair,lasair}
+      SERVICE: /work/jamswap-service.jam   # seeded into the SHARED genesis (both clients)
+      SERVICE_ID: "100"
+    volumes:
+      - "shared:/shared"
+      - "./service/jamswap-service.jam:/work/jamswap-service.jam:ro"
     networks: { mixnet: {} }
 
   # 2) PolkaJam validators (indices 0,1,2)
@@ -78,7 +85,15 @@ services:
     environment:
       SPEC: /shared/spec.json
       OWN: "3"
+      # lm3 is the sole guarantor the builder submits to (LASAIR_GUARANTOR_HOST).
+      # A guarantee needs >=2 validators assigned to one core; lm3 authors only as
+      # val 3 but legitimately derives all lasair dev-account seeds, so it signs
+      # guarantees as the full lasair set {3,4,5} — with C=2 cores and 3 lasair
+      # validators, >=2 always share a core (pigeonhole), so a guarantee always forms.
+      GUARANTOR_OWN: "3,4,5"
       IDENTITY: "103"
+      SERVICE: /work/jamswap-service.jam
+      SERVICE_ID: "100"
       PORT: "40063"
       PEERS: "172.28.0.10:40060,172.28.0.11:40061,172.28.0.12:40062,172.28.0.14:40064,172.28.0.15:40065"
       INTERVAL: "1"
@@ -91,6 +106,8 @@ services:
       SPEC: /shared/spec.json
       OWN: "4"
       IDENTITY: "104"
+      SERVICE: /work/jamswap-service.jam
+      SERVICE_ID: "100"
       PORT: "40064"
       PEERS: "172.28.0.10:40060,172.28.0.11:40061,172.28.0.12:40062,172.28.0.13:40063,172.28.0.15:40065"
       INTERVAL: "1"
@@ -103,6 +120,8 @@ services:
       SPEC: /shared/spec.json
       OWN: "5"
       IDENTITY: "105"
+      SERVICE: /work/jamswap-service.jam
+      SERVICE_ID: "100"
       PORT: "40065"
       PEERS: "172.28.0.10:40060,172.28.0.11:40061,172.28.0.12:40062,172.28.0.13:40063,172.28.0.14:40064"
       INTERVAL: "1"
@@ -129,6 +148,67 @@ services:
           [ "$$slot" != "$$last" ] && { echo "chain: $$slot"; last="$$slot"; }
           sleep 2
         done
+
+  # 5) jamswap on the MIXED chain: the same QUIC-only DEX as the default compose,
+  #    but the chain is the six-validator lasair+PolkaJam network. The service is
+  #    seeded into the SHARED genesis by spec-init; every lm node hosts its CE-133
+  #    builder endpoint (guaranteeing on its own slots). The ALPN embeds the
+  #    per-genesis hash, so the bridges read it from /shared/genesis_hex.
+  builder:
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.2}
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    volumes: [ "shared:/shared" ]
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
+        export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
+        exec /usr/local/bin/jamnp-builder
+    environment:
+      LASAIR_GUARANTOR_HOST: 172.28.0.13   # lm3's CE-133 builder endpoint (port+1)
+      LASAIR_GUARANTOR_PORT: "40064"
+      LASAIR_NODE_RPC: ""
+      LASAIR_BUILDER_HTTP_PORT: "19980"
+    networks: { mixnet: {} }
+    restart: unless-stopped
+
+  reader:
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.6.2}
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    volumes: [ "shared:/shared" ]
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
+        export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
+        exec /usr/local/bin/lasair-reader
+    environment:
+      LASAIR_NODE_HOST: 172.28.0.13        # any lasair node serves CE-129
+      LASAIR_NODE_PORT: "40063"
+      LASAIR_READER_HTTP_PORT: "19990"
+    networks: { mixnet: {} }
+    restart: unless-stopped
+
+  dex:
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
+    depends_on: [builder, reader]
+    environment:
+      SERVICE_ID: "100"
+      BUILDER_URL: http://builder:19980
+      READER_URL: http://reader:19990
+      PORT: "8080"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./offchain:/app:ro
+      - ./service/jamswap-service.jam:/work/jamswap-service.jam:ro
+    working_dir: /app
+    command: ["python3", "server.py"]
+    ports:
+      - "8080:8080"
+    networks: { mixnet: {} }
+    restart: unless-stopped
 
 networks:
   mixnet:

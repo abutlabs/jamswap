@@ -32,7 +32,7 @@ Env:
   BASE_PORT  first JAMNP-S UDP port (default 40060); index i -> BASE_PORT+i
   RPC_BASE   first PolkaJam RPC port (default 19890); index i -> RPC_BASE+i
 """
-import os, sys, re, json, glob, time, shutil, subprocess
+import os, sys, json, subprocess
 
 SHARED   = os.environ.get("SHARED", "/shared")
 POLKAJAM = os.environ.get("POLKAJAM", "polkajam")
@@ -73,37 +73,24 @@ def lasair_dev_account(i):
     g = lambda k: [l.split()[1] for l in out.splitlines() if l.startswith(k)][0]
     return g("bandersnatch:"), g("peer_id:")
 
-# PolkaJam gen-keys writes the seed into its keystore dir with a timestamped name;
-# capture the newest .seed after each call.
-def pj_keystore_dir():
-    # PolkaJam writes gen-keys seeds under its config dir, which varies by OS:
-    #   Linux:  ~/.config/polkajam/polkadot/keys
-    #   macOS:  ~/Library/Application Support/polkajam/polkadot/keys
-    for base in (os.path.expanduser("~/.config/polkajam"),
-                 os.path.expanduser("~/.local/share/polkajam"),
-                 os.path.expanduser("~/Library/Application Support/polkajam")):
-        d = os.path.join(base, "polkadot", "keys")
-        if os.path.isdir(d):
-            return d
-    return None
+def dev_seed_file(idx):
+    """Write the STANDARD JAM dev-account seed (u32-LE(idx) repeated 8x, raw 32
+    bytes) where the mixed PolkaJam node loads it (--key-seed-file $SHARED/pj_i.seed).
 
-def gen_pj_key(idx):
-    # snapshot keystore, gen a key, diff to find the new seed file
-    ks = pj_keystore_dir()
-    before = set(glob.glob(os.path.join(ks, "*.seed"))) if ks else set()
-    out = subprocess.run([POLKAJAM, "gen-keys"], capture_output=True, text=True).stdout
-    pid = re.search(r"Peer ID:\s*(\S+)", out).group(1)
-    ban = re.search(r"Bandersnatch key:\s*(\S+)", out).group(1)
-    time.sleep(0.08)
-    ks = ks or pj_keystore_dir()
-    seeds = glob.glob(os.path.join(ks, "*.seed")) if ks else []
-    newf = sorted(set(seeds) - before)
-    seed = newf[-1] if newf else (max(seeds, key=os.path.getmtime) if seeds else None)
-    if not seed:
-        sys.exit("gen-keys produced no seed file; keystore=%s" % ks)
+    PolkaJam derives BYTE-FOR-BYTE the same bandersnatch key and peer_id from this
+    seed as `lasair --dev-account idx` (verified for every index) — the dev accounts
+    are a shared JAM standard both clients implement identically. Keying the PolkaJam
+    validators this way (vs random `gen-keys`) is what makes a work-report AVAILABLE
+    on a 3:3 mixed chain: availability needs a >2/3 super-majority of assurances (5 of
+    6), but a lone lasair guarantor only holds the lasair seeds. With every validator
+    keyed to a dev account, the guarantor — which derives all six dev-account secrets —
+    forges VALID assurances for the PolkaJam validators too, so the report crosses the
+    threshold and accumulates. PolkaJam still runs as the independent CLIENT; only its
+    KEY is a well-known dev account (exactly as on the all-lasair devnet)."""
     dst = os.path.join(SHARED, "pj_%d.seed" % idx)
-    shutil.copy(seed, dst)
-    return pid, ban, dst
+    with open(dst, "wb") as f:
+        f.write((idx.to_bytes(4, "little")) * 8)
+    return dst
 
 vals, nodes = [], []
 for i, role in enumerate(layout):
@@ -120,11 +107,16 @@ for i, role in enumerate(layout):
         nodes.append({"index": i, "role": "lasair", "host": host, "port": port,
                       "peer_id": pid, "identity": 100 + i, "own": i})
     elif role == "polkajam":
-        pid, ban, seed = gen_pj_key(i)
+        # PolkaJam validator keyed by the SAME standard dev account a lasair validator
+        # would use (identical derivation, see dev_seed_file). It still runs the
+        # PolkaJam CLIENT — only the key is a well-known dev account, which lets the
+        # lasair guarantor forge valid availability assurances for it (>2/3 threshold).
+        ban, pid = lasair_dev_account(i)
+        dev_seed_file(i)
         vals.append({"peer_id": pid, "bandersnatch": ban, "net_addr": net})
         nodes.append({"index": i, "role": "polkajam", "host": host, "port": port,
                       "rpc": RPCBASE + i, "peer_id": pid,
-                      "seed": os.path.basename(seed), "own": i})
+                      "seed": "pj_%d.seed" % i, "own": i})
     else:
         sys.exit("unknown client in LAYOUT: %r" % role)
 
@@ -155,6 +147,30 @@ for n in nodes:
 
 spec = json.load(open(spec_path))
 assert "genesis_header" in spec and "genesis_state" in spec, list(spec.keys())
+
+# Seed the jamswap service into the SHARED genesis (the genesis-config "deploy"
+# for a mixed chain): every client — lasair AND PolkaJam — then starts with the
+# service on-chain. State-only: the genesis_header (and so the genesis hash the
+# ALPN embeds) is unchanged. Skipped when no SERVICE is mounted.
+service = os.environ.get("SERVICE", "")
+if service and os.path.exists(service):
+    r = subprocess.run([LASAIR, "--inject-service-spec", spec_path,
+                        "--service", service,
+                        "--service-id", os.environ.get("SERVICE_ID", "100")],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit("service injection failed: %s\n%s" % (r.stdout, r.stderr))
+    print(r.stdout.strip())
+    spec = json.load(open(spec_path))
+
+# The ALPN embeds the genesis hash = blake2b256(genesis_header bytes); write its
+# 4-byte prefix so off-chain bridges (jamnp-builder / lasair-reader) can match
+# the chain without a per-genesis hardcoded env.
+import hashlib
+gh = bytes.fromhex(spec["genesis_header"])
+open(os.path.join(SHARED, "genesis_hex"), "w").write(
+    hashlib.blake2b(gh, digest_size=32).hexdigest()[:8])
+
 open(os.path.join(SHARED, "ready"), "w").write("ok")
 print("mixed genesis ready: %d validators (%s), %d state entries; bootnode %s"
       % (len(vals), LAYOUT, len(spec["genesis_state"]), topo["bootnode"]))

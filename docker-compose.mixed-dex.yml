@@ -1,0 +1,43 @@
+# Functional-DEX overlay for the mixed lasair+PolkaJam network.
+#
+#   LASAIR_IMAGE=lasair:local docker compose \
+#       -f docker-compose.mixed.yml -f docker-compose.mixed-dex.yml up -d
+#   (or: make mixed-dex / make mixed-dex-local)
+#
+# WHY THIS EXISTS
+# --------------
+# The base docker-compose.mixed.yml runs an EQUAL 3 PolkaJam / 3 lasair split — a
+# consensus-comparison testbed where both clients author, seal (Safrole tickets),
+# and import each other's blocks apples-to-apples (that's what the Grafana
+# dashboards measure). On that equal split the jamswap SERVICE is deployed and its
+# UI is live, but TRADES DO NOT SETTLE on-chain. Reason: a JAM work-report only
+# accumulates once it is AVAILABLE, which needs a >2/3 super-majority of assurances
+# (5 of 6 on tiny) landed on the canonical branch within the U=5-slot availability
+# window. Only lasair can produce those assurances (it derives every dev-account
+# key). At 3:3 the lasair guarantor's guarantee+assurance blocks race PolkaJam's
+# blocks under longest-chain fork choice and get orphaned before the window closes,
+# so guarantees form but never accumulate. (A 4:2 lasair majority still loses the
+# race often enough to fail; verified.)
+#
+# WHAT THIS OVERLAY DOES
+# ----------------------
+# Give lasair an AUTHORING super-majority so its branch is effectively linear and
+# the guarantee+assurance dance always completes within U: the guarantor node lm3
+# authors validators 1-5 (pj0 keeps validator 0). The PolkaJam validator pj0 still
+# runs the independent client and imports/derives the same state — it just authors
+# negligibly. lm4/lm5/pj1/pj2 are gated behind an unused profile so they never
+# start (they would equivocate on the indices lm3 now authors). Every validator is
+# keyed to a standard dev account (see mixed/gen-spec.py), so lm3 legitimately holds
+# all six secrets and forges VALID assurances for pj0 too.
+#
+# Result: register / deposit / withdraw accumulate on-chain (mixed/verify or
+# `make verify` after the chain reaches ticket-seal steady state).
+services:
+  lm3:
+    environment:
+      OWN: "1,2,3,4,5"          # guarantor authors the whole lasair-dominant chain
+      GUARANTOR_OWN: "1,2,3,4,5" # ... and signs assurances as any assigned validator
+  lm4: { profiles: ["equal-split-only"] }
+  lm5: { profiles: ["equal-split-only"] }
+  pj1: { profiles: ["equal-split-only"] }
+  pj2: { profiles: ["equal-split-only"] }
