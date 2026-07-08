@@ -12,6 +12,7 @@ balance/state reads. Stdlib only (http.server, urllib, struct).
 import hashlib, json, os, secrets, struct, subprocess, threading, time, urllib.request
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import metrics                     # /metrics + the submit->settle pending ledger
 from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
 from clearing import clear        # builder-side clearing (mirrors refine); for per-order fill receipts
 from treasury import (jamkb_rent, profit_split, max_withdrawable, solvency, reserve_target,
@@ -160,10 +161,18 @@ def _post_json(url, body):
     req = urllib.request.Request(url, data=data,
         headers={"content-type": "application/json"}, method="POST")
     return json.loads(urllib.request.urlopen(req, timeout=30).read())
-def submit(payload):
+# payload tag byte -> human op name, for the metrics ledger (matches the TAG_* consts)
+TAG_NAMES = {0: "match", 1: "deposit", 2: "commit", 3: "reveal", 4: "cancel", 5: "withdraw",
+             6: "list", 7: "register", 8: "treasury", 9: "enc_setup", 10: "enc_commit",
+             11: "enc_round", 12: "round", 13: "carry_commit", 14: "carry_enc_commit"}
+def submit(payload, check=None, detail=""):
     # STANDARD path when BUILDER_URL is set: the builder daemon wraps this payload in a
     # GP work-package and submits it to the guarantor over CE-133/QUIC. Otherwise the
     # operator-RPC /item route (single-node harness / backward-compatible).
+    # Every relay is recorded in the pending ledger (by its tag byte); ops whose caller
+    # supplies a settle predicate are tracked submit->state-visible (/api/pending +
+    # the jamswap_settle_latency_seconds histogram).
+    metrics.track(TAG_NAMES.get(payload[0], f"tag{payload[0]}"), detail, check)
     if BUILDER_URL:
         return _post_json(BUILDER_URL + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
     return node(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
@@ -195,7 +204,11 @@ def book_of(m):
 
 # ---- API handlers ---------------------------------------------------------
 def api_deposit(b):
-    submit(bytes([1]) + struct.pack("<IIQ", int(b["account"]), int(b["asset"]), to_atomic(b["amount"])))
+    acct, asset, amount = int(b["account"]), int(b["asset"]), to_atomic(b["amount"])
+    before = bal(asset, acct)
+    submit(bytes([1]) + struct.pack("<IIQ", acct, asset, amount),
+           check=lambda: bal(asset, acct) >= before + amount,
+           detail=f"account {acct} +{disp(amount)} asset {asset}")
     return {"ok": True}
 def api_withdraw(b):
     # signed + replay-proof: the client signs canon(withdraw, handle, asset, amount, nonce)
@@ -203,13 +216,17 @@ def api_withdraw(b):
     handle, asset, nonce = int(b["account"]), int(b["asset"]), int(b["nonce"])
     amount = int(b["amount_atomic"])   # client scales + signs the atomic amount
     sig = bytes.fromhex(b["sig"])
-    submit(bytes([TAG_WITHDRAW]) + struct.pack("<IIQQ", handle, asset, amount, nonce) + sig)
+    submit(bytes([TAG_WITHDRAW]) + struct.pack("<IIQQ", handle, asset, amount, nonce) + sig,
+           check=lambda: nonce_of(handle) > nonce,     # the service bumps the nonce on settle
+           detail=f"account {handle} -{disp(amount)} asset {asset}")
     return {"ok": True, "balance": disp(bal(asset, handle))}
 def api_cancel(b):
     # signed cancel of a RESTING (on-chain) order: canon(cancel, handle, market, oid, nonce)
     handle, market, oid, nonce = int(b["account"]), int(b["market"]), int(b["order_id"]), int(b["nonce"])
     sig = bytes.fromhex(b["sig"])
-    submit(bytes([TAG_CANCEL]) + struct.pack("<IIIQ", handle, market, oid, nonce) + sig)
+    submit(bytes([TAG_CANCEL]) + struct.pack("<IIIQ", handle, market, oid, nonce) + sig,
+           check=lambda: nonce_of(handle) > nonce,
+           detail=f"account {handle} cancel order {oid} market {market}")
     return {"ok": True}
 def api_register(b):
     # bind an ed25519 pubkey to an account handle: canon(register, pubkey) signed by that key
@@ -219,7 +236,9 @@ def api_register(b):
         # already on-chain: re-submitting builds a work-package byte-identical to the one
         # that registered this key, which GP rejects as duplicate_package — don't relay it
         return {"ok": True, "handle": h}
-    submit(bytes([TAG_REGISTER]) + pubkey + sig)
+    submit(bytes([TAG_REGISTER]) + pubkey + sig,
+           check=lambda: handle_of(pubkey) is not None,
+           detail=f"pubkey {pubkey.hex()[:12]}..")
     return {"ok": True, "handle": None}                # None until accumulate lands
 def api_handle(q):
     return {"handle": handle_of(bytes.fromhex(q["pubkey"]))}
@@ -907,10 +926,16 @@ def api_executions(q):
     dq = executions.get(acct, ())
     return {"executions": list(reversed(list(dq)))[:100]}
 
+def api_pending(q):
+    # the submit->settle ledger (docs/OBSERVABILITY_PLAN.md phase 0): where every
+    # relayed op sits right now — pending / settled (+latency) / timed_out.
+    return {"pending": metrics.pending_snapshot()}
+
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
               "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
               "/api/govnonce": api_govnonce, "/api/treasury_status": api_treasury_status,
-              "/api/trades": api_trades, "/api/executions": api_executions}
+              "/api/trades": api_trades, "/api/executions": api_executions,
+              "/api/pending": api_pending}
 
 def has_expired(m):
     now = time.time()
@@ -957,9 +982,17 @@ class H(BaseHTTPRequestHandler):
                     time.sleep(1.5)
             except (BrokenPipeError, ConnectionResetError, OSError):
                 return
+        if path == "/metrics":               # Prometheus text exposition (plan phase 1)
+            self._send(200, metrics.render().encode(), "text/plain; version=0.0.4")
+            return
         if path in ROUTES_GET:
-            try: self._send(200, json.dumps(ROUTES_GET[path](q)).encode())
-            except Exception as e: self._send(500, json.dumps({"error": str(e)}).encode())
+            try:
+                self._send(200, json.dumps(ROUTES_GET[path](q)).encode())
+                metrics.inc("jamswap_api_requests_total", {"route": path, "code": 200})
+            except Exception as e:
+                self._send(500, json.dumps({"error": str(e)}).encode())
+                metrics.inc("jamswap_api_requests_total", {"route": path, "code": 500})
+                metrics.inc("jamswap_api_errors_total", {"route": path})
         else:
             fn = "index.html" if path == "/" else path.lstrip("/")
             try:
@@ -973,8 +1006,13 @@ class H(BaseHTTPRequestHandler):
         ln = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(ln) or b"{}")
         if path in ROUTES_POST:
-            try: self._send(200, json.dumps(ROUTES_POST[path](body)).encode())
-            except Exception as e: self._send(500, json.dumps({"error": str(e)}).encode())
+            try:
+                self._send(200, json.dumps(ROUTES_POST[path](body)).encode())
+                metrics.inc("jamswap_api_requests_total", {"route": path, "code": 200})
+            except Exception as e:
+                self._send(500, json.dumps({"error": str(e)}).encode())
+                metrics.inc("jamswap_api_requests_total", {"route": path, "code": 500})
+                metrics.inc("jamswap_api_errors_total", {"route": path})
         else:
             self._send(404, json.dumps({"error": "no route"}).encode())
 
@@ -1014,6 +1052,20 @@ if __name__ == "__main__":
     try: ensure_markets(); ensure_reserve(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)
     ensure_committee()
+    # service-state gauges, read lazily per scrape (a failed CE-129 read skips the sample)
+    metrics.gauge_fn("jamswap_accounts_registered",
+                     "account handles assigned on-chain (nexthandle - 1)",
+                     lambda: max(0, int.from_bytes(storage(b"nexthandle") or b"\x01", "little") - 1))
+    metrics.gauge_fn("jamswap_treasury_jamkb_atomic",
+                     "treasury JAMKB balance in atomic units",
+                     lambda: bal(JAMKB, FEE_ACCOUNT))
+    metrics.gauge_fn("jamswap_treasury_reserve_target_atomic",
+                     "JAMKB the treasury must hold to back its footprint (atomic)",
+                     lambda: reserve_target_atomic())
+    metrics.gauge_fn("jamswap_resting_orders",
+                     "resting orders across all on-chain books",
+                     lambda: sum(len(book_of(m)) for m, _b, _q in DEFAULT_MARKETS))
+    metrics.start_watcher()
     threading.Thread(target=auction_loop, daemon=True).start()
     print(f"auction loop running every {AUCTION_SECS}s (like JAM block production)")
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

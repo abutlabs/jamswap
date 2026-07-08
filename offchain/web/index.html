@@ -451,12 +451,34 @@ async function loadOrCreateKey(ns){
 async function signBytes(msg){
   return new Uint8Array(await crypto.subtle.sign({name:"Ed25519"}, state.wallet.key, msg));
 }
-// Register the account key → handle (idempotent server-side); polls until accumulate lands.
+// Register the account key → handle (idempotent server-side), then poll until the
+// registration ACCUMULATES. On the mixed lasair+PolkaJam chain settlement takes slots
+// (sometimes minutes right after launch — see docs/MIXED_CHAIN_DEX_SETTLEMENT.md), so
+// this polls with backoff for up to 4 minutes and reports progress instead of asking
+// the user to re-click. Re-entry while a registration is in flight does NOT re-submit
+// (the payload is byte-identical; the chain drops duplicates) — it just keeps polling.
+const regInflight = {};                 // pubhex -> true while submitted-but-unsettled
 async function registerAccount(){
   const pub = state.wallet.pub, pubhex = hexRaw(pub);
-  const sig = await signBytes(canonBytes("register", pub));
-  await api("/api/register", { pubkey:pubhex, sig:hexRaw(sig) });
-  for (let i=0;i<15;i++){ const r=await api("/api/handle?pubkey="+pubhex); if (r && r.handle!=null){ state.handle=r.handle; return true; } await sleep(500); }
+  const r0 = await api("/api/handle?pubkey="+pubhex);   // already on-chain?
+  if (r0 && r0.handle!=null){ state.handle=r0.handle; return true; }
+  if (!regInflight[pubhex]){
+    regInflight[pubhex] = true;
+    const sig = await signBytes(canonBytes("register", pub));
+    await api("/api/register", { pubkey:pubhex, sig:hexRaw(sig) });
+  }
+  const t0 = Date.now(), name = (state.wallet.selected && state.wallet.selected.name) || "account";
+  for (let i=0; Date.now()-t0 < 240000; i++){
+    const r = await api("/api/handle?pubkey="+pubhex);
+    if (r && r.handle!=null){
+      delete regInflight[pubhex];
+      if (state.wallet && hexRaw(state.wallet.pub)===pubhex){ state.handle=r.handle; }
+      return true;
+    }
+    if (i===7) toast(name+" registering — settlement takes a few slots on the mixed chain, hang tight…", "ok");
+    await sleep(i<15 ? 2000 : 5000);
+  }
+  delete regInflight[pubhex];
   return false;
 }
 
@@ -473,7 +495,7 @@ async function connectAccount(){
     const address = "jam:" + hexRaw(kp.pub).slice(0, 16);
     state.wallet = { key: kp.key, pub: kp.pub, selected: { address, name: "JAM account" } };
     if (await registerAccount()) toast("Account ready.", "ok");
-    else toast("Registration pending — click your account again in a moment.", "err");
+    else toast("Registration did not settle in 4 min — the chain may be stalled (see /api/pending).", "err");
     renderWallet(); refreshBals(); refreshMine(); refreshExecs();
   } catch(e){ toast("Account setup failed: "+(e && e.message ? e.message : e)+" — this browser needs WebCrypto Ed25519 (Chrome 137+/Safari 17+).", "err"); }
 }
@@ -524,7 +546,7 @@ async function switchIdentity(sel){
     state.wallet = { key, pub, selected:{ address:"jam:"+acct.pub.slice(0,16), name:acct.name } };
     state.handle = null; renderWallet();
     if (await registerAccount()) toast("Trading as "+acct.name+".", "ok");
-    else toast(acct.name+" registration pending — reselect in a moment.", "err");
+    else toast(acct.name+" registration did not settle in 4 min — the chain may be stalled (see /api/pending).", "err");
     renderWallet(); refreshBals(); refreshMine(); refreshExecs();
   } catch(e){ toast("Switch to "+acct.name+" failed: "+(e && e.message ? e.message : e), "err"); }
 }

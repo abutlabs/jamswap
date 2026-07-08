@@ -19,3 +19,15 @@ scrape_configs:
         labels: { node: lm4, client: lasair }
       - targets: ["lm5:9615"]
         labels: { node: lm5, client: lasair }
+
+  # The jamswap SERVICE layer (docs/OBSERVABILITY_PLAN.md phase 1):
+  # dex = API + submit->settle ledger (headline: jamswap_settle_latency_seconds);
+  # builder = per-guarantor CE-133 fan-out outcomes; canary = the 5-min e2e probe.
+  - job_name: jamswap
+    static_configs:
+      - targets: ["dex:8080"]
+        labels: { component: dex }
+      - targets: ["builder:19980"]
+        labels: { component: builder }
+      - targets: ["canary:9110"]
+        labels: { component: canary }

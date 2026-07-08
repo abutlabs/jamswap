@@ -79,10 +79,10 @@ mixed-dex-local: build-local
 # Only the three monitoring services are touched — the net itself (and whatever
 # image it runs, published or lasair:local) is left exactly as it is.
 monitor:
-	docker compose $(MONITOR) up -d --build exporter prometheus grafana
+	docker compose $(MONITOR) up -d --build exporter prometheus grafana canary
 
 monitor-down:
-	docker compose $(MONITOR) rm -sf exporter prometheus grafana
+	docker compose $(MONITOR) rm -sf exporter prometheus grafana canary
 
 # E2E smoke test against the RUNNING default stack: register -> handle, duplicate
 # work-packages survived, faucet deposit, signed withdraw. Fresh account per run.

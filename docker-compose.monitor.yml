@@ -21,6 +21,23 @@ services:
     networks: { mixnet: {} }
     restart: unless-stopped
 
+  canary:
+    # the 5-minute end-to-end probe: fresh account -> register -> deposit, settlement
+    # polled through the public API (docs/OBSERVABILITY_PLAN.md phase 1). Reuses the
+    # dex image (same deps); ./offchain is mounted like the dex so edits apply live.
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
+    command: ["python3", "canary.py"]
+    environment:
+      DEX_URL: http://dex:8080
+      CANARY_INTERVAL: "300"
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./offchain:/app:ro
+    networks: { mixnet: {} }
+    restart: unless-stopped
+
   prometheus:
     image: prom/prometheus:v3.4.1
     command: ["--config.file=/etc/prometheus/prometheus.yml"]
