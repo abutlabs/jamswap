@@ -36,7 +36,14 @@ def get(path):
     return json.load(urllib.request.urlopen(DEX + path, timeout=30))
 
 
-def wait(pred, what, tries=40, delay=0.5):
+def wait(pred, what, tries=None, delay=0.5):
+    # On a CONTESTED mixed chain (equal 3:3 split) settlement needs ~2 lasair-
+    # authored canonical blocks (guarantee, then assure-any-pending) ≈ 4 slots
+    # expected at 6 s/slot, plus re-guarantee retries after lost fork races —
+    # so the window must comfortably exceed one U=5-slot cycle. 90 s covers
+    # several retry rounds; the fast path still returns on first success.
+    if tries is None:
+        tries = int(os.environ.get("VERIFY_WAIT_TRIES", "180"))
     for _ in range(tries):
         v = pred()
         if v is not None:

@@ -1,10 +1,16 @@
-# Mixed-chain DEX settlement — problem, root cause, and open avenues
+# Mixed-chain DEX settlement — problem, root cause, and resolution
 
-**Status:** partially resolved. A lasair-dominant mixed chain (`make mixed-dex`)
-settles trades end-to-end today. An **equal 3 PolkaJam / 3 lasair** mixed chain
-(`make mixed`) deploys the service and forms guarantees but **cannot settle trades**.
-This document explains why, records the evidence, and lists avenues for making the
-equal split (or any genuinely balanced mixed chain) settle trades too.
+**Status: RESOLVED (2026-07-08).** The **equal 3 PolkaJam / 3 lasair** mixed chain
+(`make mixed`) now settles trades end-to-end — `verify` ALL PASS (register /
+duplicate-survival / deposit / withdraw), reproduced twice on a fresh chain. The fix
+is the tier-1 plan from
+[Research findings (2026-07-08)](#research-findings-2026-07-08--path-to-a-settling-33-chain):
+a fork-choice-aware guarantor (descend-check + re-guarantee on branch loss),
+**assure-any-pending-when-authoring**, and the builder fanning CE-133 out to all
+three lasair nodes. Requires lasair built from source (`make mixed-local`) until the
+next client release. The lasair-dominant `mixed-dex` overlay is no longer needed for
+settlement but remains as a near-linear-chain configuration. The body below is kept
+as the root-cause record and the map of longer-term avenues (real DA, CE-135/141).
 
 ---
 
@@ -115,6 +121,7 @@ slots. On an equal 3:3 chain:
 | 3 : 3 (equal) | `make mixed`, each lm node owns 1 validator | contested, frequent forks | ❌ guarantee orphaned / times out |
 | 4 : 2 | lm3 owns 2,3,4,5; pj0,pj1 own 0,1 | pj's 1/3 forks often | ❌ still races out of the window |
 | 5 : 1 | `make mixed-dex`: lm3 owns 1–5; pj0 owns 0 | near-linear (lasair authors ~all) | ✅ **all PASS** |
+| **3 : 3 (equal), tier-1 fix** | `make mixed-local` with the fork-choice-aware guarantor + assure-any-pending + builder fan-out | contested, frequent forks | ✅ **all PASS** (2026-07-08, ×2) |
 
 `verify` PASS = register / duplicate-survival / deposit / withdraw all accumulate.
 
@@ -211,26 +218,166 @@ gives up).
   far points to **orphaning** (pj logs show no guarantee-block rejection, only benign
   `finality lagging`; the guarantee slot is simply skipped in the import sequence).
   Confirm by forcing pj to build on a known lm3 guarantee block and checking it extends it.
-- With `--finality-mode dummy`, is there **any** finality signal that could pin lasair's
-  branch? If PolkaJam supports a real finality mode on the devnet, that might stop the
-  orphaning.
+- ~~With `--finality-mode dummy`, is there **any** finality signal that could pin lasair's
+  branch?~~ **Answered (2026-07-08):** PolkaJam (nightly-2026-07-04) has
+  `--finality-mode grandpa` per `polkajam run --help` — real GRANDPA. Unusable for now:
+  lasair has **no** finality implementation at all (`lib/best_chain.ml` models GRANDPA-aware
+  fork choice but is dead code; the node runs pure longest-chain), and 3 pj voters can't
+  reach the 2/3 GRANDPA threshold alone.
 - Minimum lasair authoring share for reliable settlement: 5:1 works, 4:2 doesn't — is
   there a threshold in between, and does it depend on ticket-seal vs. AURA phase?
+  **Partially answered:** the 4:2 failure is largely explained by the wedge bug below
+  (one lost race pins the guarantor forever), so the "threshold" measured to date
+  conflates fork-choice odds with a client bug.
+
+---
+
+## Research findings (2026-07-08) — path to a settling 3:3 chain
+
+A deep pass over both codebases, the running containers, the spec blob, and the JAMNP-S
+protocol spec produced four findings that reshape the avenues above.
+
+### F1. No coordination is needed to assure: pending reports are *in state*
+
+Avenue #2 assumed lasair nodes need a control-plane message ("please assure report R").
+They don't. A pending report lives in **on-chain state (ρ, the pending-cores array)** —
+so any lasair node, when it authors, can scan its **parent block's state** and forge
+assurances for *every* pending report, whether or not it guaranteed it
+("assure-any-pending"). Two rules that killed the naive approaches are satisfied
+automatically when the author includes its own assurances:
+
+- **anchor == parent** (`stf_guarantees.ml:1741`): the author anchors on the parent of
+  the block it is building — trivially correct.
+- **core_not_engaged** (`stf_guarantees.ml:1747`): the author reads pending cores from
+  the exact state it extends — it can only assure genuinely pending reports.
+
+On a 3:3 split lasair's *combined* authoring is ~1/2, so once a guarantee is canonical
+the probability that **no** lasair node authors a canonical descendant within the 5-slot
+window is ~(1/2)⁵ ≈ 3% per attempt — versus ~(5/6)⁵ ≈ 40% with lm3 alone today.
+
+### F2. Bug: the guarantor wedges permanently after one lost race
+
+`plan_service_ext` gates the assurance on `Bt.find_node tree ghead <> None`
+(`bin/lasair_client.ml:987`) — a pure **membership** check against a table that never
+evicts, not a *descends-from* check. Once the guarantee block is orphaned, every
+subsequent own slot re-attempts the same doomed assurance (`core_not_engaged` forever).
+Worse, the self-import-rejection path (`bin/lasair_client.ml:1080-1091`) never clears
+`awaiting`, and the original payload is discarded after refine — so there is **no
+re-guarantee path at all**. One lost race wedges the pipeline permanently. This alone
+plausibly explains the 4:2 failure. Fork choice, for reference, is pure longest-chain
+with lowest-header-hash tie-break (`jamnp/block_tree.ml:81-83`).
+
+### F3. `U` is carried in the spec's `protocol_parameters` (byte offset 90)
+
+Decoded the live spec blob from a running pj0: it is the graypaper parameter set in
+alphabetical field order, and **U=5 sits at byte offset 90** (u16, between R=4/T=128 and
+V=6). PolkaJam *generates* this blob (`polkajam gen-spec`) and the same binary runs
+polkadot/dev/toaster chains, so it almost certainly **reads U from the spec**. Lasair
+ignores the blob and hardcodes `u_timeout = 5` (`lib/pvm_host.ml:110`; mirrors at
+`lib/reporting.ml:20`, `conformance/reports_stf.ml:721`) — but its own encoder
+(`pvm_host.ml:170`) already writes the identical layout. So avenue #3 (longer window) is
+**not** blocked on PolkaJam cooperation: bump lasair's constant, byte-patch the blob in
+`gen-spec.py`, and verify pj honors it (observable in minutes: do reports still clear at
++5 slots?).
+
+### F4. The protocol-correct path is CE-135 + CE-141, and it's half-plumbed
+
+Per JAMNP-S: **CE 135** distributes guaranteed work-reports *guarantor → all current
+validators*, and **CE 141** distributes assurances *assurer → all possible block authors*
+(~2s before each slot). In spec-correct JAM, **PolkaJam-authored blocks are supposed to
+carry lasair's guarantees and assurances** — the "lasair must own the branch" constraint
+exists only because lasair never sends these. Current lasair state: CE-141 receive is
+log-only (`bin/lasair_client.ml:888-896`), an outbound `distribute_assurance` stub exists
+unused (`jamnp/transport.ml:303-306`), CE-135 is absent entirely, `erasure_root` is
+hardcoded zero (`conformance/live_guarantee.ml:106`), and the availability shard store is
+never populated. Whether pj includes externally received extrinsics is black-box but it
+is the standard flow, and cheaply testable.
+
+Also verified: **duplicate guarantees on different branches are benign** — the
+`duplicate_package` check (`stf_guarantees.ml:1847-1889`) is computed entirely from the
+branch being extended, so the same package guaranteed on two competing branches never
+conflicts. Same-branch duplicates are rejected and dropped as today.
+
+### Ranked plan
+
+| Tier | Change | Effort | What it buys |
+|---|---|---|---|
+| **1a** | Fix the wedge: descend-from check + clear/re-guarantee on branch loss (stash payload with `awaiting`) | small–medium, lasair only | stops permanent wedging; retries until a branch wins |
+| **1b** | **Assure-any-pending-when-authoring** (F1) | small, lasair only | any of 3 lasair authors (~1/2 of slots) completes the assurance step |
+| **1c** | Builder fans CE-133 out to lm3/lm4/lm5 | tiny, jamswap only | any lasair author can also complete the guarantee step (F4 dedup makes duplicates benign) |
+| 2 | Raise U in the devnet spec (F3) | small + one experiment | insurance: widens the window if 3:3 forking is nastier than modeled |
+| 3 | Outbound CE-135 + CE-141 (F4) | medium | pj-authored blocks advance the dance too — protocol-correct |
+| 4 | Real DA: populate shards, real `erasure_root`, pj genuinely assures | large | the honest long-term fix |
+
+Tier 1 (a+b+c) needs **no PolkaJam changes, no consensus-parameter changes, and no new
+network protocol**, and should make a genuine 3:3 chain settle with high probability per
+window, with 1a's retry covering the tail.
+
+### Tier 1: SHIPPED and verified (2026-07-08)
+
+All three pieces landed (lasair working tree + this repo) and `verify` passes twice in a
+row on a fresh equal 3:3 chain. What changed:
+
+**lasair** (needs a source build until the next client release — `make mixed-local`):
+
+- `jamnp/block_tree.ml` — new `is_ancestor` (descent test; `imported` membership is NOT
+  canonicality, orphans stay in the table forever). Unit-tested in
+  `test/block_tree_test.ml` ("is_ancestor: descent, not membership").
+- `bin/lasair_client.ml` `plan_service_ext` rewritten around three moves:
+  1. **assure-any-pending** — every authored block assures ALL reports pending in the
+     parent state's rho (multi-core bitfield), not just the node's own in-flight one.
+     Anchor==parent and core-engagement are correct by construction; the 5-of-6
+     assurer set crosses the super-majority in a single block.
+  2. **re-guarantee on branch loss / timeout** — `awaiting` now carries the payload;
+     when the guarantee block stops being an ancestor of the head (or its report
+     cleared without landing in the accumulated ring ξ), the payload is re-queued.
+     The self-import-rejected path routes on the importer's reason (captured via
+     `on_reject`): `duplicate_package` drops, anything else re-queues — the old path
+     dropped unconditionally AND left `awaiting` pointing at the dead branch forever.
+  3. **drain-pop dedup** — queued items already reported/accumulated on the branch
+     being extended are dropped without costing the slot (guaranteeing one would get
+     the whole authored block rejected as `duplicate_package`, forfeiting that slot's
+     assurances too). Found live: stale duplicates ahead of a deposit each burned an
+     authored slot and pushed settlement past the verify window.
+- `bin/jamnp_builder.ml` — `LASAIR_GUARANTOR_HOST`/`PORT` accept comma-separated
+  lists; every `/submit` fans the work-package out to ALL targets.
+
+**jamswap**:
+
+- `docker-compose.mixed.yml` — lm4/lm5 get `GUARANTOR_OWN: "3,4,5"`; the builder
+  targets `172.28.0.13,.14,.15` on ports `40064,40065,40066` (each node's PORT+1).
+- `docker-compose.mixed-dex.yml` — overlay pins the builder back to lm3 only (lm4/lm5
+  don't run there).
+- `offchain/verify.py` — accumulate-wait window widened to 90 s (`VERIFY_WAIT_TRIES`
+  overridable): on the contested chain settlement legitimately takes ~4+ slots.
+
+Observed on the live equal split: guarantees forming on lm3/lm4/lm5, `guarantee block
+0x.. lost fork choice; re-queueing work-item` firing and recovering, duplicate drops,
+and all four verify steps accumulating. Tiers 2–4 above remain as follow-ups: raising
+`U` is now optional insurance, CE-135/141 distribution is the protocol-correct
+evolution, real DA the long-term fix.
 
 ---
 
 ## How to reproduce
 
 ```sh
-# Equal split — DEX deployed, UI up, but trades DON'T settle:
-make mixed                       # or: docker compose -f docker-compose.mixed.yml up
-#   watch it fail to accumulate (after the chain has some slots):
+# Equal split with the tier-1 fix — trades SETTLE (lasair from source until the
+# next client release; wait ~1-2 epochs for ticket-seal steady state):
+make mixed-local
+docker compose -f docker-compose.mixed.yml exec -T dex python3 /app/verify.py
+#   -> ALL PASS: register / duplicate-survival / deposit / withdraw
+#   watch the mechanism work:
+docker logs jamswap-lm4-1 | grep ce133
+#   -> guaranteed / lost fork choice; re-queueing / already in this branch's pipeline
+
+# Equal split on a PRE-FIX published lasair image — reproduces the original failure:
+LASAIR_IMAGE=ghcr.io/abutlabs/lasair:1.6.2 make mixed
 docker compose -f docker-compose.mixed.yml exec -T dex python3 /app/verify.py
 #   -> FAIL: timed out waiting for register to accumulate
-#   inspect the guarantor:
 docker logs jamswap-lm3-1 | grep -E "ce133|core_not_engaged|guaranteed"
 
-# Lasair-dominant — trades DO settle (wait ~1-2 epochs for ticket-seal steady state):
+# Lasair-dominant (near-linear chain; no longer needed for settlement):
 make mixed-dex
 docker compose -f docker-compose.mixed.yml exec -T dex python3 /app/verify.py
 #   -> ALL PASS: register / duplicate-survival / deposit / withdraw

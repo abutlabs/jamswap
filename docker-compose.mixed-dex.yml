@@ -4,7 +4,12 @@
 #       -f docker-compose.mixed.yml -f docker-compose.mixed-dex.yml up -d
 #   (or: make mixed-dex / make mixed-dex-local)
 #
-# WHY THIS EXISTS
+# NOTE (2026-07-08): with the tier-1 settlement fix (fork-choice-aware guarantor +
+# assure-any-pending + builder fan-out; lasair source build) the EQUAL split settles
+# trades too — this overlay is no longer required for settlement. It remains as the
+# near-linear-chain configuration. docs/mixed_chain_dex_settlement.md has the story.
+#
+# WHY THIS EXISTS (historical)
 # --------------
 # The base docker-compose.mixed.yml runs an EQUAL 3 PolkaJam / 3 lasair split — a
 # consensus-comparison testbed where both clients author, seal (Safrole tickets),
@@ -41,3 +46,8 @@ services:
   lm5: { profiles: ["equal-split-only"] }
   pj1: { profiles: ["equal-split-only"] }
   pj2: { profiles: ["equal-split-only"] }
+  builder:
+    environment:
+      # lm4/lm5 never start in this overlay — submit to lm3 only
+      LASAIR_GUARANTOR_HOST: 172.28.0.13
+      LASAIR_GUARANTOR_PORT: "40064"

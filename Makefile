@@ -10,12 +10,14 @@
 #   make verify-mixed   # health check against the RUNNING mixed net
 #   make down           # stop whichever stack is up (all compose files)
 #
-# TWO MIXED MODES (a mixed chain can't be both at once — see docker-compose.mixed-dex.yml):
+# TWO MIXED MODES (see docker-compose.mixed-dex.yml + docs/mixed_chain_dex_settlement.md):
 #   mixed      EQUAL split: both clients author/seal/import apples-to-apples; the
-#              Grafana dashboards compare them. DEX service deployed + UI live, but
-#              trades DON'T settle (availability can't reach >2/3 on a contested chain).
-#   mixed-dex  lasair authors the canonical chain so work-reports become available
-#              and register/deposit/withdraw ACCUMULATE. pj0 co-validates (imports).
+#              Grafana dashboards compare them. With lasair >= the tier-1 settlement
+#              fix (source build: make mixed-local) trades ALSO SETTLE here — the
+#              fork-choice-aware guarantor + assure-any-pending + builder fan-out
+#              complete availability on the contested chain.
+#   mixed-dex  lasair authors a near-linear canonical chain (pj0 co-validates).
+#              Historical: was the only settling mode before the tier-1 fix.
 #
 # Pre-push flow for a lasair change:  make local && make verify
 #                                     make mixed-dex-local && make verify   (after ~1 epoch)

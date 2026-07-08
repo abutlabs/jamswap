@@ -85,11 +85,15 @@ services:
     environment:
       SPEC: /shared/spec.json
       OWN: "3"
-      # lm3 is the sole guarantor the builder submits to (LASAIR_GUARANTOR_HOST).
-      # A guarantee needs >=2 validators assigned to one core; lm3 authors only as
-      # val 3 but legitimately derives all lasair dev-account seeds, so it signs
-      # guarantees as the full lasair set {3,4,5} — with C=2 cores and 3 lasair
-      # validators, >=2 always share a core (pigeonhole), so a guarantee always forms.
+      # ALL THREE lm nodes are guarantors the builder fans CE-133 out to. A
+      # guarantee needs >=2 validators assigned to one core; each lm node authors
+      # only as its own index but legitimately derives all lasair dev-account
+      # seeds, so it signs guarantees as the full lasair set {3,4,5} — with C=2
+      # cores and 3 lasair validators, >=2 always share a core (pigeonhole).
+      # Whichever lm node authors on the WINNING branch reports the package, and
+      # ANY later lm-authored block assures every report pending in the state it
+      # extends (assure-any-pending) — so the availability dance completes at the
+      # combined lasair authoring rate (~1/2 on the equal split), not one node's 1/6.
       GUARANTOR_OWN: "3,4,5"
       IDENTITY: "103"
       SERVICE: /work/jamswap-service.jam
@@ -105,6 +109,7 @@ services:
     environment:
       SPEC: /shared/spec.json
       OWN: "4"
+      GUARANTOR_OWN: "3,4,5"
       IDENTITY: "104"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"
@@ -119,6 +124,7 @@ services:
     environment:
       SPEC: /shared/spec.json
       OWN: "5"
+      GUARANTOR_OWN: "3,4,5"
       IDENTITY: "105"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"
@@ -165,8 +171,10 @@ services:
         export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
         exec /usr/local/bin/jamnp-builder
     environment:
-      LASAIR_GUARANTOR_HOST: 172.28.0.13   # lm3's CE-133 builder endpoint (port+1)
-      LASAIR_GUARANTOR_PORT: "40064"
+      # fan CE-133 out to ALL lasair nodes (each one's builder endpoint = PORT+1):
+      # whichever lm node next authors on the winning branch reports the package
+      LASAIR_GUARANTOR_HOST: 172.28.0.13,172.28.0.14,172.28.0.15
+      LASAIR_GUARANTOR_PORT: "40064,40065,40066"
       LASAIR_NODE_RPC: ""
       LASAIR_BUILDER_HTTP_PORT: "19980"
     networks: { mixnet: {} }
