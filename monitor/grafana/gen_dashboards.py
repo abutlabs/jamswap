@@ -294,8 +294,134 @@ node_view = dashboard("jam-node", "JAM node (lasair)", [
                   override("dropped", ROLE["rejected"])]),
 ], templating=node_var)
 
+# ═══════════════ SERVICE VIEW (jamswap) ═══════════════
+# The flagship-service page (docs/OBSERVABILITY_PLAN.md phase 2): the order
+# funnel from API submit to on-chain accumulate, settle latency, the tier-1
+# settlement mechanics live, service state, and the end-to-end canary.
+# Sources: dex + builder + canary /metrics (jamswap job) and the lasair
+# nodes' native ce133 counters. NOTE the fan-out asymmetry: the dex submits
+# each op ONCE but the builder fans it to all 3 lm nodes, so queued/
+# guaranteed/accumulated count node-side events, ~3x/1x/1x per op.
+OP_COLOR = {"register": "#3987e5", "deposit": "#199e70",
+            "withdraw": "#c98500", "cancel": "#9085e9"}
+op_overrides = [override(o, c) for o, c in OP_COLOR.items()]
+TRACKED = 'op=~"register|deposit|withdraw|cancel"'
+
+service_view = dashboard("jam-service", "JAMswap service", [
+    stat("Settle success (15m)",
+         f"sum(increase(jamswap_settled_total[15m])) / "
+         f"sum(increase(jamswap_submits_total{{{TRACKED}}}[15m]))", 0, 4,
+         unit="percentunit",
+         thresholds=[{"color": "red", "value": None}, {"color": "orange", "value": 0.5},
+                     {"color": "green", "value": 0.99}]),
+    stat("Settle p95 (15m)",
+         "histogram_quantile(0.95, sum by (le) "
+         "(rate(jamswap_settle_latency_seconds_bucket[15m])))", 4, 4, unit="s",
+         thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 60},
+                     {"color": "red", "value": 120}]),
+    stat("Ops in flight",
+         f"clamp_min(sum(jamswap_submits_total{{{TRACKED}}}) - sum(jamswap_settled_total)"
+         " - sum(jamswap_settle_timeouts_total), 0)", 8, 4,
+         thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 5},
+                     {"color": "red", "value": 20}]),
+    stat("Settle timeouts (1h)",
+         "sum(increase(jamswap_settle_timeouts_total[1h])) or vector(0)", 12, 4,
+         thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
+    stat("Canary last pass age",
+         "jamswap_canary_last_pass_age_seconds", 16, 4, unit="s",
+         thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 600},
+                     {"color": "red", "value": 900}]),
+    stat("Accounts on-chain", "jamswap_accounts_registered", 20, 4),
+
+    ts("Order funnel (per 5m) — dex submits once; node-side stages count all 3 lm nodes",
+       [{"expr": f"sum(increase(jamswap_submits_total{{{TRACKED}}}[5m]))",
+         "legendFormat": "submitted (dex)"},
+        {"expr": "sum(increase(lasair_ce133_queued_total[5m]))", "legendFormat": "queued (3x)"},
+        {"expr": "sum(increase(lasair_ce133_guaranteed_total[5m]))", "legendFormat": "guaranteed"},
+        {"expr": "sum(increase(lasair_ce133_accumulated_total[5m]))", "legendFormat": "accumulated"},
+        {"expr": "sum(increase(jamswap_settled_total[5m]))", "legendFormat": "settled (dex)"}],
+       0, 4, 12,
+       overrides=[override("submitted (dex)", ROLE["neutral"]),
+                  override("queued (3x)", "#9085e9"),
+                  override("guaranteed", ROLE["authored"]),
+                  override("accumulated", ROLE["imported"]),
+                  override("settled (dex)", "#008300")]),
+    ts("Settle latency — percentiles (10m) + canary e2e",
+       [{"expr": "histogram_quantile(0.50, sum by (le) "
+                 "(rate(jamswap_settle_latency_seconds_bucket[10m])))",
+         "legendFormat": "p50"},
+        {"expr": "histogram_quantile(0.95, sum by (le) "
+                 "(rate(jamswap_settle_latency_seconds_bucket[10m])))",
+         "legendFormat": "p95"},
+        {"expr": "rate(jamswap_canary_duration_seconds_sum[30m]) / "
+                 "rate(jamswap_canary_duration_seconds_count[30m])",
+         "legendFormat": "canary full cycle (avg 30m)"}],
+       12, 4, 12, unit="s",
+       overrides=[override("p50", ROLE["imported"]), override("p95", ROLE["neutral"]),
+                  override("canary full cycle (avg 30m)", ROLE["tickets"])]),
+
+    ts("Guarantee outcomes, all lm nodes (per 5m) — requeued = lost fork race or timeout",
+       [{"expr": "sum(increase(lasair_ce133_guaranteed_total[5m]))", "legendFormat": "guaranteed"},
+        {"expr": "sum(increase(lasair_ce133_requeued_total[5m]))", "legendFormat": "requeued"},
+        {"expr": "sum(increase(lasair_ce133_dropped_total[5m]))",
+         "legendFormat": "dropped (duplicate)"}],
+       0, 12, 8,
+       overrides=[override("guaranteed", ROLE["imported"]),
+                  override("requeued", ROLE["neutral"]),
+                  override("dropped (duplicate)", ROLE["rejected"])]),
+    ts("CE-133 queue depth per lm node — sustained growth = settlement can't keep up",
+       [{"expr": "lasair_ce133_queue_depth", "legendFormat": "{{node}}"}],
+       8, 12, 8, overrides=lm_overrides),
+    ts("Availability work (per 5m): cores assured / items accumulated",
+       [{"expr": "sum(increase(lasair_ce133_assured_cores_total[5m]))",
+         "legendFormat": "cores assured"},
+        {"expr": "sum(increase(lasair_ce133_accumulated_total[5m]))",
+         "legendFormat": "accumulated"}],
+       16, 12, 8,
+       overrides=[override("cores assured", ROLE["tickets"]),
+                  override("accumulated", ROLE["imported"])]),
+
+    ts("Settle latency by op (avg, 10m)",
+       [{"expr": "sum by (op) (rate(jamswap_settle_latency_seconds_sum[10m])) / "
+                 "sum by (op) (rate(jamswap_settle_latency_seconds_count[10m]))",
+         "legendFormat": "{{op}}"}],
+       0, 20, 12, unit="s", overrides=op_overrides),
+    ts("Service state: accounts + resting orders",
+       [{"expr": "jamswap_accounts_registered", "legendFormat": "accounts"},
+        {"expr": "jamswap_resting_orders", "legendFormat": "resting orders"}],
+       12, 20, 6,
+       overrides=[override("accounts", ROLE["authored"]),
+                  override("resting orders", ROLE["neutral"])]),
+    ts("Treasury JAMKB: held vs reserve target (atomic)",
+       [{"expr": "jamswap_treasury_jamkb_atomic", "legendFormat": "held"},
+        {"expr": "jamswap_treasury_reserve_target_atomic", "legendFormat": "target"}],
+       18, 20, 6,
+       overrides=[override("held", ROLE["imported"]), override("target", ROLE["rejected"])]),
+
+    ts("API requests by route (per 5m)",
+       [{"expr": "sum by (route) (increase(jamswap_api_requests_total[5m]))",
+         "legendFormat": "{{route}}"}],
+       0, 28, 8),
+    ts("Errors: API handlers + builder per-target submit failures (per 5m)",
+       [{"expr": "sum by (route) (increase(jamswap_api_errors_total[5m]))",
+         "legendFormat": "api {{route}}"},
+        {"expr": "sum by (target) (increase(builder_submit_failures_total[5m]))",
+         "legendFormat": "builder -> {{target}}"}],
+       8, 28, 8),
+    ts("Canary cycles (per 30m)",
+       [{"expr": "sum(increase(jamswap_canary_pass_total[30m]))", "legendFormat": "pass"},
+        {"expr": "sum by (stage) (increase(jamswap_canary_fail_total[30m]))",
+         "legendFormat": "fail: {{stage}}"}],
+       16, 28, 8,
+       overrides=[override("pass", ROLE["imported"])]),
+])
+service_view["links"] = [
+    {"title": "JAM mixed network", "type": "link", "url": "/d/jam-mixed", "targetBlank": False},
+    {"title": "JAM node (lasair)", "type": "link", "url": "/d/jam-node", "targetBlank": False},
+]
+
 for name, d in (("jam-mixed.json", network), ("jam-node.json", node_view),
-                ("jam-clients.json", clients_view)):
+                ("jam-clients.json", clients_view), ("jam-service.json", service_view)):
     path = os.path.join(OUT, name)
     json.dump(d, open(path, "w"), indent=2)
     print("wrote", path, "panels:", len(d["panels"]))
