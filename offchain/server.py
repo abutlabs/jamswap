@@ -633,6 +633,11 @@ _round_gate = {}                   # market -> {"check": None, "t": ...} cooldow
 _inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
                                    #   {"check","t","sealed","public","resting","clearing"}
 ROUND_GATE_SECS = 300.0   # settle patience: queue wait + dance on the REAL shared chain is minutes, not seconds
+SETTLE_HOLD_SECS = 60.0   # durability: the cv predicate must HOLD this long before receipts —
+                          # on the finality-less contested chain a round can settle on a branch
+                          # that LOSES fork choice minutes later (observed live 2026-07-09:
+                          # volume 54 -> 0, every balance snapped back to genesis). 60 s spans
+                          # PolkaJam's dummy-finality ratchet, so what survives it stays.
 MAX_ROUND_ORDERS = 256             # per-round batch cap (refine gas ~1.31M/signed order; wire ~130 B/order)
 ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
 
@@ -675,9 +680,19 @@ def _resolve_rounds_once(now=None):
         try: done = fr["check"]()
         except Exception: continue                    # reader hiccup: retry next sweep
         if done:
-            _inflight.pop(m, None)
-            try: _finalize_round(m, fr)
-            except Exception as e: print("round finalize failed", m, e)
+            if fr.get("ok_since") is None:
+                fr["ok_since"] = now                  # first sighting on-chain: start the hold
+            elif now - fr["ok_since"] >= SETTLE_HOLD_SECS:
+                _inflight.pop(m, None)                # survived the hold window: durable
+                try: _finalize_round(m, fr)
+                except Exception as e: print("round finalize failed", m, e)
+        elif fr.get("ok_since") is not None:
+            # the predicate FLIPPED BACK: the settling branch lost fork choice —
+            # a re-org ate the round. Keep waiting (the guarantor re-queues and
+            # re-guarantees its work-item); count it so the dashboard shows it.
+            fr["ok_since"] = None
+            metrics.inc("jamswap_settle_reverted_total", {"market": str(m)})
+            print(f"round m{m}: settlement REVERTED by re-org — holding for re-settle")
         elif now - fr["t"] > ROUND_GATE_SECS:
             _inflight.pop(m, None)
             with _lock:
@@ -691,6 +706,49 @@ def _round_resolver():
         time.sleep(2.0)
         try: _resolve_rounds_once()
         except Exception as e: print("round resolver error:", e)
+
+# ---- account & market observability (Grafana: "JAMswap accounts & trading") ----
+# Polls ON-CHAIN state via the reader every 15 s into labeled gauges. The
+# conservation panels rest on one invariant: per asset, sum(dev balances) only
+# moves by faucet mints — anything else stepping that line is a settlement bug
+# or a re-org rewriting history (both worth an alarm, not a shrug).
+ACCOUNT_NAMES = {1: "Alice", 2: "Bob", 3: "Carol", 4: "David", 5: "Eve", 6: "Fergie"}
+ASSET_NAMES = {USDC: "USDC", DOT: "DOT", JAMKB: "JAMKB"}
+metrics.describe("jamswap_balance", "on-chain balance per dev account and asset (display units)")
+metrics.describe("jamswap_dev_supply", "sum of the six dev accounts' balances per asset — flat unless the faucet mints")
+metrics.describe("jamswap_last_price", "on-chain last clearing price per market")
+metrics.describe("jamswap_cum_volume", "on-chain cumulative traded volume per market (a DROP = re-org erased settlements)")
+metrics.describe("jamswap_book_depth", "resting on-chain book quantity per market and side")
+metrics.describe("jamswap_mempool_orders", "orders waiting in the off-chain mempool per market")
+metrics.describe("jamswap_inflight_orders", "orders inside a round awaiting durable settlement per market")
+metrics.describe("jamswap_settle_reverted_total", "settlements observed on-chain then ERASED by a re-org before the hold window passed")
+
+def _stats_poller():
+    while True:
+        time.sleep(15.0)
+        try:
+            for a, an in ASSET_NAMES.items():
+                total = 0.0
+                for h, hn in ACCOUNT_NAMES.items():
+                    v = bal(a, h) / SCALE
+                    metrics.set_gauge("jamswap_balance", {"account": hn, "asset": an}, v)
+                    total += v
+                metrics.set_gauge("jamswap_dev_supply", {"asset": an}, total)
+            for m, base, quote in DEFAULT_MARKETS:
+                lbl = {"market": str(m)}
+                metrics.set_gauge("jamswap_last_price", lbl, mstate(b"lp", m) / SCALE)
+                metrics.set_gauge("jamswap_cum_volume", lbl, mstate(b"cv", m) / SCALE)
+                depth = {"buy": 0.0, "sell": 0.0}
+                for o in book_of(m):
+                    depth[o["side"]] += o["qty"]
+                for side, q in depth.items():
+                    metrics.set_gauge("jamswap_book_depth", {"market": str(m), "side": side}, q)
+                metrics.set_gauge("jamswap_mempool_orders", lbl, float(len(pending.get(m, []))))
+                fr = _inflight.get(m)
+                metrics.set_gauge("jamswap_inflight_orders", lbl,
+                                  float(len(fr["sealed"]) + len(fr["public"])) if fr else 0.0)
+        except Exception as e:
+            print("stats poller error:", e)
 
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
@@ -1228,6 +1286,7 @@ if __name__ == "__main__":
     metrics.start_watcher()
     threading.Thread(target=auction_loop, daemon=True).start()
     threading.Thread(target=_round_resolver, daemon=True).start()
+    threading.Thread(target=_stats_poller, daemon=True).start()
     print(f"auction loop running every {AUCTION_SECS}s (like JAM block production); "
           f"round resolver confirming settlements every 2s")
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

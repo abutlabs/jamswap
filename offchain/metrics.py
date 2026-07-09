@@ -44,6 +44,14 @@ def gauge_fn(name, help_text, fn):
     _help[name] = help_text
     _gauge_cbs[name] = fn
 
+_gauges = {}            # (name, labels_tuple) -> float — set by pollers (e.g. balances)
+
+def set_gauge(name, labels=None, value=0.0):
+    """Set a labeled gauge sample (kept until overwritten). For polled chain
+    state: per-account balances, supply, book depth, last price."""
+    with _lock:
+        _gauges[(name, _labels_key(labels))] = value
+
 def observe(name, labels=None, value=0.0):
     with _lock:
         k = (name, _labels_key(labels))
@@ -62,7 +70,16 @@ def render():
     out = []
     with _lock:
         counters = dict(_counters)
+        gauges = dict(_gauges)
         hists = {k: list(v) for k, v in _hist.items()}
+    seen_g = set()
+    for (name, lt), v in sorted(gauges.items()):
+        if name not in seen_g:
+            seen_g.add(name)
+            if name in _help:
+                out.append("# HELP %s %s" % (name, _help[name]))
+            out.append("# TYPE %s gauge" % name)
+        out.append("%s%s %g" % (name, _fmt_labels(lt), v))
     seen = set()
     for (name, lt), v in sorted(counters.items()):
         if name not in seen:

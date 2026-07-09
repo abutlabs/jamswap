@@ -58,10 +58,13 @@ class SealedCarry(unittest.TestCase):
         return oid
 
     def _settle(self, vol):
-        # simulate the round accumulating on-chain: cv reaches the clearing volume,
-        # then the resolver sweep fires the predicate and finalizes (receipts+carry)
+        # simulate the round accumulating on-chain AND SURVIVING the durability
+        # hold: cv reaches the clearing volume, one sweep starts the hold window,
+        # a second sweep past SETTLE_HOLD_SECS confirms (receipts + carry)
         server.mstate = lambda p, m, v=vol * S: (v if p == b"cv" else 0)
-        server._resolve_rounds_once()
+        t = time.time()
+        server._resolve_rounds_once(now=t)
+        server._resolve_rounds_once(now=t + server.SETTLE_HOLD_SECS + 1)
 
     def test_receipts_are_settlement_contingent(self):
         # submit alone produces NO receipt and NO carry — the round is in flight.
@@ -105,6 +108,29 @@ class SealedCarry(unittest.TestCase):
         self.assertFalse([o for o in server.pending.get(1, []) if o["oid"] == oid])
         rec = server.api_executions({"account": 7})["executions"][0]
         self.assertEqual(rec["disposition"], "filled")
+
+    def test_reorg_revert_holds_and_resettles(self):
+        # the cv predicate fires, then a RE-ORG erases it before the hold window
+        # passes: no receipts may be issued for the vanished settlement, and when
+        # the chain re-applies it, the full hold restarts before confirming.
+        oid = self._place_sealed_buy(250, 1)
+        server.api_round({"market": 1, "base": 1, "quote": 0})
+        t = time.time()
+        server.mstate = lambda p, m: (10 * S if p == b"cv" else 0)   # settled...
+        server._resolve_rounds_once(now=t)
+        server.mstate = lambda p, m: 0                               # ...re-org erased it
+        server._resolve_rounds_once(now=t + 10)
+        self.assertEqual(server.api_executions({"account": 7})["executions"], [],
+                         "no receipts for a settlement a re-org erased")
+        self.assertIn(1, server._inflight, "round stays in flight awaiting re-settle")
+        server.mstate = lambda p, m: (10 * S if p == b"cv" else 0)   # re-applied
+        server._resolve_rounds_once(now=t + 20)                      # hold restarts here
+        server._resolve_rounds_once(now=t + 20 + server.SETTLE_HOLD_SECS + 1)
+        rec = server.api_executions({"account": 7})["executions"][0]
+        self.assertEqual(rec["disposition"], "partial-carried")
+        self.assertEqual(rec["filled"], 10)
+        self.assertFalse(1 in server._inflight)
+        del oid
 
     def test_unsettled_round_requeues_without_receipts(self):
         # the round never accumulates: past ROUND_GATE_SECS the resolver re-queues

@@ -420,8 +420,83 @@ service_view["links"] = [
     {"title": "JAM node (lasair)", "type": "link", "url": "/d/jam-node", "targetBlank": False},
 ]
 
+# ═══════════════ ACCOUNTS & TRADING VIEW ═══════════════
+# Per-dev-account on-chain balances + the invariants that make settlement
+# trustworthy: conservation (per-asset dev supply only moves on faucet mints)
+# and durability (cum volume must never DROP; reverts are counted).
+ACCOUNT_COLOR = {
+    "Alice": "#3987e5", "Bob": "#199e70", "Carol": "#c98500",
+    "David": "#008300", "Eve": "#9085e9", "Fergie": "#e66767",
+}
+acct_overrides = [override(n, c) for n, c in ACCOUNT_COLOR.items()]
+ASSET_COLOR = {"USDC": "#3987e5", "DOT": "#e66767", "JAMKB": "#c98500"}
+asset_overrides = [override(n, c) for n, c in ASSET_COLOR.items()]
+
+def bal_panel(asset, x):
+    return ts(f"{asset} balance per account", [
+        {"expr": f'jamswap_balance{{asset="{asset}"}}',
+         "legendFormat": "{{account}}", "refId": "A"}],
+        x, 4, 8, overrides=acct_overrides, minzero=False)
+
+accounts_view = dashboard("jamswap-accounts", "JAMswap accounts & trading", [
+    stat("Last price (DOT/USDC)", 'jamswap_last_price{market="1"}', 0, 4, unit="none"),
+    stat("Cumulative volume", 'jamswap_cum_volume{market="1"}', 4, 4),
+    stat("Rounds settled", 'sum(jamswap_settled_total{op=~"round|reveal"})', 8, 4,
+         thresholds=[{"color": "red", "value": None}, {"color": "green", "value": 1}]),
+    stat("Settlements REVERTED by re-org", "sum(jamswap_settle_reverted_total) or vector(0)", 12, 4,
+         thresholds=[{"color": "green", "value": None}, {"color": "orange", "value": 1},
+                     {"color": "red", "value": 5}]),
+    stat("Mempool + in-auction", 'sum(jamswap_mempool_orders) + sum(jamswap_inflight_orders)', 16, 4),
+    stat("Settle p50 (s)",
+         'histogram_quantile(0.5, sum(rate(jamswap_settle_latency_seconds_bucket[10m])) by (le))',
+         20, 4, unit="s"),
+
+    bal_panel("USDC", 0), bal_panel("DOT", 8), bal_panel("JAMKB", 16),
+
+    ts("P&L vs genesis (DOT, per account)", [
+        {"expr": 'jamswap_balance{asset="DOT"} - 1000000',
+         "legendFormat": "{{account}}", "refId": "A"}],
+       0, 12, 12, overrides=acct_overrides, minzero=False),
+    ts("CONSERVATION: dev supply per asset (flat = sound; steps = faucet mint or bug)", [
+        {"expr": "jamswap_dev_supply", "legendFormat": "{{asset}}", "refId": "A"}],
+       12, 12, 12, overrides=asset_overrides, minzero=False),
+
+    ts("Cumulative on-chain volume (a DROP = re-org erased settlements)", [
+        {"expr": "jamswap_cum_volume", "legendFormat": "market {{market}}", "refId": "A"}],
+       0, 20, 8),
+    ts("Last clearing price", [
+        {"expr": "jamswap_last_price", "legendFormat": "market {{market}}", "refId": "A"}],
+       8, 20, 8, minzero=False),
+    ts("Order funnel (per min)", [
+        {"expr": 'sum(rate(jamswap_submits_total[5m])) * 60', "legendFormat": "submitted", "refId": "A"},
+        {"expr": 'sum(rate(jamswap_settled_total[5m])) * 60', "legendFormat": "settled", "refId": "B"},
+        {"expr": 'sum(rate(jamswap_refused_total[5m])) * 60', "legendFormat": "refused (backpressure)", "refId": "C"},
+        {"expr": 'sum(rate(jamswap_settle_timeouts_total[5m])) * 60', "legendFormat": "timed out", "refId": "D"},
+        {"expr": 'sum(rate(jamswap_settle_reverted_total[5m])) * 60', "legendFormat": "REVERTED (re-org)", "refId": "E"}],
+       16, 20, 8, overrides=[override("settled", ROLE["imported"]),
+                             override("REVERTED (re-org)", ROLE["rejected"])]),
+
+    ts("Resting book depth", [
+        {"expr": "jamswap_book_depth", "legendFormat": "m{{market}} {{side}}", "refId": "A"}],
+       0, 28, 8),
+    ts("Mempool vs in-auction orders", [
+        {"expr": "jamswap_mempool_orders", "legendFormat": "m{{market}} mempool", "refId": "A"},
+        {"expr": "jamswap_inflight_orders", "legendFormat": "m{{market}} in auction", "refId": "B"}],
+       8, 28, 8),
+    ts("CE-133 pipeline (items/min, fleet)", [
+        {"expr": "sum(rate(lasair_ce133_queued_total[5m])) * 60", "legendFormat": "queued", "refId": "A"},
+        {"expr": "sum(rate(lasair_ce133_guaranteed_total[5m])) * 60", "legendFormat": "guaranteed", "refId": "B"},
+        {"expr": "sum(rate(lasair_ce133_accumulated_total[5m])) * 60", "legendFormat": "accumulated", "refId": "C"}],
+       16, 28, 8, overrides=[override("accumulated", ROLE["imported"])]),
+])
+accounts_view["links"] = [
+    {"title": "JAMswap service", "type": "link", "url": "/d/jam-service", "targetBlank": False},
+    {"title": "JAM mixed network", "type": "link", "url": "/d/jam-mixed", "targetBlank": False},
+]
+
 for name, d in (("jam-mixed.json", network), ("jam-node.json", node_view),
-                ("jam-clients.json", clients_view), ("jam-service.json", service_view)):
+                ("jam-clients.json", clients_view), ("jam-service.json", service_view),
+                ("jamswap-accounts.json", accounts_view)):
     path = os.path.join(OUT, name)
     json.dump(d, open(path, "w"), indent=2)
     print("wrote", path, "panels:", len(d["panels"]))
