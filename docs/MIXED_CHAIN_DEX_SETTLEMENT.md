@@ -440,6 +440,33 @@ Two field findings from ~18 h of continuous operation with live trading:
    without finality anyway). Gauges: `lasair_state_retained`,
    `lasair_state_evicted_total`. Longer-term a finality gadget to pin history
    remains the structural fix (also closes the deep-re-org window itself).
+
+6. **No pi parity: PolkaJam never adopted a lasair block (FIXED, two stacked
+   bugs, 2026-07-09).** The v2 dashboards made it visible: pi credited pj
+   validators only — the two clients ran disjoint chains from birth, and the
+   moment ticket-mode sealing engaged they locked into disjoint gamma_s
+   permanently (the no-restart variant of finding #4). Two independent causes:
+   - **Mesh-image entrypoint drift (lasair a3341c0).** Dockerfile.mesh INLINED a
+     copy of scripts/mesh-entrypoint.sh and the copies drifted: the image copy
+     never got the `peers_$OWN.txt` logic, so containerized lasair ran with the
+     keyless ip:port PEERS env — no Preferred Initiator, redial every 0.3 s,
+     and PolkaJam dropped every inbound as 'Outgoing connection won tiebreak'
+     (debug-level only!). lasair->pj announcements never survived; pj->lasair
+     worked, which made lasair's chain look healthily mixed while pj's stayed
+     pure. Fix: .dockerignore exception + COPY the real script — drift now
+     impossible.
+   - **Zero beefy root in live guarantees (lasair eaa207f).** With announcements
+     restored, PolkaJam still rejected every lasair block CARRYING A GUARANTEE:
+     `Execution(Reports(BadBeefyMmrRoot))` — the live guarantee builder filled
+     context.beefy_root with zeros, and lasair's import didn't enforce it (the
+     'W_B unenforced live' gap) while PolkaJam does. Every jamswap trade block
+     poisoned its branch for the pj side. Fix: echo the anchor's recorded MMR
+     super-peak from recent history, and enforce the check on import
+     (`bad_beefy_mmr_root`) so lasair rejects such blocks exactly like PolkaJam.
+   Images <= 1.7.2 carry both bugs; the first fixed release is 1.7.3.
+   Diagnosis trail: pi lm=0 while lasair authored fine -> zero cross-imports in
+   pj logs (no lasair hash ever mentioned) -> RUST_LOG=debug pj showed the
+   tiebreak drops, and after the peers fix, the BadBeefyMmrRoot rejects.
 ---
 
 ## How to reproduce
