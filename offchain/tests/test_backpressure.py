@@ -43,6 +43,7 @@ class RoundBackpressure(unittest.TestCase):
         server.expired_pairs = lambda m, raw: []    # no GTT expiries
         server.pending.clear()
         server._round_gate.clear()
+        server._inflight.clear()
         server.order_expiry.clear()
 
     def tearDown(self):
@@ -50,6 +51,7 @@ class RoundBackpressure(unittest.TestCase):
             setattr(server, n, fn)
         server.pending.clear()
         server._round_gate.clear()
+        server._inflight.clear()
 
     def test_refused_round_requeues_orders_and_cools_down(self):
         server.submit = self._raise_busy

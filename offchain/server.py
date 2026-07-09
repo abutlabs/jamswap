@@ -604,26 +604,89 @@ def _parse_book(raw):
 # On the contested chain a filling round takes 30-90s to settle while the auction
 # loop ticks every 6s — ungated, rounds N+1..N+k all raced round N and died
 # (surfaced immediately by the phase-3 load test: offered volume >> on-chain cv).
-# Gate: hold a market's next round until the previous one's cv predicate fires,
+# Gate: hold a market's next round until the previous one SETTLES (cv predicate),
 # with hard caps so a rejected or zero-fill round can never wedge the market.
 # Orders keep queueing meanwhile and BATCH into the next round — throughput is
 # settlement-bound, exactly what the funnel dashboard shows.
-_round_gate = {}                   # market -> {"check": fn|None, "t": submitted_at}
+#
+# RECEIPTS ARE SETTLEMENT-CONTINGENT: a filling round's per-order fill receipts
+# and sealed-remainder carries are recorded only when its cv predicate FIRES —
+# on the real mixed chain most overloaded rounds time out or are service-
+# rejected, and receipting at submit time filled the execution report with
+# "filled" orders whose balances never moved (phantom fills, found live
+# 2026-07-09: report full of fills, every balance still genesis 1,000,000).
+# A round that never settles re-queues its orders (nothing is lost) and leaves
+# NO receipts. Zero-fill rounds (book rewrite only, nothing crossed) have no
+# on-chain marker and keep their immediate low-stakes rested/cancel receipts.
+_round_gate = {}                   # market -> {"check": None, "t": ...} cooldowns (zero-fill/busy/timeout)
+_inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
+                                   #   {"check","t","sealed","public","resting","clearing"}
 ROUND_GATE_SECS = 120.0            # cap for rounds with a cv predicate (likely rejected)
 ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
 
+def _finalize_round(m, fr):
+    """The round's cv predicate fired: its clearing is REAL on-chain. Only now
+    carry sealed remainders forward and hand out fill receipts."""
+    fills = fr["clearing"]["fills"]
+    now = time.time()
+    carried = []
+    for o in fr["sealed"]:
+        rem = o["qty"] - fills.get(o["oid"], 0)
+        exp = order_expiry.get((m, o["account"], o["oid"]))
+        if rem > 0 and not (exp and exp <= now):
+            r = {"account": o["account"], "oid": o["oid"], "side": o["side"], "price": o["price"],
+                 "qty": rem, "type": o.get("type", "limit"), "sealed": True, "address": o.get("address", "")}
+            try:
+                _post_carry_seal(m, r)     # allowance-gated: the settled round minted this credit
+            except ChainBusy:
+                # carry-commit refused (queues full): fall back to IOC semantics for
+                # this remainder — cancelled, not wedged half-carried (its commit
+                # would never reach the chain; the commit gate would defer forever)
+                print(f"round m{m}: carry-seal refused (chain busy) — remainder IOC-cancelled")
+                continue
+            carried.append(r)
+            o["_carried"] = rem        # mark for the execution report (partial-carried, not cancelled)
+    if carried:
+        with _lock:
+            pending.setdefault(m, []).extend(carried)
+    try: record_executions(m, fr["resting"], fr["sealed"], fr["public"], fr["clearing"])
+    except Exception as e: print("exec record failed", m, e)
+    print(f"round m{m}: settled on-chain — receipted {len(fr['sealed']) + len(fr['public'])} order(s), carried {len(carried)}")
+
+def _resolve_rounds_once(now=None):
+    """One sweep over in-flight rounds: settled -> finalize (receipts + carries);
+    overdue -> re-queue its orders with NO receipts (the round never happened
+    on-chain; its orders batch into the next auction). Runs on the resolver
+    thread every 2 s; tests call it directly."""
+    now = now or time.time()
+    for m, fr in list(_inflight.items()):
+        try: done = fr["check"]()
+        except Exception: continue                    # reader hiccup: retry next sweep
+        if done:
+            _inflight.pop(m, None)
+            try: _finalize_round(m, fr)
+            except Exception as e: print("round finalize failed", m, e)
+        elif now - fr["t"] > ROUND_GATE_SECS:
+            _inflight.pop(m, None)
+            with _lock:
+                pending.setdefault(m, []).extend(fr["sealed"] + fr["public"])
+            _round_gate[m] = {"check": None, "t": now}
+            print(f"round m{m}: never settled — re-queued "
+                  f"{len(fr['sealed']) + len(fr['public'])} order(s), no receipts")
+
+def _round_resolver():
+    while True:
+        time.sleep(2.0)
+        try: _resolve_rounds_once()
+        except Exception as e: print("round resolver error:", e)
+
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
+    if m in _inflight:
+        return {"ok": True, "gated": True, "reason": "previous round still settling"}
     g = _round_gate.get(m)
     if g:
-        age = time.time() - g["t"]
-        if g["check"]:
-            resolved = False
-            try: resolved = g["check"]()
-            except Exception: pass
-            if not resolved and age < ROUND_GATE_SECS:
-                return {"ok": True, "gated": True, "reason": "previous round still settling"}
-        elif age < ROUND_ZEROFILL_SECS:
+        if time.time() - g["t"] < ROUND_ZEROFILL_SECS:
             return {"ok": True, "gated": True, "reason": "previous round cooling down"}
         _round_gate.pop(m, None)
     now = time.time()
@@ -724,46 +787,24 @@ def api_round(b):
         _round_gate[m] = {"check": None, "t": time.time()}
         print(f"round m{m}: chain busy — re-queued {len(sealed) + len(public)} order(s), cooling down")
         return {"ok": False, "backpressure": True, "requeued": len(sealed) + len(public)}
-    if sealed or public or shrank:     # a round was submitted on one of the branches
-        _round_gate[m] = {"check": round_check, "t": time.time()}
-    # clearing was computed above (pre-submit, for the settle predicate); reused for the
-    # receipt AND to carry sealed remainders.
-    fills = clearing["fills"]
-    # A big order rarely fills against one 6 s batch's thin supply. Public/market remainders
-    # already REST in the on-chain book and keep filling across auctions. Sealed remainders are
-    # IOC on-chain (the service excludes them from the public book so they're never exposed) — so
-    # to give sealed orders the SAME cross-batch persistence, the builder re-seals each revealed
-    # order's unfilled remainder into a FRESH hidden commitment and carries it forward. A 250-lot
-    # sealed buy thus accumulates 10-lot fills over successive auctions until filled or expired,
-    # while staying hidden — instead of losing 240 to cancellation.
-    carried = []
-    for o in sealed:
-        rem = o["qty"] - fills.get(o["oid"], 0)
-        exp = order_expiry.get((m, o["account"], o["oid"]))
-        if rem > 0 and not (exp and exp <= now):
-            r = {"account": o["account"], "oid": o["oid"], "side": o["side"], "price": o["price"],
-                 "qty": rem, "type": o.get("type", "limit"), "sealed": True, "address": o.get("address", "")}
-            try:
-                _post_carry_seal(m, r)     # allowance-gated: the round just minted this credit
-            except ChainBusy:
-                # the round itself settled but the carry-commit was refused (queues
-                # filled meanwhile): fall back to the pre-carry IOC semantics for this
-                # remainder — cancelled, not wedged half-carried (its commit would
-                # never reach the chain, so the commit gate would defer it forever)
-                print(f"round m{m}: carry-seal refused (chain busy) — remainder IOC-cancelled")
-                continue
-            carried.append(r)
-            o["_carried"] = rem        # mark for the execution report (partial-carried, not cancelled)
-    if carried:
-        with _lock:
-            pending.setdefault(m, []).extend(carried)
-    # per-order fill receipts for the UI: attribute this round's fills to the submitting traders
-    # and any resting makers that filled (uses the clearing computed above).
+    if round_check:
+        # FILLING round: it is now IN FLIGHT on the chain. Nothing is receipted
+        # or carried until the resolver sees its cv predicate fire — a round that
+        # never settles re-queues these exact orders instead (no phantom fills).
+        _inflight[m] = {"check": round_check, "t": time.time(), "sealed": sealed,
+                        "public": public, "resting": resting_orders, "clearing": clearing}
+        return {"ok": True, "queued": True,
+                "cleared": {"sealed": len(sealed), "public": len(public),
+                            "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
+    if sealed or public or shrank:     # zero-fill round (book rewrite only): cooldown
+        _round_gate[m] = {"check": None, "t": time.time()}
+    # Zero-fill receipts stay immediate: nothing crossed, so these only record
+    # rested/cancel dispositions (no balance movement to contradict).
     try: record_executions(m, resting_orders, sealed, public, clearing)
     except Exception as e: print("exec record failed", m, e)
     return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
             "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
-            "resting_hidden": len(plan.carry), "carried_remainder": len(carried),
+            "resting_hidden": len(plan.carry), "carried_remainder": 0,
             "expired": len(plan.expired)}}
 def short(a):
     return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a
@@ -782,8 +823,12 @@ def api_state(q):
     # are 32-byte / fixed-size entries in per-market sets — count whichever this mode uses.
     seal_key = b"encset" if ENC_MODE else b"commits"
     onchain_sealed = len(storage(seal_key + struct.pack("<I", m))) // SET_ENTRY_LEN
+    fr = _inflight.get(m)
     return {"price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)), "book": book_of(m),
             "pending": len(pending.get(m, [])), "mempool": mempool, "sealed_onchain": onchain_sealed,
+            # orders inside the round currently AWAITING SETTLEMENT: neither in the
+            # mempool nor receipted until the chain confirms (or they re-queue)
+            "in_auction": (len(fr["sealed"]) + len(fr["public"])) if fr else 0,
             "seal_mode": "encrypt-until-batch" if ENC_MODE else "commit-reveal",
             "next_auction_in": round(max(0.0, _next_auction[0] - time.time()), 1), "auction_secs": AUCTION_SECS,
             # anti-bloat policy so the UI can tell traders orders auto-expire (no rest-forever GTC)
@@ -1164,5 +1209,7 @@ if __name__ == "__main__":
                      lambda: sum(len(book_of(m)) for m, _b, _q in DEFAULT_MARKETS))
     metrics.start_watcher()
     threading.Thread(target=auction_loop, daemon=True).start()
-    print(f"auction loop running every {AUCTION_SECS}s (like JAM block production)")
+    threading.Thread(target=_round_resolver, daemon=True).start()
+    print(f"auction loop running every {AUCTION_SECS}s (like JAM block production); "
+          f"round resolver confirming settlements every 2s")
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()
