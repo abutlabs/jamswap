@@ -378,7 +378,26 @@ Two field findings from ~18 h of continuous operation with live trading:
    reveals in a later auction), and rounds now carry a settle predicate (cumulative-
    volume growth) so they appear in /api/pending + the settle-latency histogram.
 
-2. **lasair OOM on multi-hour chains (OPEN).** The block tree keeps every imported
+2. **Round-vs-round race (FIXED, dex-side).** The service hash-checks each round's
+   included book byte-exact, so while round N spends 30-90 s settling, the 6 s
+   auction loop's rounds N+1..N+k — snapshotted against the stale book — were all
+   rejected wholesale on-chain (surfaced by the phase-3 load test within minutes:
+   offered volume >> on-chain cv). Fix in `api_round`: ONE round in flight per
+   market — the next round is gated until the previous one's cv predicate fires
+   (capped at 120 s; 30 s cooldown for zero-fill rounds), and queued orders BATCH
+   into the next round. Throughput is settlement-bound (~1 filling round per
+   market per minute); batching carries the volume.
+
+3. **No queue backpressure (OPEN).** Work-items the chain can't keep up with
+   accumulate unboundedly in the lm nodes' in-memory CE-133 queues (~5 unique
+   items/min drain rate at 3:3; the pre-gate round flood left ~90 items/node, and
+   every stale round still costs a full availability cycle to be service-rejected).
+   Recovery today = restart the lm nodes (queues are in-memory; a 1 h chain
+   back-fills in ~a minute). Fix direction: bound `wp_pending` (reject CE-133 when
+   full so the builder/dex sees backpressure), and drop superseded rounds
+   builder-side.
+
+4. **lasair OOM on multi-hour chains (OPEN).** The block tree keeps every imported
    block's full posterior state forever (`jamnp/block_tree.ml` — `imported` never
    evicts; the same property the guarantor's descent test relies on). After hours of
    6 s slots the node is OOM-killed (exit 137; observed 3× on lm3 in ~5 h under

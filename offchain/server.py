@@ -586,8 +586,34 @@ def _parse_book(raw):
         a, oid, side, p, q = struct.unpack_from("<IIBII", raw, i * 17)
         out.append({"account": a, "oid": oid, "side": side, "price": p, "qty": q, "sealed": False})
     return out
+# One round IN FLIGHT per market: the service hash-checks each round's included
+# book byte-exact against its current on-chain book, so a second round whose
+# snapshot was taken before the first settled is REJECTED wholesale on-chain.
+# On the contested chain a filling round takes 30-90s to settle while the auction
+# loop ticks every 6s — ungated, rounds N+1..N+k all raced round N and died
+# (surfaced immediately by the phase-3 load test: offered volume >> on-chain cv).
+# Gate: hold a market's next round until the previous one's cv predicate fires,
+# with hard caps so a rejected or zero-fill round can never wedge the market.
+# Orders keep queueing meanwhile and BATCH into the next round — throughput is
+# settlement-bound, exactly what the funnel dashboard shows.
+_round_gate = {}                   # market -> {"check": fn|None, "t": submitted_at}
+ROUND_GATE_SECS = 120.0            # cap for rounds with a cv predicate (likely rejected)
+ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
+
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
+    g = _round_gate.get(m)
+    if g:
+        age = time.time() - g["t"]
+        if g["check"]:
+            resolved = False
+            try: resolved = g["check"]()
+            except Exception: pass
+            if not resolved and age < ROUND_GATE_SECS:
+                return {"ok": True, "gated": True, "reason": "previous round still settling"}
+        elif age < ROUND_ZEROFILL_SECS:
+            return {"ok": True, "gated": True, "reason": "previous round cooling down"}
+        _round_gate.pop(m, None)
     now = time.time()
     hdr = struct.pack("<III", m, base, quote)
     raw = storage(b"book" + struct.pack("<I", m))        # the market's on-chain resting book
@@ -674,6 +700,8 @@ def api_round(b):
         # rewrite the book without the expired one — an empty cross conserves value and
         # leaves the last price untouched (apply_settlement only updates lp on real fills).
         submit(bytes([TAG_SMATCH]) + hdr + section, check=round_check, detail=round_detail)
+    if sealed or public or shrank:     # a round was submitted on one of the branches
+        _round_gate[m] = {"check": round_check, "t": time.time()}
     # clearing was computed above (pre-submit, for the settle predicate); reused for the
     # receipt AND to carry sealed remainders.
     fills = clearing["fills"]
