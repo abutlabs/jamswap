@@ -94,4 +94,36 @@ wait(lambda: (lambda b: b if b <= before + amount - wd / SCALE else None)(
      "withdraw to accumulate")
 print("PASS withdraw: -%d USDC (signed)" % (wd // SCALE))
 
-print("ALL PASS: register / duplicate-survival / deposit / withdraw")
+# 5. THE POINT OF A DEX: two crossing public orders MATCH and the trade SETTLES
+#    on-chain (cumulative volume grows). This is the coverage gap that let the
+#    round pipeline break invisibly for a full day (2026-07-09): every earlier
+#    ALL PASS proved register/deposit/withdraw but never a single matched trade.
+sk2 = SigningKey.generate()
+pub2 = sk2.verify_key.encode()
+sig2 = sk2.sign(b"jamswap:v1:register" + pub2).signature
+post(DEX + "/api/register", {"pubkey": pub2.hex(), "sig": sig2.hex()})
+handle2 = wait(lambda: get("/api/handle?pubkey=" + pub2.hex())["handle"],
+               "counterparty register to accumulate")
+post(DEX + "/api/deposit", {"account": handle2, "asset": 1, "amount": 100})   # seller needs DOT
+wait(lambda: (float(get("/api/balance?asset=1&account=%d" % handle2)["balance"]) >= 100) or None,
+     "counterparty DOT deposit")
+cv0 = float(get("/api/state?market=1")["volume"])
+
+def place(signer, h, side, qty_d, price_d, seq):
+    qty, price = int(qty_d * SCALE), int(price_d * SCALE)
+    msg = (b"jamswap:v1:order" + struct.pack("<I", h) + struct.pack("<I", 1)
+           + bytes([0 if side == "buy" else 1]) + struct.pack("<I", qty)
+           + bytes([0]) + bytes([0]) + struct.pack("<I", price) + struct.pack("<Q", seq))
+    post(DEX + "/api/order", {"market": 1, "base": 1, "quote": 0, "account": h,
+                              "side": side, "qty": qty_d, "price": price_d,
+                              "seq": seq, "sig": signer.sign(msg).signature.hex()})
+
+place(sk2, handle2, "sell", 5, 1.0, 1)
+place(sk,  handle,  "buy",  5, 1.0, 1)
+wait(lambda: (lambda v: v if v > cv0 else None)(float(get("/api/state?market=1")["volume"])),
+     "the crossing orders to MATCH and the round to SETTLE on-chain",
+     tries=360)   # settle = queue wait + guarantee/assure/accumulate: minutes on the shared chain
+print("PASS trade: %s DOT matched and settled on-chain" %
+      (float(get("/api/state?market=1")["volume"]) - cv0))
+
+print("ALL PASS: register / duplicate-survival / deposit / withdraw / MATCHED TRADE")
