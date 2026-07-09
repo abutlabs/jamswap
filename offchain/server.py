@@ -622,6 +622,7 @@ _round_gate = {}                   # market -> {"check": None, "t": ...} cooldow
 _inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
                                    #   {"check","t","sealed","public","resting","clearing"}
 ROUND_GATE_SECS = 120.0            # cap for rounds with a cv predicate (likely rejected)
+MAX_ROUND_ORDERS = 256             # per-round batch cap (refine gas ~1.31M/signed order; wire ~130 B/order)
 ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
 
 def _finalize_round(m, fr):
@@ -695,7 +696,13 @@ def api_round(b):
     pruned = expired_pairs(m, raw)                        # good-till-time entries past expiry
     shrank = bool(pruned)                                 # some resting order expired this round
     with _lock:                        # snapshot + re-queue atomically so a concurrent
-        pend = pending.get(m, [])      # api_order during submit isn't dropped
+        pend_all = pending.get(m, [])  # api_order during submit isn't dropped
+        # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
+        # (~1.31M gas each), so an unbounded batch eventually exceeds any refine
+        # budget and the round becomes a poison pill that can never settle — while
+        # re-queued failures keep GROWING it (observed live: 116-order batches,
+        # volume pinned at 0). Oldest orders go first; the overflow waits its turn.
+        pend, overflow = pend_all[:MAX_ROUND_ORDERS], pend_all[MAX_ROUND_ORDERS:]
         for o in pend:                 # attach current GTT expiry for the planner
             o["expiry"] = order_expiry.get((m, o["account"], o["oid"]))
         # Decide which orders clear now. Sealed orders that DON'T cross current liquidity
@@ -704,7 +711,7 @@ def api_round(b):
         # revealed only in the round it actually crosses (see round.py + tests).
         resting_orders = [o for o in _parse_book(raw) if (o["account"], o["oid"]) not in set(pruned)]
         plan = plan_round(pend, resting_orders, now)
-        pending[m] = plan.carry        # non-crossing sealed orders stay hidden for next round
+        pending[m] = plan.carry + overflow   # hidden non-crossing sealed + over-cap tail wait their turn
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
             order_expiry.pop((m, o["account"], o["oid"]), None)
     sealed, public = plan.reveal, plan.public
