@@ -388,26 +388,58 @@ Two field findings from ~18 h of continuous operation with live trading:
    into the next round. Throughput is settlement-bound (~1 filling round per
    market per minute); batching carries the volume.
 
-3. **No queue backpressure (OPEN).** Work-items the chain can't keep up with
-   accumulate unboundedly in the lm nodes' in-memory CE-133 queues (~5 unique
-   items/min drain rate at 3:3; the pre-gate round flood left ~90 items/node, and
-   every stale round still costs a full availability cycle to be service-rejected).
-   Recovery today = restart the lm nodes (queues are in-memory; a 1 h chain
-   back-fills in ~a minute). Fix direction: bound `wp_pending` (reject CE-133 when
-   full so the builder/dex sees backpressure), and drop superseded rounds
-   builder-side.
+3. **No queue backpressure (FIXED, both sides).** Work-items the chain couldn't
+   keep up with accumulated unboundedly in the lm nodes' in-memory CE-133 queues
+   (~5 unique items/min drain rate at 3:3; the pre-gate round flood left ~90
+   items/node, and every stale round still costs a full availability cycle to be
+   service-rejected). Fix, lasair side: `--wp-queue-cap` (default 16) bounds the
+   mempool — a NEW submission beyond the cap is refused by RESETTING the CE-133
+   stream (a new `quic_send_reset` FFI primitive; merely freeing an unfinished
+   stream never surfaces to the peer, so without the explicit reset a refusal
+   read back as ACCEPTED — caught by the new contract test, which is the only
+   reason the feature works). Requeues of already-accepted items (fork-choice
+   loss, unassured timeout) bypass the cap — dropping one would lose a trade.
+   The builder reads the reset as per-target `accepted:false`. Fix, dex side:
+   `submit()` raises `ChainBusy` when every guarantor refused; `api_round` then
+   re-queues the round's orders (they BATCH into the retry), cools the market
+   down like a zero-fill round, and installs no settle predicate; user ops
+   surface it as HTTP 503 + `retry:true`; the pending ledger resolves the entry
+   as `refused` instead of aging it into a false settle-timeout. Metrics:
+   `lasair_ce133_rejected_full_total`, `jamswap_refused_total`,
+   `loadgen_ops_busy_total`. No separate "drop superseded rounds" is needed:
+   the round gate (#2) already serializes rounds per market, so at most one is
+   in flight.
 
-4. **lasair OOM on multi-hour chains (OPEN).** The block tree keeps every imported
-   block's full posterior state forever (`jamnp/block_tree.ml` — `imported` never
-   evicts; the same property the guarantor's descent test relies on). After hours of
-   6 s slots the node is OOM-killed (exit 137; observed 3× on lm3 in ~5 h under
-   trading load). `restart: unless-stopped` + CE-128 back-fill restores liveness, but
-   on a finality-less chain the crash window allowed a **deep re-org that erased
+4. **Simultaneous lasair fleet restart = permanent split-brain (FIXED, client).**
+   Restarting ALL lm validators at once (e.g. to flush queues) lost their in-memory
+   block trees + Safrole tickets; the author loop then authored from a stale head at
+   the current wall slot BEFORE back-fill completed, forking a fresh branch. The two
+   sides' ticket state diverged, each rejected the other's seals (`bad_ticket_proof`
+   both ways), and with no finality the partition was permanent — the lasair side
+   (and the reader/UI) ended on a trade-less branch with genesis balances. Observed
+   twice live. Fix (lasair): a SYNC GATE in the author loop — in wall-clock mode a
+   node whose head lags the wall slot by more than an epoch is syncing and does not
+   author (5-min liveness escape for a fully-halted network); exported as
+   `lasair_authoring_sync_gated`. Ops rule regardless: restart lm validators ONE at
+   a time.
+
+5. **lasair OOM on multi-hour chains (FIXED, client — retention).** The block tree
+   kept every imported block's full posterior state forever (`jamnp/block_tree.ml`
+   — `imported` never evicted). After hours of 6 s slots the node was OOM-killed
+   (exit 137; observed 3× on lm3 in ~5 h under trading load).
+   `restart: unless-stopped` + CE-128 back-fill restored liveness, but on a
+   finality-less chain the crash window allowed a **deep re-org that erased
    accumulated service state** (registered accounts vanished from the canonical
    branch). The monitoring caught both (canary fails, stalled-node panel). Fix
-   direction: bounded block-tree retention (evict states beyond N slots from head,
-   keep hashes for ancestry), and longer-term a finality gadget to pin history —
-   both lasair work items.
+   (lasair): bounded state retention — `--state-retention` (default 600 slots =
+   1 h at 6 s; 0 = old behaviour) evicts the posterior STATE of any imported node
+   beyond the horizon while keeping hashes, heights and the blocks themselves, so
+   `is_ancestor` (the guarantor's descent test) and CE-128 block serving are
+   unaffected; CE-129 serves an evicted state as not-held and a fork branching
+   below the horizon is dropped with `parent_state_evicted` (it could never win
+   without finality anyway). Gauges: `lasair_state_retained`,
+   `lasair_state_evicted_total`. Longer-term a finality gadget to pin history
+   remains the structural fix (also closes the deep-re-org window itself).
 ---
 
 ## How to reproduce

@@ -20,7 +20,7 @@ Profiles (PROFILE):
 Env: DEX_URL (http://dex:8080), PROFILE (trading), RATE (ops/min, 12), MARKET (1),
      BASE (1), QUOTE (0), SEALED_RATIO (0.2), LOADGEN_PORT (9111).
 """
-import json, os, random, struct, threading, time, urllib.request
+import json, os, random, struct, threading, time, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from nacl.signing import SigningKey
@@ -97,6 +97,15 @@ def op(name, fn):
     metrics.inc("loadgen_ops_total", {"op": name})
     try:
         fn()
+    except urllib.error.HTTPError as e:
+        if e.code == 503:
+            # backpressure, not a failure: the chain refused the payload (CE-133
+            # queues at cap) and the dex told us to retry later — count it apart
+            # so an overload run shows "how much was shed", not a wall of errors
+            metrics.inc("loadgen_ops_busy_total", {"op": name})
+        else:
+            metrics.inc("loadgen_op_errors_total", {"op": name})
+            print("op %s failed: %s" % (name, e))
     except Exception as e:
         metrics.inc("loadgen_op_errors_total", {"op": name})
         print("op %s failed: %s" % (name, e))

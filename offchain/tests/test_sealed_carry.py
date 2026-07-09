@@ -8,6 +8,7 @@ successive rounds instead of losing the remainder to cancellation. This drives `
 monkeypatched chain I/O (no node).
 """
 import os
+import struct
 import sys
 import time
 import unittest
@@ -22,6 +23,7 @@ S = server.SCALE
 class SealedCarry(unittest.TestCase):
     def setUp(self):
         server.pending.clear(); server.order_expiry.clear(); server.executions.clear()
+        server._round_gate.clear()      # round-gate state must not leak between tests
         server.JAMKB_BACKPRESSURE = False
         server.REQUIRE_ORDER_SIG = False
         server.ENC_MODE = False
@@ -29,10 +31,18 @@ class SealedCarry(unittest.TestCase):
         server.footprint_octets = lambda: 0
         server.mstate = lambda p, m: 0
         self.sent = []
-        server.submit = lambda payload: self.sent.append(payload)
+        server.submit = (lambda payload, check=None, detail="":
+                         self.sent.append(payload))
         # on-chain resting book: a single sell of 10 @ 1.0 that a buy will cross.
+        # The mixed-chain commit gate only reveals a sealed order whose commit is
+        # already ON-CHAIN, so the storage stub also serves the commit set for
+        # every order this test placed (self.commits).
         self.book = server.order_bytes(20, 1, SELL, 1 * S, 10 * S)
-        server.storage = lambda k: self.book if k.startswith(b"book") else b""
+        self.commits = bytearray()
+        server.storage = (lambda k:
+                          self.book if k.startswith(b"book")
+                          else bytes(self.commits) if k.startswith(b"commits")
+                          else b"")
 
     def _place_sealed_buy(self, qty, price, ttl=3600):
         # build + seal a pending buy the way api_order would (bypassing its network guards).
@@ -41,6 +51,7 @@ class SealedCarry(unittest.TestCase):
              "type": "limit", "sealed": True, "address": ""}
         o["commit"] = server._seal_material(1, o)   # placement posts an owner-signed commit;
         # here the chain is mocked, so attaching the reveal material is all the round needs.
+        self.commits += o["commit"] + struct.pack("<I", o["account"])   # commit "on-chain"
         server.order_expiry[(1, 7, oid)] = time.time() + ttl
         server.pending.setdefault(1, []).append(o)
         return oid

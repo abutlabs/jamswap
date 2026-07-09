@@ -104,6 +104,7 @@ _ledger = []                    # newest last: dicts (see track())
 _seq = [0]
 
 describe("jamswap_submits_total", "state-mutating payloads relayed to the chain, by op")
+describe("jamswap_refused_total", "submissions every guarantor refused (CE-133 mempool at cap), by op")
 describe("jamswap_settled_total", "tracked ops whose on-chain effect became visible, by op")
 describe("jamswap_settle_timeouts_total", "tracked ops with no visible effect within the timeout, by op")
 describe("jamswap_settle_latency_seconds", "submit -> state-visible latency for tracked ops, by op")
@@ -116,7 +117,7 @@ def track(op, detail, check=None):
     but not settlement-tracked (e.g. rounds, whose effect is a book rewrite)."""
     inc("jamswap_submits_total", {"op": op})
     e = {"id": _seq[0], "op": op, "detail": detail, "submitted": time.time(),
-         "settled": None, "timed_out": False, "check": check}
+         "settled": None, "timed_out": False, "refused": False, "check": check}
     _seq[0] += 1
     with _ledger_lock:
         _ledger.append(e)
@@ -126,13 +127,25 @@ def track(op, detail, check=None):
             _ledger.remove(x)
     return e["id"]
 
+def refused(entry_id):
+    """The relay never reached the chain — every guarantor refused it (CE-133
+    mempool at cap; lasair --wp-queue-cap). Resolve the entry now so it can't
+    age into a false settle-timeout."""
+    with _ledger_lock:
+        for e in _ledger:
+            if e["id"] == entry_id:
+                e["refused"], e["check"] = True, None
+                inc("jamswap_refused_total", {"op": e["op"]})
+                break
+
 def pending_snapshot():
     now = time.time()
     with _ledger_lock:
         entries = list(_ledger)[-LEDGER_KEEP:]
     out = []
     for e in reversed(entries):         # newest first
-        state = ("settled" if e["settled"] else
+        state = ("refused" if e.get("refused") else
+                 "settled" if e["settled"] else
                  "timed_out" if e["timed_out"] else
                  "pending" if e["check"] else "submitted")
         out.append({"id": e["id"], "op": e["op"], "detail": e["detail"], "state": state,

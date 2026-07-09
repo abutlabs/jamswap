@@ -165,6 +165,11 @@ def _post_json(url, body):
 TAG_NAMES = {0: "match", 1: "deposit", 2: "commit", 3: "reveal", 4: "cancel", 5: "withdraw",
              6: "list", 7: "register", 8: "treasury", 9: "enc_setup", 10: "enc_commit",
              11: "enc_round", 12: "round", 13: "carry_commit", 14: "carry_enc_commit"}
+class ChainBusy(Exception):
+    """Every guarantor refused the CE-133 submission (mempool at --wp-queue-cap):
+    the payload never reached the chain. Callers either retry-later (api_round
+    re-queues the round's orders) or surface it as HTTP 503 (user ops)."""
+
 def submit(payload, check=None, detail=""):
     # STANDARD path when BUILDER_URL is set: the builder daemon wraps this payload in a
     # GP work-package and submits it to the guarantor over CE-133/QUIC. Otherwise the
@@ -172,9 +177,16 @@ def submit(payload, check=None, detail=""):
     # Every relay is recorded in the pending ledger (by its tag byte); ops whose caller
     # supplies a settle predicate are tracked submit->state-visible (/api/pending +
     # the jamswap_settle_latency_seconds histogram).
-    metrics.track(TAG_NAMES.get(payload[0], f"tag{payload[0]}"), detail, check)
+    op = TAG_NAMES.get(payload[0], f"tag{payload[0]}")
+    tid = metrics.track(op, detail, check)
     if BUILDER_URL:
-        return _post_json(BUILDER_URL + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
+        r = _post_json(BUILDER_URL + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
+        if r.get("accepted") is False:
+            # backpressure: no guarantor took it — resolve the ledger entry (it can
+            # never settle) and raise for the caller to back off
+            metrics.refused(tid)
+            raise ChainBusy(f"{op}: all guarantors refused (CE-133 queues full)")
+        return r
     return node(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
 def storage(key):
     # STANDARD path when READER_URL is set: read the key from the node's on-chain
@@ -670,36 +682,48 @@ def api_round(b):
     round_check = ((lambda want=cv_before + clearing["volume"]: mstate(b"cv", m) >= want)
                    if clearing["volume"] else None)
     round_detail = f"market {m}: {len(sealed)} sealed + {len(public)} public, vol {disp(clearing['volume'])}"
-    if sealed and ENC_MODE:
-        # encrypt-until-batch round: the committee decrypts each sealed ciphertext (proving it
-        # via Chaum-Pedersen); refine verifies every proof, recovers the orders, and clears them
-        # with the resting book + public orders at ONE uniform price. Only the sealed orders that
-        # CROSS this round are here (the planner keeps non-crossing ones hidden for later), so a
-        # sealed order is decrypted on-chain only in the round it actually trades. Any unfilled
-        # remainder of a revealed order is immediate-or-cancel (never rests publicly exposed).
-        # No reveal round — traders needn't be online at match time.
-        cts = ",".join(o["ciphertext"] for o in sealed)
-        d = committee_run("round", m, base, quote, section.hex(), cts)
-        submit(bytes.fromhex(d["round"]), check=round_check, detail=round_detail)
-    elif sealed:
-        # UNIFIED sealed round (commit–reveal): the resting book + this round's public orders +
-        # the revealed sealed orders all clear together at ONE uniform price (so a sealed order
-        # can cross public/resting liquidity). Only sealed orders that CROSS this round are
-        # revealed (non-crossing ones stay hidden, carried forward by the planner); the node
-        # re-checks each reveal's hash ∈ commits. Any unfilled remainder of a revealed order is
-        # immediate-or-cancel (never rests publicly exposed).
-        commits = b"".join(commitment(o["reveal"]) for o in sealed)
-        reveals = b"".join(o["reveal"] for o in sealed)
-        submit(bytes([TAG_REVEAL]) + hdr
-               + struct.pack("<I", len(commits)) + commits
-               + struct.pack("<I", len(reveals)) + reveals
-               + section, check=round_check, detail=round_detail)
-    elif public or shrank:
-        # signed public round: the section carries the new signed orders + prune list + the
-        # on-chain book. Also runs on `shrank` (an order expired) with no new orders, to
-        # rewrite the book without the expired one — an empty cross conserves value and
-        # leaves the last price untouched (apply_settlement only updates lp on real fills).
-        submit(bytes([TAG_SMATCH]) + hdr + section, check=round_check, detail=round_detail)
+    try:
+        if sealed and ENC_MODE:
+            # encrypt-until-batch round: the committee decrypts each sealed ciphertext (proving it
+            # via Chaum-Pedersen); refine verifies every proof, recovers the orders, and clears them
+            # with the resting book + public orders at ONE uniform price. Only the sealed orders that
+            # CROSS this round are here (the planner keeps non-crossing ones hidden for later), so a
+            # sealed order is decrypted on-chain only in the round it actually trades. Any unfilled
+            # remainder of a revealed order is immediate-or-cancel (never rests publicly exposed).
+            # No reveal round — traders needn't be online at match time.
+            cts = ",".join(o["ciphertext"] for o in sealed)
+            d = committee_run("round", m, base, quote, section.hex(), cts)
+            submit(bytes.fromhex(d["round"]), check=round_check, detail=round_detail)
+        elif sealed:
+            # UNIFIED sealed round (commit–reveal): the resting book + this round's public orders +
+            # the revealed sealed orders all clear together at ONE uniform price (so a sealed order
+            # can cross public/resting liquidity). Only sealed orders that CROSS this round are
+            # revealed (non-crossing ones stay hidden, carried forward by the planner); the node
+            # re-checks each reveal's hash ∈ commits. Any unfilled remainder of a revealed order is
+            # immediate-or-cancel (never rests publicly exposed).
+            commits = b"".join(commitment(o["reveal"]) for o in sealed)
+            reveals = b"".join(o["reveal"] for o in sealed)
+            submit(bytes([TAG_REVEAL]) + hdr
+                   + struct.pack("<I", len(commits)) + commits
+                   + struct.pack("<I", len(reveals)) + reveals
+                   + section, check=round_check, detail=round_detail)
+        elif public or shrank:
+            # signed public round: the section carries the new signed orders + prune list + the
+            # on-chain book. Also runs on `shrank` (an order expired) with no new orders, to
+            # rewrite the book without the expired one — an empty cross conserves value and
+            # leaves the last price untouched (apply_settlement only updates lp on real fills).
+            submit(bytes([TAG_SMATCH]) + hdr + section, check=round_check, detail=round_detail)
+    except ChainBusy:
+        # BACKPRESSURE: every lm node's CE-133 queue is at cap (lasair --wp-queue-cap),
+        # so the round never left the builder. Nothing cleared — put its orders back in
+        # the mempool (they BATCH into the retry, same as gate-held orders) and cool the
+        # market down like a zero-fill round so retries don't re-flood the fleet. No
+        # receipts, no carry, no gate predicate: the round simply never happened.
+        with _lock:
+            pending.setdefault(m, []).extend(sealed + public)
+        _round_gate[m] = {"check": None, "t": time.time()}
+        print(f"round m{m}: chain busy — re-queued {len(sealed) + len(public)} order(s), cooling down")
+        return {"ok": False, "backpressure": True, "requeued": len(sealed) + len(public)}
     if sealed or public or shrank:     # a round was submitted on one of the branches
         _round_gate[m] = {"check": round_check, "t": time.time()}
     # clearing was computed above (pre-submit, for the settle predicate); reused for the
@@ -719,7 +743,15 @@ def api_round(b):
         if rem > 0 and not (exp and exp <= now):
             r = {"account": o["account"], "oid": o["oid"], "side": o["side"], "price": o["price"],
                  "qty": rem, "type": o.get("type", "limit"), "sealed": True, "address": o.get("address", "")}
-            _post_carry_seal(m, r)     # allowance-gated: the round just minted this credit
+            try:
+                _post_carry_seal(m, r)     # allowance-gated: the round just minted this credit
+            except ChainBusy:
+                # the round itself settled but the carry-commit was refused (queues
+                # filled meanwhile): fall back to the pre-carry IOC semantics for this
+                # remainder — cancelled, not wedged half-carried (its commit would
+                # never reach the chain, so the commit gate would defer it forever)
+                print(f"round m{m}: carry-seal refused (chain busy) — remainder IOC-cancelled")
+                continue
             carried.append(r)
             o["_carried"] = rem        # mark for the execution report (partial-carried, not cancelled)
     if carried:
@@ -1069,6 +1101,11 @@ class H(BaseHTTPRequestHandler):
             try:
                 self._send(200, json.dumps(ROUTES_POST[path](body)).encode())
                 metrics.inc("jamswap_api_requests_total", {"route": path, "code": 200})
+            except ChainBusy as e:
+                # backpressure, not a bug: the chain refused the payload — tell the
+                # caller to retry later (the UI/loadgen treat 503 as retryable)
+                self._send(503, json.dumps({"error": str(e), "retry": True}).encode())
+                metrics.inc("jamswap_api_requests_total", {"route": path, "code": 503})
             except Exception as e:
                 self._send(500, json.dumps({"error": str(e)}).encode())
                 metrics.inc("jamswap_api_requests_total", {"route": path, "code": 500})
