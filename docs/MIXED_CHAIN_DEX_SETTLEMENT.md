@@ -467,6 +467,28 @@ Two field findings from ~18 h of continuous operation with live trading:
    Diagnosis trail: pi lm=0 while lasair authored fine -> zero cross-imports in
    pj logs (no lasair hash ever mentioned) -> RUST_LOG=debug pj showed the
    tiebreak drops, and after the peers fix, the BadBeefyMmrRoot rejects.
+
+7. **Safrole gamma_s divergence on partially-filled lotteries (OPEN — the next
+   frontier).** With parity, batching and first-seen fork choice all in place,
+   trades match, settle, move balances and conserve supply — but settlements
+   still revert on MINUTES-deep re-orgs. Root (measured 2026-07-09 evening):
+   for certain epochs lasair rejects EVERY PolkaJam ticket-sealed block with
+   `bad_ticket_proof` on a shared chain prefix (reject bursts covering whole
+   epochs, e.g. slots ..516-21 and ..578-80) — the two clients derive DIFFERENT
+   sealing sequences from the same state when the ticket lottery is partially
+   filled. Each such epoch forks the clients; pj (whose dummy finality never
+   re-orgs) sprints alone; the reconvergence is a deep re-org that erases
+   whatever settled on lasair's interim branch. Countermeasures shipped: the
+   dex confirms only after the settlement HOLDS on-chain for 150 s (> 2
+   epochs; `SETTLE_HOLD_SECS`), and observed reversions are counted
+   (`jamswap_settle_reverted_total`) and dashboarded. The real fixes, in
+   order: (1) differential-debug the Safrole sealing-sequence transition
+   (capture a rejected block + parent state at an epoch boundary; run both
+   clients' gamma_s derivation offline — fuzzer-style, conformance-grade);
+   (2) a finality gadget so history pins and 'settled' stops being
+   branch-relative. Also open: lasair tickets still land 0 on pj's chain
+   (CE-131 'finality lagging' drops at pj + orphaned lasair fallback blocks) —
+   likely the SAME divergence seen from the other side.
 ---
 
 ## How to reproduce

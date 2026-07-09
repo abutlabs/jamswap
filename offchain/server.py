@@ -633,11 +633,15 @@ _round_gate = {}                   # market -> {"check": None, "t": ...} cooldow
 _inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
                                    #   {"check","t","sealed","public","resting","clearing"}
 ROUND_GATE_SECS = 300.0   # settle patience: queue wait + dance on the REAL shared chain is minutes, not seconds
-SETTLE_HOLD_SECS = 60.0   # durability: the cv predicate must HOLD this long before receipts —
+SETTLE_HOLD_SECS = 150.0  # durability: the cv predicate must HOLD this long before receipts —
                           # on the finality-less contested chain a round can settle on a branch
                           # that LOSES fork choice minutes later (observed live 2026-07-09:
-                          # volume 54 -> 0, every balance snapped back to genesis). 60 s spans
-                          # PolkaJam's dummy-finality ratchet, so what survives it stays.
+                          # volume 54 -> 0, every balance snapped back to genesis; then a 60 s
+                          # hold was still breached once — jamswap_settle_reverted_total caught
+                          # a re-org spanning a full Safrole epoch, the lasair/PolkaJam gamma_s
+                          # divergence on partially-filled lotteries). 150 s > 2 epochs (tiny
+                          # E=12 x 6 s) rides out epoch-scale re-orgs; the real fix is the
+                          # Safrole divergence + a finality gadget (see TOKENS.md roadmap).
 MAX_ROUND_ORDERS = 256             # per-round batch cap (refine gas ~1.31M/signed order; wire ~130 B/order)
 ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
 
