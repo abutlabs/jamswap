@@ -179,6 +179,17 @@ def submit(payload, check=None, detail=""):
     # the jamswap_settle_latency_seconds histogram).
     op = TAG_NAMES.get(payload[0], f"tag{payload[0]}")
     tid = metrics.track(op, detail, check)
+    if payload[0] in (TAG_SMATCH, TAG_REVEAL):
+        # forensic: keep the LAST FEW round payloads byte-exact so a failing round
+        # can be replayed through the service offline (refine_run + auth replica)
+        try:
+            import glob
+            for old_f in sorted(glob.glob("/tmp/round_*.hex"))[:-7]:
+                os.remove(old_f)
+            with open(f"/tmp/round_{int(time.time())}_{payload[0]}.hex", "w") as f:
+                f.write(payload.hex())
+        except Exception:
+            pass
     if BUILDER_URL:
         r = _post_json(BUILDER_URL + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
         if r.get("accepted") is False:
@@ -621,7 +632,7 @@ def _parse_book(raw):
 _round_gate = {}                   # market -> {"check": None, "t": ...} cooldowns (zero-fill/busy/timeout)
 _inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
                                    #   {"check","t","sealed","public","resting","clearing"}
-ROUND_GATE_SECS = 120.0            # cap for rounds with a cv predicate (likely rejected)
+ROUND_GATE_SECS = 300.0   # settle patience: queue wait + dance on the REAL shared chain is minutes, not seconds
 MAX_ROUND_ORDERS = 256             # per-round batch cap (refine gas ~1.31M/signed order; wire ~130 B/order)
 ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
 
