@@ -472,7 +472,7 @@ Two field findings from ~18 h of continuous operation with live trading:
 ## How to reproduce
 
 ```sh
-# Equal split with the tier-1 fix — trades SETTLE (lasair >= 1.7.0, the default
+# Equal split with the tier-1 fix — trades SETTLE (lasair >= 1.7.3 for real cross-client parity, the default
 # image; wait ~1-2 epochs for ticket-seal steady state):
 make mixed
 docker compose -f docker-compose.mixed.yml exec -T dex python3 /app/verify.py

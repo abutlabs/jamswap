@@ -12,7 +12,7 @@
 #
 # TWO MIXED MODES (see docker-compose.mixed-dex.yml + docs/mixed_chain_dex_settlement.md):
 #   mixed      EQUAL split: both clients author/seal/import apples-to-apples; the
-#              Grafana dashboards compare them. With lasair >= 1.7.0 (the default
+#              Grafana dashboards compare them. With lasair >= 1.7.3 (the default
 #              image) trades ALSO SETTLE here — the tier-1 settlement fix:
 #              fork-choice-aware guarantor + assure-any-pending + builder fan-out
 #              complete availability on the contested chain.
