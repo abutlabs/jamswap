@@ -1,0 +1,29 @@
+# Load-generation overlay (docs/OBSERVABILITY_PLAN.md phase 3). Layer on top of a
+# RUNNING mixed net:
+#
+#   docker compose -f docker-compose.mixed.yml -f docker-compose.load.yml \
+#       up -d --build loadgen                       # or: make load
+#   RATE=60 PROFILE=faucet-storm make load          # tune via env
+#   docker compose -f docker-compose.mixed.yml -f docker-compose.load.yml \
+#       up -d --scale loadgen=4 loadgen             # scale out locally
+#
+# Drives signed trades from the six genesis-funded dev accounts (Alice..Fergie —
+# needs spec-init's GENESIS_BALANCE seeding, on by default) and exports its own
+# offered-load metrics on :9111 (scraped by the monitor overlay's `loadgen` job).
+# For cluster-scale load, see k8s/loadgen.yaml (same image, same env contract).
+services:
+  loadgen:
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
+    command: ["python3", "loadgen.py"]
+    environment:
+      DEX_URL: http://dex:8080
+      PROFILE: ${PROFILE:-trading}
+      RATE: ${RATE:-12}
+      SEALED_RATIO: ${SEALED_RATIO:-0.2}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./offchain:/app:ro
+    networks: { mixnet: {} }
+    restart: unless-stopped

@@ -154,10 +154,47 @@ assert "genesis_header" in spec and "genesis_state" in spec, list(spec.keys())
 # ALPN embeds) is unchanged. Skipped when no SERVICE is mounted.
 service = os.environ.get("SERVICE", "")
 if service and os.path.exists(service):
-    r = subprocess.run([LASAIR, "--inject-service-spec", spec_path,
-                        "--service", service,
-                        "--service-id", os.environ.get("SERVICE_ID", "100")],
-                       capture_output=True, text=True)
+    inject = [LASAIR, "--inject-service-spec", spec_path,
+              "--service", service,
+              "--service-id", os.environ.get("SERVICE_ID", "100")]
+    # GENESIS ACCOUNTS: pre-register the six standard JAM dev accounts (Alice..Fergie
+    # — the same well-known ed25519 keys the trading UI holds) and fund each with
+    # GENESIS_BALANCE of every asset, directly in the service's genesis storage. A
+    # fresh devnet is then tradable at slot 1 — no minutes of on-chain register/
+    # deposit settlement before load tests or UI sessions can start. Storage layout
+    # matches service/src/lib.rs exactly: b"h"+pub->handle, b"pk"+handle->pub,
+    # b"nexthandle"->next u32, b"b"+asset+handle->u64 atomic, b"cust"+asset->u64.
+    # GENESIS_BALANCE=0 disables. Handles 1..6 in account order below.
+    gbal = int(os.environ.get("GENESIS_BALANCE", "1000000"))     # display units/asset
+    if gbal > 0:
+        SCALE, ASSETS = 10_000, (0, 1, 2)                        # USDC, DOT, JAMKB
+        DEV_PUBS = [   # docs.jamcha.in dev accounts, as held by offchain/web/index.html
+            "4418fb8c85bb3985394a8c2756d3643457ce614546202a2f50b093d762499ace",  # Alice
+            "ad93247bd01307550ec7acd757ce6fb805fcf73db364063265b30a949e90d933",  # Bob
+            "cab2b9ff25c2410fbe9b8a717abb298c716a03983c98ceb4def2087500b8e341",  # Carol
+            "f30aa5444688b3cab47697b37d5cac5707bb3289e986b19b17db437206931a8d",  # David
+            "8b8c5d436f92ecf605421e873a99ec528761eb52a88a2f9a057b3b3003e6f32a",  # Eve
+            "ab0084d01534b31c1dd87c81645fd762482a90027754041ca1b56133d0466c06",  # Fergie
+        ]
+        atomic = gbal * SCALE
+        kv = {}
+        for h, pub in enumerate(DEV_PUBS, start=1):
+            p = bytes.fromhex(pub)
+            kv[(b"h" + p).hex()] = h.to_bytes(4, "little").hex()
+            kv[(b"pk" + h.to_bytes(4, "little")).hex()] = pub
+            for a in ASSETS:
+                kv[(b"b" + a.to_bytes(4, "little") + h.to_bytes(4, "little")).hex()] = \
+                    atomic.to_bytes(8, "little").hex()
+        kv[b"nexthandle".hex()] = (len(DEV_PUBS) + 1).to_bytes(4, "little").hex()
+        for a in ASSETS:                     # custody invariant: cust = sum of balances
+            kv[(b"cust" + a.to_bytes(4, "little")).hex()] = \
+                (atomic * len(DEV_PUBS)).to_bytes(8, "little").hex()
+        seed_path = os.path.join(SHARED, "genesis_accounts.json")
+        json.dump(kv, open(seed_path, "w"))
+        inject += ["--seed-service-storage", seed_path]
+        print("genesis accounts: %d dev accounts pre-registered, %s of each asset"
+              % (len(DEV_PUBS), gbal))
+    r = subprocess.run(inject, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("service injection failed: %s\n%s" % (r.stdout, r.stderr))
     print(r.stdout.strip())

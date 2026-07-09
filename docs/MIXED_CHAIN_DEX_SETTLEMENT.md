@@ -362,6 +362,35 @@ evolution, real DA the long-term fix.
 
 ---
 
+## Known issues on long-running mixed chains (2026-07-09)
+
+Two field findings from ~18 h of continuous operation with live trading:
+
+1. **Sealed-round commit race (FIXED, dex-side).** The service's `consume_set`
+   (`service/src/lib.rs:933`) validates every revealed order against the ON-CHAIN
+   commit set at accumulate time and rejects the WHOLE round on one miss — silently
+   (refine passed, so the builder-side clearing had already receipted the fill to the
+   UI). The dex auction loop fires 6 s after placement, but a TAG_COMMIT takes 10-60 s
+   to accumulate on the contested chain, so sealed rounds raced their own commits and
+   rolled back: "matching engine found the order but balances never update". Fix in
+   `offchain/server.py api_round`: sealed reveals are DEFERRED until their commit is
+   visible in the on-chain `b"commits"` set (the order stays hidden in the mempool and
+   reveals in a later auction), and rounds now carry a settle predicate (cumulative-
+   volume growth) so they appear in /api/pending + the settle-latency histogram.
+
+2. **lasair OOM on multi-hour chains (OPEN).** The block tree keeps every imported
+   block's full posterior state forever (`jamnp/block_tree.ml` — `imported` never
+   evicts; the same property the guarantor's descent test relies on). After hours of
+   6 s slots the node is OOM-killed (exit 137; observed 3× on lm3 in ~5 h under
+   trading load). `restart: unless-stopped` + CE-128 back-fill restores liveness, but
+   on a finality-less chain the crash window allowed a **deep re-org that erased
+   accumulated service state** (registered accounts vanished from the canonical
+   branch). The monitoring caught both (canary fails, stalled-node panel). Fix
+   direction: bounded block-tree retention (evict states beyond N slots from head,
+   keep hashes for ancestry), and longer-term a finality gadget to pin history —
+   both lasair work items.
+---
+
 ## How to reproduce
 
 ```sh

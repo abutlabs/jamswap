@@ -1,0 +1,59 @@
+# Kubernetes scale-out for the jamswap load generator (observability plan phase 3/4).
+#
+# The system under test (the mixed chain + dex) stays on compose; this Deployment
+# runs N loadgen replicas on any cluster that can reach the dex API — the point of
+# k8s here is horizontally-scaled OFFERED LOAD, not hosting the chain. Note the
+# chain's hard settlement ceiling first: C=2 cores x 1 report per core per block
+# ≈ 2 work-items / 6 s slot — a handful of replicas saturates it; beyond that you
+# are measuring queue growth (which is exactly what the jam-service dashboard's
+# funnel + queue-depth panels are for).
+#
+#   # build + load the image (kind example; docker-desktop k8s can use it directly)
+#   docker build -f offchain/Dockerfile -t jamswap-offchain:local .
+#   kind load docker-image jamswap-offchain:local
+#   # point DEX_URL at the dex reachable FROM the cluster, then:
+#   kubectl apply -f k8s/loadgen.yaml
+#   kubectl scale deploy/jamswap-loadgen --replicas=8
+#
+# Each replica exports :9111/metrics (loadgen_ops_total, loadgen_op_errors_total);
+# scrape them with your cluster Prometheus, or port-forward for the compose one.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jamswap-loadgen
+  labels: { app: jamswap-loadgen }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: jamswap-loadgen }
+  template:
+    metadata:
+      labels: { app: jamswap-loadgen }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9111"
+    spec:
+      containers:
+        - name: loadgen
+          image: jamswap-offchain:local
+          imagePullPolicy: IfNotPresent
+          command: ["python3", "loadgen.py"]
+          env:
+            # docker-desktop k8s reaching the compose dex on the host; adjust for
+            # kind (host IP) or a remote deployment.
+            - name: DEX_URL
+              value: "http://host.docker.internal:8080"
+            - name: PROFILE
+              value: "trading"
+            - name: RATE          # ops/min PER REPLICA
+              value: "12"
+            - name: SEALED_RATIO
+              value: "0.2"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          ports:
+            - containerPort: 9111
+              name: metrics
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 250m, memory: 128Mi }

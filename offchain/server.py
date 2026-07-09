@@ -607,10 +607,43 @@ def api_round(b):
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
             order_expiry.pop((m, o["account"], o["oid"]), None)
     sealed, public = plan.reveal, plan.public
+    # MIXED-CHAIN COMMIT GATE: a reveal only settles if its owner-signed commit has
+    # ALREADY accumulated — the service's consume_set (lib.rs) matches every consumed
+    # hash‖account against the ON-CHAIN commit set and rejects the WHOLE round on one
+    # miss. On a contested chain a TAG_COMMIT takes slots (10-60 s) to accumulate while
+    # this auction loop fires 6 s after placement, so revealing immediately raced the
+    # commit and the round was silently rolled back (balances never moved even though
+    # the builder-side clearing had already receipted the fill). Hold back any sealed
+    # order whose commit isn't visible on-chain yet: it stays hidden in the mempool
+    # and reveals in a later auction. (ENC_MODE has the same race on b"encset"; gate
+    # it when the committee path leaves simulation.)
+    if sealed and not ENC_MODE:
+        onchain = storage(b"commits" + struct.pack("<I", m))
+        entries = {onchain[i:i + SET_ENTRY_LEN]
+                   for i in range(0, max(0, len(onchain) - SET_ENTRY_LEN + 1), SET_ENTRY_LEN)}
+        ready, waiting = [], []
+        for o in sealed:
+            e = commitment(o["reveal"]) + struct.pack("<I", o["account"])
+            (ready if e in entries else waiting).append(o)
+        if waiting:
+            with _lock:
+                pending.setdefault(m, []).extend(waiting)
+            print(f"round m{m}: deferred {len(waiting)} sealed reveal(s) — commit not on-chain yet")
+        sealed = ready
     # every round type carries the same signed public section: new orders WITH their
     # signatures (verified in refine), the explicit prune list, and the on-chain book
     # byte-exact (the service hash-checks it — a fabricated book rejects the round).
     section = public_section_bytes(public, pruned, raw)
+    # Pre-compute this round's clearing (pure; mirrors refine) so the submit below can
+    # carry a real settle predicate: a filling round settles when the market's on-chain
+    # CUMULATIVE volume reaches cv_before + volume. Zero-fill rounds (book rewrite only)
+    # have no distinguishable on-chain marker — counted, not tracked.
+    combined = resting_orders + sealed + public
+    clearing = clear(combined) if combined else {"price": 0, "volume": 0, "fills": {}}
+    cv_before = mstate(b"cv", m)
+    round_check = ((lambda want=cv_before + clearing["volume"]: mstate(b"cv", m) >= want)
+                   if clearing["volume"] else None)
+    round_detail = f"market {m}: {len(sealed)} sealed + {len(public)} public, vol {disp(clearing['volume'])}"
     if sealed and ENC_MODE:
         # encrypt-until-batch round: the committee decrypts each sealed ciphertext (proving it
         # via Chaum-Pedersen); refine verifies every proof, recovers the orders, and clears them
@@ -621,7 +654,7 @@ def api_round(b):
         # No reveal round — traders needn't be online at match time.
         cts = ",".join(o["ciphertext"] for o in sealed)
         d = committee_run("round", m, base, quote, section.hex(), cts)
-        submit(bytes.fromhex(d["round"]))
+        submit(bytes.fromhex(d["round"]), check=round_check, detail=round_detail)
     elif sealed:
         # UNIFIED sealed round (commit–reveal): the resting book + this round's public orders +
         # the revealed sealed orders all clear together at ONE uniform price (so a sealed order
@@ -634,16 +667,15 @@ def api_round(b):
         submit(bytes([TAG_REVEAL]) + hdr
                + struct.pack("<I", len(commits)) + commits
                + struct.pack("<I", len(reveals)) + reveals
-               + section)
+               + section, check=round_check, detail=round_detail)
     elif public or shrank:
         # signed public round: the section carries the new signed orders + prune list + the
         # on-chain book. Also runs on `shrank` (an order expired) with no new orders, to
         # rewrite the book without the expired one — an empty cross conserves value and
         # leaves the last price untouched (apply_settlement only updates lp on real fills).
-        submit(bytes([TAG_SMATCH]) + hdr + section)
-    # This round's clearing (mirrors refine); reused for the receipt AND to carry sealed remainders.
-    combined = resting_orders + sealed + public
-    clearing = clear(combined) if combined else {"price": 0, "volume": 0, "fills": {}}
+        submit(bytes([TAG_SMATCH]) + hdr + section, check=round_check, detail=round_detail)
+    # clearing was computed above (pre-submit, for the settle predicate); reused for the
+    # receipt AND to carry sealed remainders.
     fills = clearing["fills"]
     # A big order rarely fills against one 6 s batch's thin supply. Public/market remainders
     # already REST in the on-chain book and keep filling across auctions. Sealed remainders are

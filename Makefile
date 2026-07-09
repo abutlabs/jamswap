@@ -32,8 +32,9 @@ MIXED        = -f docker-compose.mixed.yml
 MIXED_DEX    = -f docker-compose.mixed.yml -f docker-compose.mixed-dex.yml
 
 MONITOR      = -f docker-compose.mixed.yml -f docker-compose.monitor.yml
+LOAD         = -f docker-compose.mixed.yml -f docker-compose.load.yml
 
-.PHONY: up down logs mixed mixed-down mixed-dex mixed-dex-down build-local local mixed-local mixed-dex-local verify verify-mixed monitor monitor-down
+.PHONY: up down logs mixed mixed-down mixed-dex mixed-dex-down build-local local mixed-local mixed-dex-local verify verify-mixed monitor monitor-down load load-down
 
 up:
 	docker compose up -d
@@ -83,6 +84,15 @@ monitor:
 
 monitor-down:
 	docker compose $(MONITOR) rm -sf exporter prometheus grafana canary
+
+# Trading load against the RUNNING mixed net (PROFILE=trading|steady|faucet-storm,
+# RATE=ops/min). Scale locally: docker compose $(LOAD) up -d --scale loadgen=4 loadgen
+# Cluster-scale: k8s/loadgen.yaml.
+load:
+	docker compose $(LOAD) up -d --build loadgen
+
+load-down:
+	docker compose $(LOAD) rm -sf loadgen
 
 # E2E smoke test against the RUNNING default stack: register -> handle, duplicate
 # work-packages survived, faucet deposit, signed withdraw. Fresh account per run.

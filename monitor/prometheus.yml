@@ -31,3 +31,10 @@ scrape_configs:
         labels: { component: builder }
       - targets: ["canary:9110"]
         labels: { component: canary }
+
+  # offered load, measured from OUTSIDE the system under test (docker-compose.load.yml
+  # / k8s/loadgen.yaml). Target absent unless a load test is running.
+  - job_name: loadgen
+    static_configs:
+      - targets: ["loadgen:9111"]
+        labels: { component: loadgen }
