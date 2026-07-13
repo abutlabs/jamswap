@@ -13,6 +13,7 @@ import hashlib, json, os, secrets, struct, subprocess, threading, time, urllib.r
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import metrics                     # /metrics + the submit->settle pending ledger
+import order_telemetry            # per-order lifecycle SLO (placement -> durable clear)
 from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
 from clearing import clear        # builder-side clearing (mirrors refine); for per-order fill receipts
 from treasury import (jamkb_rent, profit_split, max_withdrawable, solvency, reserve_target,
@@ -224,6 +225,35 @@ def book_of(m):
         out.append({"account": a, "id": oid, "side": "buy" if side == BUY else "sell",
                     "price": disp(p), "qty": disp(q)})
     return out
+
+def _marketable(m, side, price):
+    """True if an incoming order at (side, atomic price) crosses standing liquidity —
+    the on-chain resting book OR an opposing order already in the mempool. A
+    marketable order SHOULD clear on a healthy chain; the order SLO counts the ones
+    that then fail to. Best-effort and read-only; any error is treated as non-marketable
+    (conservative: it never inflates the SLO denominator)."""
+    try:
+        raw = storage(b"book" + struct.pack("<I", m))
+        for i in range(len(raw) // 17):
+            _a, _oid, bside, p, q = struct.unpack_from("<IIBII", raw, i * 17)
+            if q <= 0:
+                continue
+            if side == BUY and bside == SELL and price >= p:
+                return True
+            if side == SELL and bside == BUY and price <= p:
+                return True
+        with _lock:
+            rest = list(pending.get(m, []))
+        for o in rest:
+            if o.get("sealed") or o.get("price") is None:
+                continue                      # sealed terms are hidden — can't judge crossing
+            if side == BUY and o["side"] == SELL and price >= o["price"]:
+                return True
+            if side == SELL and o["side"] == BUY and price <= o["price"]:
+                return True
+    except Exception:
+        return False
+    return False
 
 # ---- API handlers ---------------------------------------------------------
 def api_deposit(b):
@@ -573,9 +603,11 @@ def api_order(b):
         # the signature against the account's registered key + the monotonic seq floor).
         _submit_signed_commit(m, draft, int(b["commit_seq"]), bytes.fromhex(b["commit_sig"]))
         o.update({k: draft[k] for k in ("reveal", "ciphertext", "commit") if k in draft})
+    marketable = _marketable(m, side, price) if not sealed else False
     with _lock:
         pending.setdefault(m, []).append(o)
         n = len(pending[m])
+    order_telemetry.placed(m, acct, oid, side, price, qty, sealed, marketable)
     return {"ok": True, "order_id": oid, "sealed": o["sealed"], "type": otype, "pending": n}
 def expired_pairs(m, rest_bytes):
     # (account, oid) pairs of resting orders whose good-till-time has passed. The book bytes
@@ -588,6 +620,7 @@ def expired_pairs(m, rest_bytes):
         exp = order_expiry.get((m, a, oid))
         if exp and exp <= now:
             order_expiry.pop((m, a, oid), None); out.append((a, oid))
+            order_telemetry.terminal(m, a, oid, "expired")
     return out
 def signed_order_bytes(o):
     # order(17) ‖ flags(1) ‖ signed_price(4) ‖ seq(8) ‖ pubkey(32) ‖ sig(64) — must match
@@ -596,6 +629,28 @@ def signed_order_bytes(o):
     return (order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"])
             + bytes([flags]) + struct.pack("<IQ", o["signed_price"], o["seq"])
             + o["pubkey"] + o["sig"])
+def _seq_sanitize(m, orders):
+    """Enforce the service's per-account seq discipline BEFORE a round is submitted,
+    so the round can never be rejected wholesale for a stale/out-of-order seq.
+    Returns (kept, dead): kept is sorted (account, seq) ascending with every seq
+    strictly above the account's current on-chain floor; dead is permanently stale
+    (seq <= floor — a later order from that account already settled past it)."""
+    floors = {}
+    def floor(acct):
+        if acct not in floors:
+            v = storage(b"sq" + struct.pack("<I", acct))
+            floors[acct] = int.from_bytes(v, "little") if v else 0
+        return floors[acct]
+    kept, dead = [], []
+    # ascending by (account, seq): the service raises each account's running floor to
+    # the order's seq in this order, so ascending guarantees every step strictly rises.
+    for o in sorted(orders, key=lambda o: (o["account"], o.get("seq", 0))):
+        if o.get("seq", 0) <= floor(o["account"]):
+            dead.append(o)          # already superseded on-chain — can never settle
+        else:
+            kept.append(o)
+    return kept, dead
+
 def public_section_bytes(public, pruned, raw_book):
     # the signed public-order section every round type now ends with:
     # [ns:u16][signed orders][np:u16][pruned (account,oid) pairs][on-chain book, byte-exact]
@@ -632,17 +687,29 @@ def _parse_book(raw):
 _round_gate = {}                   # market -> {"check": None, "t": ...} cooldowns (zero-fill/busy/timeout)
 _inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
                                    #   {"check","t","sealed","public","resting","clearing"}
-ROUND_GATE_SECS = 300.0   # settle patience: queue wait + dance on the REAL shared chain is minutes, not seconds
-SETTLE_HOLD_SECS = 150.0  # durability: the cv predicate must HOLD this long before receipts —
-                          # on the finality-less contested chain a round can settle on a branch
-                          # that LOSES fork choice minutes later (observed live 2026-07-09:
-                          # volume 54 -> 0, every balance snapped back to genesis; then a 60 s
-                          # hold was still breached once — jamswap_settle_reverted_total caught
-                          # a re-org spanning a full Safrole epoch, the lasair/PolkaJam gamma_s
-                          # divergence on partially-filled lotteries). 150 s > 2 epochs (tiny
-                          # E=12 x 6 s) rides out epoch-scale re-orgs; the real fix is the
-                          # Safrole divergence + a finality gadget (see TOKENS.md roadmap).
-MAX_ROUND_ORDERS = 256             # per-round batch cap (refine gas ~1.31M/signed order; wire ~130 B/order)
+ROUND_GATE_SECS = float(os.environ.get("ROUND_GATE_SECS", "300"))   # settle patience before a round is abandoned + re-queued
+SETTLE_HOLD_SECS = float(os.environ.get("SETTLE_HOLD_SECS", "150"))
+                          # durability: the cv predicate must HOLD this long before receipts. The
+                          # right value is the DEEPEST re-org the chain can produce, which depends
+                          # on the consensus:
+                          #   * MIXED lasair+PolkaJam (no shared finality): a settling branch can
+                          #     lose fork choice minutes later — observed live 2026-07-09: volume
+                          #     54 -> 0, balances snapped back to genesis; a 60 s hold was breached
+                          #     once by a re-org spanning a full Safrole epoch. 150 s (> 2 tiny
+                          #     epochs of 12x6 s) rides those out. This is the honest stopgap until
+                          #     a cross-client finality gadget lands (docs/TOKENS.md roadmap).
+                          #   * ALL-LASAIR (one coherent fork choice): re-orgs are 1-2 blocks, so
+                          #     SETTLE_HOLD_SECS=18 (3 slots) confirms fast — set it in the compose.
+                          # jamswap_settle_reverted_total measures whether the chosen hold is safe.
+MAX_ROUND_ORDERS = int(os.environ.get("MAX_ROUND_ORDERS", "256"))
+                                   # per-round batch cap. Refine gas ~1.31M/signed order and wire
+                                   # ~130 B/order bound it from above, but there is also a THROUGHPUT
+                                   # argument for keeping it SMALL: one round settles per market at a
+                                   # time (the in-flight gate), so a giant round that fails to settle
+                                   # wedges the whole market for the gate window while it cycles. Many
+                                   # small rounds that each settle fast drain a backlog better than one
+                                   # 253-order round that keeps timing out (found live 2026-07-09 on the
+                                   # all-lasair net). Set it per-net in the compose (e.g. 48).
 ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
 
 def _finalize_round(m, fr):
@@ -696,12 +763,16 @@ def _resolve_rounds_once(now=None):
             # re-guarantees its work-item); count it so the dashboard shows it.
             fr["ok_since"] = None
             metrics.inc("jamswap_settle_reverted_total", {"market": str(m)})
+            for o in fr["sealed"] + fr["public"]:
+                order_telemetry.reverted(m, o["account"], o["oid"])
             print(f"round m{m}: settlement REVERTED by re-org — holding for re-settle")
         elif now - fr["t"] > ROUND_GATE_SECS:
             _inflight.pop(m, None)
             with _lock:
                 pending.setdefault(m, []).extend(fr["sealed"] + fr["public"])
             _round_gate[m] = {"check": None, "t": now}
+            for o in fr["sealed"] + fr["public"]:
+                order_telemetry.requeued(m, o["account"], o["oid"])
             print(f"round m{m}: never settled — re-queued "
                   f"{len(fr['sealed']) + len(fr['public'])} order(s), no receipts")
 
@@ -751,6 +822,7 @@ def _stats_poller():
                 fr = _inflight.get(m)
                 metrics.set_gauge("jamswap_inflight_orders", lbl,
                                   float(len(fr["sealed"]) + len(fr["public"])) if fr else 0.0)
+            order_telemetry.snapshot()   # refresh jamswap_order_open + SLO gauge
         except Exception as e:
             print("stats poller error:", e)
 
@@ -787,6 +859,7 @@ def api_round(b):
         pending[m] = plan.carry + overflow   # hidden non-crossing sealed + over-cap tail wait their turn
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
             order_expiry.pop((m, o["account"], o["oid"]), None)
+            order_telemetry.terminal(m, o["account"], o["oid"], "expired")
     sealed, public = plan.reveal, plan.public
     # MIXED-CHAIN COMMIT GATE: a reveal only settles if its owner-signed commit has
     # ALREADY accumulated — the service's consume_set (lib.rs) matches every consumed
@@ -811,6 +884,21 @@ def api_round(b):
                 pending.setdefault(m, []).extend(waiting)
             print(f"round m{m}: deferred {len(waiting)} sealed reveal(s) — commit not on-chain yet")
         sealed = ready
+    # SEQ DISCIPLINE (service lib.rs check_orders): every signed order's seq must
+    # STRICTLY beat its account's on-chain floor, and the service raises the floor to
+    # each order's seq IN ROUND ORDER — so one order at/below the floor rejects the
+    # WHOLE round untouched (fail-closed). Two failure modes this guards:
+    #   (1) a re-queued order whose account settled a higher seq meanwhile is now
+    #       permanently stale (seq <= floor) — it can NEVER settle; drop it (don't
+    #       re-queue it to poison every future round);
+    #   (2) two live orders from one account in one round out of seq order — the
+    #       higher raises the floor and rejects the lower. Sort ascending per account.
+    # Without this the first round timeout cascades into a permanent cv stall (found
+    # live on the all-lasair net 2026-07-09: chain coherent + accumulating, cv frozen).
+    public, dead = _seq_sanitize(m, public)
+    for o in dead:
+        order_expiry.pop((m, o["account"], o["oid"]), None)
+        order_telemetry.terminal(m, o["account"], o["oid"], "rejected")
     # every round type carries the same signed public section: new orders WITH their
     # signatures (verified in refine), the explicit prune list, and the on-chain book
     # byte-exact (the service hash-checks it — a fabricated book rejects the round).
@@ -873,6 +961,8 @@ def api_round(b):
         # never settles re-queues these exact orders instead (no phantom fills).
         _inflight[m] = {"check": round_check, "t": time.time(), "sealed": sealed,
                         "public": public, "resting": resting_orders, "clearing": clearing}
+        for o in sealed + public:
+            order_telemetry.rounded(m, o["account"], o["oid"])
         return {"ok": True, "queued": True,
                 "cleared": {"sealed": len(sealed), "public": len(public),
                             "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
@@ -1110,6 +1200,11 @@ def _record_exec(o, filled, price, sealed, now):
     dq.append({"ts": now, "market": o["market"], "side": o["side"],
                "price": disp(price), "qty": disp(qty), "filled": disp(filled),
                "remainder": disp(rem), "disposition": disp_, "oid": o["oid"]})
+    # Per-order SLO: a durable disposition ends the order's life. "partial-resting"
+    # and "resting" are NOT terminal — the remainder keeps working until it fills or
+    # expires, so they must not close the lifecycle record here.
+    if disp_ in ("filled", "partial-carried", "partial-cancelled", "cancelled"):
+        order_telemetry.terminal(o["market"], o["account"], o["oid"], disp_, filled=filled)
 def record_executions(m, resting, reveal, public, clearing=None):
     # write a per-order receipt for the trader-submitted orders (reveal=sealed, public=rests) and
     # any resting maker that filled, from this round's clearing. `clearing` may be passed in (api_round
@@ -1148,11 +1243,16 @@ def api_pending(q):
     # relayed op sits right now — pending / settled (+latency) / timed_out.
     return {"pending": metrics.pending_snapshot()}
 
+def api_orders_slo(q):
+    # the per-order lifecycle SLO: cleared/(cleared+missed) among marketable orders,
+    # plus how many orders sit in each phase right now. The soak's headline number.
+    return order_telemetry.snapshot()
+
 ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine": api_mine,
               "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
               "/api/govnonce": api_govnonce, "/api/treasury_status": api_treasury_status,
               "/api/trades": api_trades, "/api/executions": api_executions,
-              "/api/pending": api_pending}
+              "/api/pending": api_pending, "/api/orders_slo": api_orders_slo}
 
 def has_expired(m):
     now = time.time()
@@ -1231,6 +1331,13 @@ class H(BaseHTTPRequestHandler):
                 # caller to retry later (the UI/loadgen treat 503 as retryable)
                 self._send(503, json.dumps({"error": str(e), "retry": True}).encode())
                 metrics.inc("jamswap_api_requests_total", {"route": path, "code": 503})
+            except ValueError as e:
+                # CLIENT error, not a server fault: validation refused the request
+                # (open-order cap, insufficient funds, bad signature, unregistered
+                # account, malformed body). 400 so callers — and the fuzzer — can tell
+                # a legitimate refusal from a server that actually broke (500).
+                self._send(400, json.dumps({"error": str(e)}).encode())
+                metrics.inc("jamswap_api_requests_total", {"route": path, "code": 400})
             except Exception as e:
                 self._send(500, json.dumps({"error": str(e)}).encode())
                 metrics.inc("jamswap_api_requests_total", {"route": path, "code": 500})

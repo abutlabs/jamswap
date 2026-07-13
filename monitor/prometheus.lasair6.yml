@@ -1,0 +1,38 @@
+# Prometheus scrape config for the ALL-LASAIR coherent net (docker-compose.lasair6.yml).
+# Unlike the mixed net there is no PolkaJam and no log-exporter — every source is
+# natively instrumented and reachable by service DNS on the `lasnet` network:
+#   dex      :8080   jamswap_*         (API, order lifecycle, balances, pricing, SLO)
+#   builder  :19980  builder_*         (CE-133 fan-out to the guarantors)
+#   lm0..lm5 :9615   lasair_*          (block height, authoring, CE-133 pipeline)
+# Brought up together with the net; see docker-compose.lasair6-monitor.yml.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  # The jamswap SERVICE layer — the DEX itself. This is the source for every panel
+  # the accounts/trading dashboard draws: per-account balances, last price, volume,
+  # mempool + in-auction depth, order funnel, failures, and the clearing SLO.
+  - job_name: jamswap
+    static_configs:
+      - targets: ["dex:8080"]
+        labels: { component: dex }
+      - targets: ["builder:19980"]
+        labels: { component: builder }
+
+  # The six lasair validators, each serving its own /metrics. The `node` label is
+  # what the dashboards legend on ({{node}}); keep it lm0..lm5 to match.
+  - job_name: lasair
+    static_configs:
+      - targets: ["lm0:9615"]
+        labels: { node: lm0, client: lasair }
+      - targets: ["lm1:9615"]
+        labels: { node: lm1, client: lasair }
+      - targets: ["lm2:9615"]
+        labels: { node: lm2, client: lasair }
+      - targets: ["lm3:9615"]
+        labels: { node: lm3, client: lasair }
+      - targets: ["lm4:9615"]
+        labels: { node: lm4, client: lasair }
+      - targets: ["lm5:9615"]
+        labels: { node: lm5, client: lasair }

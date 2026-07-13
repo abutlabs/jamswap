@@ -1,0 +1,374 @@
+{
+ "uid": "jam-finality",
+ "title": "JAM finality (lasair)",
+ "timezone": "",
+ "refresh": "5s",
+ "time": {
+  "from": "now-30m",
+  "to": "now"
+ },
+ "editable": true,
+ "schemaVersion": 39,
+ "version": 1,
+ "templating": {
+  "list": [
+   {
+    "name": "node",
+    "label": "lasair node",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "label_values(lasair_block_height, node)",
+    "refresh": 2,
+    "current": {
+     "text": "lm0",
+     "value": "lm0"
+    },
+    "sort": 1,
+    "includeAll": false,
+    "multi": false
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "row",
+   "title": "Native finality (beta-finalized) \u2014 all-lasair net",
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 1
+   },
+   "collapsed": false
+  },
+  {
+   "type": "timeseries",
+   "title": "Finalized height \u2014 all nodes (should track together)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 8,
+      "pointSize": 4,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 1,
+    "w": 24,
+    "h": 8
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    }
+   },
+   "targets": [
+    {
+     "expr": "lasair_finalized_height",
+     "legendFormat": "{{node}}",
+     "refId": "A"
+    }
+   ],
+   "description": "Each node's beta-finalized block height. On a healthy net all six advance in lockstep."
+  },
+  {
+   "type": "timeseries",
+   "title": "Head vs finalized \u2014 $node",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 8,
+      "pointSize": 4,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 9,
+    "w": 12,
+    "h": 8
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    }
+   },
+   "targets": [
+    {
+     "expr": "lasair_block_height{node=~\"$node\"}",
+     "legendFormat": "best head",
+     "refId": "A"
+    },
+    {
+     "expr": "lasair_finalized_height{node=~\"$node\"}",
+     "legendFormat": "finalized",
+     "refId": "B"
+    }
+   ],
+   "description": "Best-chain head vs beta-finalized head. The gap is how far finality trails the tip."
+  },
+  {
+   "type": "timeseries",
+   "title": "Finality lag (blocks) \u2014 all nodes",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 8,
+      "pointSize": 4,
+      "showPoints": "never"
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 9,
+    "w": 12,
+    "h": 8
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    }
+   },
+   "targets": [
+    {
+     "expr": "lasair_block_height - lasair_finalized_height",
+     "legendFormat": "{{node}}",
+     "refId": "A"
+    }
+   ],
+   "description": "head height minus finalized height, per node. Advancing finality keeps this bounded; a monotonically growing lag means finality has stalled."
+  },
+  {
+   "type": "stat",
+   "title": "Finalized height \u2014 $node",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 0,
+    "y": 17,
+    "w": 6,
+    "h": 6
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "expr": "lasair_finalized_height{node=~\"$node\"}",
+     "legendFormat": "{{node}}",
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Finalized slot \u2014 $node",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 6,
+    "y": 17,
+    "w": 6,
+    "h": 6
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "expr": "lasair_finalized_slot{node=~\"$node\"}",
+     "legendFormat": "{{node}}",
+     "refId": "A"
+    }
+   ]
+  },
+  {
+   "type": "stat",
+   "title": "Active commit tally \u2014 $node",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 12,
+    "y": 17,
+    "w": 6,
+    "h": 6
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "expr": "lasair_finality_commits{node=~\"$node\"}",
+     "legendFormat": "{{node}}",
+     "refId": "A"
+    }
+   ],
+   "description": "Distinct-validator commit count for the current vote target (finalizes at 2V/3+1 = 5)."
+  },
+  {
+   "type": "stat",
+   "title": "Max finality lag (blocks)",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "fieldConfig": {
+    "defaults": {
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "gridPos": {
+    "x": 18,
+    "y": 17,
+    "w": 6,
+    "h": 6
+   },
+   "options": {
+    "colorMode": "value",
+    "graphMode": "area",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ]
+    }
+   },
+   "targets": [
+    {
+     "expr": "max(lasair_block_height - lasair_finalized_height)",
+     "legendFormat": "{{node}}",
+     "refId": "A"
+    }
+   ]
+  }
+ ]
+}

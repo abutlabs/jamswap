@@ -28,14 +28,14 @@ x-polkajam: &polkajam
     context: .
     dockerfile: mixed/Dockerfile.polkajam
     args:
-      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.7.7}
+      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
       PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-07-04}
   image: jamswap-pj-mixed:local
   restart: unless-stopped
   volumes: [ "shared:/shared" ]
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.7.7}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
   restart: unless-stopped
   volumes:
     - "shared:/shared"
@@ -63,7 +63,11 @@ services:
     depends_on: { spec-init: { condition: service_completed_successfully } }
     environment: { ROLE: validator, INDEX: "0", SHARED: /shared }
     networks: { mixnet: { ipv4_address: 172.28.0.10 } }
-    ports: ["19890:19890"]        # v0 RPC, for the watcher / host debugging
+    ports:
+      - "19890:19890"             # v0 RPC, for the watcher / host debugging
+      - "40060:40060/udp"         # v0 JAMNP-S/QUIC — lets the host-side lasair_follow
+                                  # observer re-execute this net's blocks (gamma_s
+                                  # catcher, lasair docs/FINALITY_PLAN.md Phase 0)
   pj1:
     <<: *polkajam
     depends_on: { spec-init: { condition: service_completed_successfully } }
@@ -161,7 +165,7 @@ services:
   #    builder endpoint (guaranteeing on its own slots). The ALPN embeds the
   #    per-genesis hash, so the bridges read it from /shared/genesis_hex.
   builder:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.7.7}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -181,7 +185,7 @@ services:
     restart: unless-stopped
 
   reader:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.7.7}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -214,7 +218,8 @@ services:
     working_dir: /app
     command: ["python3", "server.py"]
     ports:
-      - "8080:8080"
+      - "8090:8080"    # host 8090 (8080 is taken by a local app); in-network peers
+                       # still reach the dex on dex:8080 by service DNS
     networks: { mixnet: {} }
     restart: unless-stopped
 

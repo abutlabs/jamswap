@@ -31,7 +31,7 @@ PY
 
 args=(--chain "$SHARED/spec.json" run --temp --peer-id "$PID"
       --key-seed-file "$SHARED/pj_${INDEX}.seed"
-      --listen-ip 0.0.0.0 --port "$PORT" --finality-mode dummy
+      --listen-ip 0.0.0.0 --port "$PORT" --finality-mode "${FINALITY_MODE:-dummy}"
       --rpc --rpc-listen-ip 0.0.0.0 --rpc-port "$RPC")
 [ "$ISBOOT" = "0" ] && args+=(--bootnode "$BOOT")
 

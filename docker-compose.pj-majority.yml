@@ -1,0 +1,135 @@
+# PolkaJam-MAJORITY net for the Phase-3b cross-client FINALITY BRIDGE
+# (lasair FINALITY_PLAN.md, revised Gate 3b).
+#
+#   LASAIR_IMAGE=lasair:local docker compose -f docker-compose.pj-majority.yml up -d
+#
+# SIX PolkaJam validators (tiny config), ALL running real GRANDPA finality
+# (FINALITY_MODE=grandpa), on one shared gen-spec genesis. With all six voting,
+# GRANDPA reaches its 2/3+1 = 5-of-6 quorum and FINALIZES — pj's `finalizedBlock`
+# RPC then advances past genesis (a solo/dummy node never does).
+#
+# WHY all-pj and not 3:3: any BFT gadget needs >=2/3+1 of the WHOLE set; on a 3:3
+# mixed net each client controls only 3 and speaks a different finality protocol,
+# so NEITHER finalizes. The honest cross-client test is asymmetric — pj finalizes
+# among itself, and a lasair FOLLOWER (bin/lasair_finality_bridge, run on the HOST
+# against pj0's exposed ports) re-executes pj's chain and reconciles pj's finalized
+# head against its OWN imported chain. See lasair scripts/finality-bridge.sh.
+#
+# pj0 exposes RPC (19890) and JAMNP-S/QUIC (40060/udp) to the host so the bridge
+# can both follow the chain and poll finalizedBlock. `down -v` for a fresh genesis.
+
+x-polkajam: &polkajam
+  build:
+    context: .
+    dockerfile: mixed/Dockerfile.polkajam
+    args:
+      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
+      PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-06-29}
+  image: jamswap-pj-grandpa:local
+  restart: unless-stopped
+  volumes: [ "shared_pjmaj:/shared" ]
+
+services:
+  # 1) mint the shared genesis (all six indices = PolkaJam), then exit 0.
+  spec-init:
+    <<: *polkajam
+    restart: "no"
+    environment:
+      ROLE: init
+      SHARED: /shared
+      LAYOUT: polkajam,polkajam,polkajam,polkajam,polkajam,polkajam
+      IP_BASE: "172.30.0"           # must match the pjmaj subnet / static IPs below
+      GENESIS_BALANCE: "0"          # pure-consensus net: no service, no dev accounts
+    networks: { pjmaj: {} }
+
+  pj0:
+    <<: *polkajam
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { ROLE: validator, INDEX: "0", SHARED: /shared, FINALITY_MODE: grandpa }
+    networks: { pjmaj: { ipv4_address: 172.30.0.10 } }
+    ports:
+      # host ports offset (+10 / +10) to avoid the running `jamswap` mixed net,
+      # which already binds 19890 and 40060; container-internal ports are unchanged.
+      - "19900:19890"          # finalizedBlock / bestBlock RPC (host -> bridge)
+      - "40070:40060/udp"      # JAMNP-S/QUIC (host -> bridge follows the chain)
+  pj1:
+    <<: *polkajam
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { ROLE: validator, INDEX: "1", SHARED: /shared, FINALITY_MODE: grandpa }
+    networks: { pjmaj: { ipv4_address: 172.30.0.11 } }
+  pj2:
+    <<: *polkajam
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { ROLE: validator, INDEX: "2", SHARED: /shared, FINALITY_MODE: grandpa }
+    networks: { pjmaj: { ipv4_address: 172.30.0.12 } }
+  pj3:
+    <<: *polkajam
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { ROLE: validator, INDEX: "3", SHARED: /shared, FINALITY_MODE: grandpa }
+    networks: { pjmaj: { ipv4_address: 172.30.0.13 } }
+  pj4:
+    <<: *polkajam
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { ROLE: validator, INDEX: "4", SHARED: /shared, FINALITY_MODE: grandpa }
+    networks: { pjmaj: { ipv4_address: 172.30.0.14 } }
+  pj5:
+    <<: *polkajam
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { ROLE: validator, INDEX: "5", SHARED: /shared, FINALITY_MODE: grandpa }
+    networks: { pjmaj: { ipv4_address: 172.30.0.15 } }
+
+  # watcher: prints best + finalized advancing so `logs watch` shows GRANDPA working
+  watch:
+    <<: *polkajam
+    depends_on: [pj0]
+    environment: { ROLE: watch, SHARED: /shared }
+    networks: { pjmaj: {} }
+    entrypoint: ["bash","-c"]
+    command:
+      - |
+        for _ in $$(seq 1 90); do [ -s /shared/ready ] && break; sleep 1; done
+        echo "watching pj0: best vs finalized ..."
+        while true; do
+          for m in bestBlock finalizedBlock; do
+            r=$$(curl -s -m3 -X POST -H 'content-type: application/json' \
+               -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$$m\",\"params\":[]}" \
+               http://172.30.0.10:19890 2>/dev/null)
+            echo "$$m: $$(echo "$$r" | python3 -c "import sys,json;d=json.load(sys.stdin)['result'];print('slot',d['slot'],'head',d['header_hash'][:12])" 2>/dev/null || echo booting)"
+          done
+          sleep 4
+        done
+
+  # cross-client finality bridge (FINALITY_PLAN 3b), run IN-NETWORK as a service:
+  # follows pj0 over JAMNP-S/QUIC, re-executes its chain through lasair's own STF,
+  # and each round reconciles pj0's UP-0 `final` head against lasair's own chain —
+  # client-agnostic (reads the SPEC handshake field, no client RPC). Writes
+  # crossclient_finality_* metrics to /shared/bridge_metrics.prom and logs each
+  # AGREE/DIVERGE verdict. In-network QUIC avoids the host UDP-proxy death.
+  bridge:
+    image: ${LASAIR_IMAGE:-lasair:local}
+    depends_on:
+      spec-init: { condition: service_completed_successfully }
+      pj0: { condition: service_started }
+    volumes: [ "shared_pjmaj:/shared" ]
+    entrypoint: ["bash","-c"]
+    command:
+      - |
+        for _ in $$(seq 1 90); do [ -s /shared/ready ] && break; sleep 1; done
+        echo "bridge: genesis ready; giving pj GRANDPA a moment to finalize ..."; sleep 15
+        exec /usr/local/bin/lasair-finality-bridge \
+          --host 172.30.0.10 --port 40060 \
+          --spec /shared/spec.json \
+          --poll-secs 10 --rounds 0 \
+          --metrics-file /shared/bridge_metrics.prom
+    networks: { pjmaj: {} }
+    restart: unless-stopped
+
+networks:
+  pjmaj:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  shared_pjmaj:

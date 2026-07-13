@@ -61,12 +61,15 @@ const GOV_PUBKEY: [u8; 32] = [
     0xae, 0x2c, 0x14, 0x56, 0xc9, 0x28, 0x0f, 0xe5, 0x2e, 0xaa, 0x4f, 0x22, 0x54, 0xf7, 0xe6, 0xca,
 ];
 
-// trading fee: a flat, cost-based fee charged per filled order in the market's BASE
-// asset (FBA has no maker/taker), routed to the treasury account. 0.03 base units
-// (300 atomic at SCALE 10000) — approximates the per-order execution + state cost rather
-// than a size-proportional trading fee. Base-asset collection means DOT/USDC pays fees in
-// DOT and JAMKB/* pays directly in JAMKB, funding the service's JAMKB state-rent reserve;
-// only the surplus is withdrawable profit, via a GOV_PUBKEY-signed sweep. See docs/REVENUE.md.
+// trading fee: a flat, cost-based fee charged ONCE PER ORDER in the market's BASE asset
+// (FBA has no maker/taker), routed to the treasury account. 0.03 base units (300 atomic
+// at SCALE 10000) — approximates the per-order execution + state cost rather than a
+// size-proportional trading fee. Charged in the round the order is INTRODUCED (one binding
+// per new order), NOT per fill, so an order's fee is deterministic regardless of how many
+// rounds it fills across (a per-fill fee double-charged fragmented orders — see
+// apply_settlement). Base-asset collection means DOT/USDC pays fees in DOT and JAMKB/* pays
+// directly in JAMKB, funding the service's JAMKB state-rent reserve; only the surplus is
+// withdrawable profit, via a GOV_PUBKEY-signed sweep. See docs/REVENUE.md.
 const FEE_FLAT: u64 = 300;
 const FEE_ACCOUNT: u32 = u32::MAX;
 // Owner / beneficiary of withdrawable profit (Polkadot AssetHub). Recorded for
@@ -429,23 +432,45 @@ fn enc_round_output(
     out
 }
 
-// Apply conservation-checked settlement deltas (incl. the treasury fee) to balances at the
-// uniform price, and update the market's last price + cumulative volume. Shared by the
-// plaintext (TAG_MATCH) and sealed (TAG_REVEAL) settlement paths.
-fn apply_settlement(base: u32, quote: u32, market: u32, settle: &[u8]) {
-    let Some((price, entries)) = wire::decode_settlement(settle) else { return };
-    if entries.is_empty() {
-        return;
+// Apply conservation-checked settlement to balances at the uniform price, charge the
+// flat per-ORDER trading fee, and update the market's last price + cumulative volume.
+// Shared by the plaintext (TAG_SMATCH) and sealed (TAG_REVEAL) settlement paths.
+//
+// The trading fee is charged ONCE per order, in the round it is INTRODUCED (one binding
+// per new order), NOT per fill. A per-fill fee double-charged any order that filled
+// across more than one round — its total cost then depended on how the builder happened
+// to batch it, which is non-deterministic and penalises makers whose orders fragment
+// (found by dex_fuzz.py at 100 orders, 2026-07-10: account paid 17 fees for 16 orders).
+// Charging at introduction makes an order's fee deterministic and batching-independent.
+fn apply_settlement(base: u32, quote: u32, market: u32, settle: &[u8], bindings: &[u8]) {
+    let apply = |bal: u64, d: i128| -> u64 { (bal as i128 + d).clamp(0, u64::MAX as i128) as u64 };
+    if let Some((price, entries)) = wire::decode_settlement(settle) {
+        if !entries.is_empty() {
+            // fills settle at the uniform price with NO per-fill fee (fee_flat = 0); the
+            // fee is the per-order charge below. The treasury still absorbs the quote
+            // rounding residual so Σ deltas == 0 exactly.
+            for (account, db, dq) in wire::settle_deltas(price, &entries, 0, FEE_ACCOUNT, SCALE) {
+                set_bal(base, account, apply(get_bal(base, account), db));
+                set_bal(quote, account, apply(get_bal(quote, account), dq));
+            }
+            let volume: u64 = entries.iter().filter(|e| e.side == Side::Buy).map(|e| e.qty as u64).sum();
+            set_storage(&mkey(b"lp", market), &price.to_le_bytes()).ok();
+            let cum = get_storage(&mkey(b"cv", market)).map(|v| le_u64(&v)).unwrap_or(0) + volume;
+            set_storage(&mkey(b"cv", market), &cum.to_le_bytes()).ok();
+        }
     }
-    for (account, db, dq) in wire::settle_deltas(price, &entries, FEE_FLAT, FEE_ACCOUNT, SCALE) {
-        let apply = |bal: u64, d: i128| -> u64 { (bal as i128 + d).clamp(0, u64::MAX as i128) as u64 };
-        set_bal(base, account, apply(get_bal(base, account), db));
-        set_bal(quote, account, apply(get_bal(quote, account), dq));
+    // flat per-order fee in the BASE asset -> treasury, once per introduced order. Capped
+    // at the payer's balance so it can never underflow; the treasury accrues exactly what
+    // was debited, so base is conserved. (NOTE: only PUBLIC new orders carry bindings;
+    // sealed reveals trade fee-free for now — a deliberate simplification, see docs/TOKENS.md.)
+    for b in wire::decode_bindings(bindings) {
+        let bal = get_bal(base, b.account);
+        let fee = FEE_FLAT.min(bal);
+        if fee > 0 {
+            set_bal(base, b.account, bal - fee);
+            set_bal(base, FEE_ACCOUNT, get_bal(base, FEE_ACCOUNT).saturating_add(fee));
+        }
     }
-    let volume: u64 = entries.iter().filter(|e| e.side == Side::Buy).map(|e| e.qty as u64).sum();
-    set_storage(&mkey(b"lp", market), &price.to_le_bytes()).ok();
-    let cum = get_storage(&mkey(b"cv", market)).map(|v| le_u64(&v)).unwrap_or(0) + volume;
-    set_storage(&mkey(b"cv", market), &cum.to_le_bytes()).ok();
 }
 
 // Verify each 36-byte entry (hash(32) ‖ account(4)) in `consumed` against a stored id-set
@@ -941,7 +966,7 @@ impl Service for Jamswap {
                         set_carry_allowance(market, a, carry_allowance(market, a).saturating_add(1));
                     }
                     set_storage(&mkey(b"book", market), book).ok();
-                    apply_settlement(base, quote, market, settle);
+                    apply_settlement(base, quote, market, settle, bindings);
                 }
                 // signed public round:
                 // [tag][m][b][q][settle_len][settle][nb][bindings][book_hash][book]
@@ -970,7 +995,7 @@ impl Service for Jamswap {
                     };
                     commit_seq_floors(&floors);
                     set_storage(&mkey(b"book", market), book).ok();
-                    apply_settlement(base, quote, market, settle);
+                    apply_settlement(base, quote, market, settle, bindings);
                 }
                 // gov-signed committee setup: [tag][n:u8][pks n*32][nonce(8)][sig(64)]
                 // — commits the encrypt-until-batch committee keys on-chain. Only GOV_PUBKEY
@@ -1102,7 +1127,7 @@ impl Service for Jamswap {
                         set_carry_allowance(market, a, carry_allowance(market, a).saturating_add(1));
                     }
                     set_storage(&mkey(b"book", market), book).ok();
-                    apply_settlement(base, quote, market, settle);
+                    apply_settlement(base, quote, market, settle, bindings);
                 }
                 _ => {}
             }

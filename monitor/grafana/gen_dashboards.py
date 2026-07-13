@@ -488,6 +488,46 @@ accounts_view = dashboard("jamswap-accounts", "JAMswap accounts & trading", [
         {"expr": "sum(rate(lasair_ce133_guaranteed_total[5m])) * 60", "legendFormat": "guaranteed", "refId": "B"},
         {"expr": "sum(rate(lasair_ce133_accumulated_total[5m])) * 60", "legendFormat": "accumulated", "refId": "C"}],
        16, 28, 8, overrides=[override("accumulated", ROLE["imported"])]),
+
+    # ── per-order clearing SLO (order_telemetry): the soak's headline reliability ──
+    stat("ORDER CLEARING SLO", "jamswap_order_clearing_slo", 0, 6, y=36, unit="percentunit",
+         thresholds=[{"color": "red", "value": None}, {"color": "orange", "value": 0.99},
+                     {"color": "green", "value": 0.9999}]),
+    stat("Marketable cleared", 'sum(jamswap_order_terminal_total{outcome=~"filled|partial-carried",marketable="true"})',
+         6, 5, y=36, color="green"),
+    stat("Marketable MISSED", 'sum(jamswap_order_terminal_total{outcome=~"expired|lost|partial-cancelled|rejected",marketable="true"}) or vector(0)',
+         11, 5, y=36, thresholds=[{"color": "green", "value": None}, {"color": "red", "value": 1}]),
+    stat("Orders open now", "sum(jamswap_order_open) or vector(0)", 16, 4, y=36),
+    stat("Clear latency p50 (s)",
+         "histogram_quantile(0.5, sum(rate(jamswap_order_clear_latency_seconds_bucket[10m])) by (le))",
+         20, 4, y=36, unit="s"),
+
+    ts("Order clearing SLO over time (target 0.9999)", [
+        {"expr": "jamswap_order_clearing_slo", "legendFormat": "SLO", "refId": "A"}],
+       0, 42, 8, unit="percentunit", minzero=False),
+    ts("Order outcomes (per min, by disposition)", [
+        {"expr": 'sum(rate(jamswap_order_terminal_total[5m])) by (outcome) * 60',
+         "legendFormat": "{{outcome}}", "refId": "A"}],
+       8, 42, 8, overrides=[override("filled", ROLE["imported"]),
+                            override("expired", ROLE["rejected"])]),
+    ts("Order clear latency (placement -> durable fill)", [
+        {"expr": "histogram_quantile(0.5, sum(rate(jamswap_order_clear_latency_seconds_bucket[10m])) by (le))",
+         "legendFormat": "p50", "refId": "A"},
+        {"expr": "histogram_quantile(0.99, sum(rate(jamswap_order_clear_latency_seconds_bucket[10m])) by (le))",
+         "legendFormat": "p99", "refId": "B"}],
+       16, 42, 8, unit="s"),
+
+    ts("Open orders by phase", [
+        {"expr": "jamswap_order_open", "legendFormat": "{{phase}}", "refId": "A"}],
+       0, 50, 8),
+    ts("Order retries (per min: re-org reverts + round timeouts)", [
+        {"expr": 'sum(rate(jamswap_order_retries_total[5m])) by (kind) * 60',
+         "legendFormat": "{{kind}}", "refId": "A"}],
+       8, 50, 8),
+    ts("Orders placed (per min, by marketable)", [
+        {"expr": 'sum(rate(jamswap_order_placed_total[5m])) by (marketable) * 60',
+         "legendFormat": "marketable={{marketable}}", "refId": "A"}],
+       16, 50, 8),
 ])
 accounts_view["links"] = [
     {"title": "JAMswap service", "type": "link", "url": "/d/jam-service", "targetBlank": False},

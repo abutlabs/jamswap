@@ -1,0 +1,193 @@
+# Jamswap on an ALL-LASAIR JAM chain — six lasair validators, one coherent
+# consensus. This is the RELIABILITY configuration: unlike the mixed lasair+
+# PolkaJam net (docker-compose.mixed.yml), every validator runs the same client,
+# so they share ONE fork choice (GP best-chain: ticketed-ancestor score, then
+# height, then first-seen) AND lasair-native β-finalization (CE-192 GRANDPA
+# commits over the state root; a 2/3+1 super-majority finalizes, and Block_tree
+# pins β so no head re-orgs below it).
+#
+# Why this exists: on the mixed net a settlement only lands if a lasair node
+# authors within U=5 slots AND its block stays canonical — but lasair and
+# PolkaJam ran different fork-choice/finality regimes, so lasair's settlement
+# blocks routinely lost canonicity and cum_volume pinned at 0 (measured
+# 2026-07-09: 138 guarantees, 0 durable clears). On this all-lasair net the six
+# validators finalize in lockstep, so a settled block can never be re-orged
+# away: SETTLE_HOLD_SECS=0 (finality replaces the hold timer) and trades settle
+# durably with zero reverts — validated live (finalized head advancing across
+# all six nodes, zero forks/rollbacks/reverts under sustained DEX load, P5).
+# Cross-client finality with PolkaJam is demonstrated separately by the
+# spec-based bridge (docker-compose.pj-majority.yml).
+#
+#   docker compose -f docker-compose.lasair6.yml up -d --build
+#   docker compose -f docker-compose.lasair6.yml logs -f lm0 | grep -E "STATUS|accumulated"
+#
+# All six validators are STANDARD JAM dev accounts (index -> seed u32-LE x8), the
+# same keys the loadgen/UI wallets sign with. spec-init mints the shared genesis
+# (LAYOUT all-lasair) and writes /shared/genesis_hex + peers_<i>.txt.
+
+x-mesh: &mesh
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
+  restart: unless-stopped
+  volumes:
+    - "shared:/shared"
+    - "./service/jamswap-service.jam:/work/jamswap-service.jam:ro"
+  networks: { lasnet: {} }
+
+# every validator is a guarantor that derives all six dev-account secrets, so it can
+# report as any assigned index and assure any pending report to the 5-of-6 threshold.
+x-mesh-env: &mesh-env
+  SPEC: /shared/spec.json
+  SERVICE: /work/jamswap-service.jam
+  SERVICE_ID: "100"
+  GUARANTOR_OWN: "0,1,2,3,4,5"
+  INTERVAL: "1"
+  WALL: "1"
+
+services:
+  # mint the all-lasair shared genesis (runs once, then exits 0). Reuses the mixed
+  # image only because it carries gen-spec.py + the lasair binary; no PolkaJam runs.
+  spec-init:
+    image: jamswap-pj-mixed:local
+    restart: "no"
+    environment:
+      ROLE: init
+      SHARED: /shared
+      LAYOUT: lasair,lasair,lasair,lasair,lasair,lasair
+      IP_BASE: "172.29.0"          # peers_<i>.txt must carry THIS net's IPs (matches lasnet subnet)
+      IP_START: "10"               # index i -> 172.29.0.(10+i), same as the service ipv4_address pins
+      SERVICE: /work/jamswap-service.jam
+      SERVICE_ID: "100"
+    volumes:
+      - "shared:/shared"
+      - "./service/jamswap-service.jam:/work/jamswap-service.jam:ro"
+    networks: { lasnet: {} }
+
+  lm0:
+    <<: *mesh
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { <<: *mesh-env, OWN: "0", IDENTITY: "100", PORT: "40060" }
+    networks: { lasnet: { ipv4_address: 172.29.0.10 } }
+  lm1:
+    <<: *mesh
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { <<: *mesh-env, OWN: "1", IDENTITY: "101", PORT: "40061" }
+    networks: { lasnet: { ipv4_address: 172.29.0.11 } }
+  lm2:
+    <<: *mesh
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { <<: *mesh-env, OWN: "2", IDENTITY: "102", PORT: "40062" }
+    networks: { lasnet: { ipv4_address: 172.29.0.12 } }
+  lm3:
+    <<: *mesh
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { <<: *mesh-env, OWN: "3", IDENTITY: "103", PORT: "40063" }
+    networks: { lasnet: { ipv4_address: 172.29.0.13 } }
+  lm4:
+    <<: *mesh
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { <<: *mesh-env, OWN: "4", IDENTITY: "104", PORT: "40064" }
+    networks: { lasnet: { ipv4_address: 172.29.0.14 } }
+  lm5:
+    <<: *mesh
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    environment: { <<: *mesh-env, OWN: "5", IDENTITY: "105", PORT: "40065" }
+    networks: { lasnet: { ipv4_address: 172.29.0.15 } }
+
+  # CE-133 submit bridge: fan work-items to ALL six validators' builder endpoints
+  # (each node's builder ALPN port = its PORT+1). Whichever authors on the winning
+  # branch reports the package.
+  builder:
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    volumes: [ "shared:/shared" ]
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
+        export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
+        exec /usr/local/bin/jamnp-builder
+    environment:
+      LASAIR_GUARANTOR_HOST: 172.29.0.10,172.29.0.11,172.29.0.12,172.29.0.13,172.29.0.14,172.29.0.15
+      LASAIR_GUARANTOR_PORT: "40061,40062,40063,40064,40065,40066"
+      LASAIR_NODE_RPC: ""
+      LASAIR_BUILDER_HTTP_PORT: "19980"
+    networks: { lasnet: {} }
+    restart: unless-stopped
+
+  # CE-129 storage-read bridge: any validator serves reads.
+  reader:
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
+    depends_on: { spec-init: { condition: service_completed_successfully } }
+    volumes: [ "shared:/shared" ]
+    entrypoint: ["bash", "-c"]
+    command:
+      - |
+        for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
+        export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
+        exec /usr/local/bin/lasair-reader
+    environment:
+      LASAIR_NODE_HOST: 172.29.0.10
+      LASAIR_NODE_PORT: "40060"
+      LASAIR_READER_HTTP_PORT: "19990"
+    networks: { lasnet: {} }
+    restart: unless-stopped
+
+  dex:
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
+    depends_on: [builder, reader]
+    environment:
+      SERVICE_ID: "100"
+      BUILDER_URL: http://builder:19980
+      READER_URL: http://reader:19990
+      PORT: "8080"
+      PYTHONUNBUFFERED: "1"
+      ORDER_EVENTS_FILE: /shared/order_events.jsonl
+      # the net FINALIZES (lasair-native GRANDPA commits over CE-192; see lasair
+      # docs/FINALITY_PLAN.md Phase 3a): history below beta-finalized cannot
+      # re-org, so settlement durability comes from CONSENSUS, not a hold
+      # timer. jamswap_settle_reverted_total still watches — a revert now means
+      # a finality violation, i.e. a chain bug by definition.
+      SETTLE_HOLD_SECS: "0"
+      ROUND_GATE_SECS: "60"
+      MAX_ROUND_ORDERS: "48"       # small rounds settle fast; a giant round wedges the market gate
+    volumes:
+      - "./offchain:/app:ro"
+      - "./service/jamswap-service.jam:/work/jamswap-service.jam:ro"
+      - "shared:/shared"
+    working_dir: /app
+    command: ["python3", "server.py"]
+    ports: ["8081:8080"]
+    networks: { lasnet: {} }
+    restart: unless-stopped
+
+  # offered load: crossing buy/sell pairs from the six dev accounts, so the SLO's
+  # marketable denominator is continuously fed. RATE orders/min; some sealed.
+  loadgen:
+    build:
+      context: .
+      dockerfile: offchain/Dockerfile
+    depends_on: [dex]
+    command: ["python3", "loadgen.py"]
+    environment:
+      DEX_URL: http://dex:8080
+      PROFILE: ${PROFILE:-trading}
+      RATE: ${RATE:-12}
+      SEALED_RATIO: ${SEALED_RATIO:-0.2}
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - "./offchain:/app:ro"
+    networks: { lasnet: {} }
+    restart: unless-stopped
+
+networks:
+  lasnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/24
+
+volumes:
+  shared:
+    name: jamswap_lasair6_shared
