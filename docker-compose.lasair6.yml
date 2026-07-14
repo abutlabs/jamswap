@@ -141,6 +141,10 @@ services:
       SERVICE_ID: "100"
       BUILDER_URL: http://builder:19980
       READER_URL: http://reader:19990
+      # lasair node Prometheus gauges (lasair_finalized_height/_block_height) so the
+      # DEX can stamp each fill's settle height and expose β via /api/finality — the
+      # UI shows fills as "Finalizing" until β catches up, then "Final".
+      NODE_METRICS_URL: http://lm0:9615/metrics
       PORT: "8080"
       PYTHONUNBUFFERED: "1"
       ORDER_EVENTS_FILE: /shared/order_events.jsonl

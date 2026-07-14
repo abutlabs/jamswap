@@ -156,6 +156,41 @@ def reader_get(path):
     # local HTTP bridge to the lasair-reader daemon -> CE-129/QUIC to the node
     req = urllib.request.Request(READER_URL + path, method="GET")
     return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
+# ---- finality (β) visibility ---------------------------------------------
+# A settled fill is on-chain and its balance delta is already applied, but the
+# block it landed in is not yet GRANDPA-finalized (β) — a short "Finalizing"
+# window (~finality lag, measured ~2 blocks / ~12s on the all-lasair net) before
+# it is irreversible. We surface it by scraping the node's Prometheus gauges
+# (lasair_finalized_height / _block_height) and stamping each fill with the head
+# height at settle time; the UI compares settle_height vs finalized_height.
+NODE_METRICS_URL = os.environ.get("NODE_METRICS_URL", "").strip()
+_fin_cache = {"t": 0.0, "v": None}
+def _read_finality():
+    # {available, finalized_height, finalized_slot, block_height, slot, lag}; cached ~2s.
+    if not NODE_METRICS_URL:
+        return {"available": False}
+    tnow = time.time()
+    if _fin_cache["v"] is not None and tnow - _fin_cache["t"] < 2.0:
+        return _fin_cache["v"]
+    try:
+        txt = urllib.request.urlopen(NODE_METRICS_URL, timeout=2).read().decode()
+        g = {}
+        for ln in txt.splitlines():
+            if ln.startswith("lasair_") and " " in ln:
+                k, _, val = ln.partition(" ")
+                try: g[k] = float(val)
+                except ValueError: pass
+        fh, bh = int(g.get("lasair_finalized_height", 0)), int(g.get("lasair_block_height", 0))
+        v = {"available": fh > 0, "finalized_height": fh, "block_height": bh,
+             "finalized_slot": int(g.get("lasair_finalized_slot", 0)),
+             "slot": int(g.get("lasair_slot", 0)), "lag": max(0, bh - fh)}
+    except Exception:
+        v = {"available": False}
+    _fin_cache["t"], _fin_cache["v"] = tnow, v
+    return v
+def api_finality(q):
+    return _read_finality()
 def order_bytes(a, oid, side, p, q): return struct.pack("<IIBII", a, oid, side, p, q)
 def _post_json(url, body):
     data = json.dumps(body).encode()
@@ -1197,9 +1232,13 @@ def _record_exec(o, filled, price, sealed, now):
     else:
         disp_ = "partial-resting" if filled > 0 else "resting"       # remainder rests in book
     dq = executions.setdefault(o["account"], deque(maxlen=EXEC_HISTORY))
+    _fin = _read_finality()
+    _sh = _fin.get("block_height") if _fin.get("available") else None
     dq.append({"ts": now, "market": o["market"], "side": o["side"],
                "price": disp(price), "qty": disp(qty), "filled": disp(filled),
-               "remainder": disp(rem), "disposition": disp_, "oid": o["oid"]})
+               "remainder": disp(rem), "disposition": disp_, "oid": o["oid"],
+               # head height at settle time; the fill is β-final once finalized_height reaches it
+               "settle_height": _sh})
     # Per-order SLO: a durable disposition ends the order's life. "partial-resting"
     # and "resting" are NOT terminal — the remainder keeps working until it fills or
     # expires, so they must not close the lifecycle record here.
@@ -1252,7 +1291,8 @@ ROUTES_GET = {"/api/state": api_state, "/api/balance": api_balance, "/api/mine":
               "/api/footprint": api_footprint, "/api/handle": api_handle, "/api/nonce": api_nonce,
               "/api/govnonce": api_govnonce, "/api/treasury_status": api_treasury_status,
               "/api/trades": api_trades, "/api/executions": api_executions,
-              "/api/pending": api_pending, "/api/orders_slo": api_orders_slo}
+              "/api/pending": api_pending, "/api/orders_slo": api_orders_slo,
+              "/api/finality": api_finality}
 
 def has_expired(m):
     now = time.time()

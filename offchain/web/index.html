@@ -69,6 +69,11 @@
     <span>lasair · localhost</span>
   </div>
 
+  <!-- Finality (β) chip: GRANDPA-finalized head vs current head -->
+  <sc-if value="{{ finalityAvailable }}" hint-placeholder-val="{{ true }}">
+    <div title="GRANDPA-finalized head vs current head" style="display:flex;align-items:center;gap:6px;padding:5px 12px;background:{{ T.rowBg }};border:1px solid {{ T.rowBorder }};border-radius:999px;font-size:11px;color:{{ T.sub }};margin-right:8px;flex-shrink:0;font-family:'IBM Plex Mono',monospace;">{{ finalityChip }}</div>
+  </sc-if>
+
   <select value="{{ devSel }}" onChange="{{ onDevChange }}" style="background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};color:{{ T.text }};font-size:12px;font-weight:600;padding:7px 10px;border-radius:10px;outline:none;cursor:pointer;margin-right:8px;flex-shrink:0;">
     <option value="browser">Browser key</option>
     <option value="0">Alice</option>
@@ -417,7 +422,7 @@
           <span style="font-size:10px;color:{{ T.dim }};font-family:'IBM Plex Mono',monospace;">{{ execCount }} fills</span>
         </div>
         <div style="display:flex;justify-content:space-between;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:{{ T.faint }};padding:0 2px 5px;border-bottom:1px solid {{ T.rowBorder }};margin-bottom:5px;">
-          <span style="min-width:36px;">side</span><span style="flex:1;">filled</span><span style="min-width:60px;">@ price</span><span style="min-width:70px;">mkt</span><span>status</span>
+          <span style="min-width:36px;">side</span><span style="flex:1;">filled</span><span style="min-width:60px;">@ price</span><span style="min-width:70px;">mkt</span><span>status</span><span style="min-width:60px;text-align:center;">finality</span>
         </div>
         <div style="display:flex;flex-direction:column;gap:3px;max-height:280px;overflow-y:auto;padding-right:2px;">
           <sc-if value="{{ hasNoExecs }}" hint-placeholder-val="{{ true }}"><div style="font-size:12px;color:{{ T.faint }};padding:8px 0;">No fills yet</div></sc-if>
@@ -429,6 +434,7 @@
                 <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:{{ T.mono }};min-width:60px;">@ {{ ex.price }}</span>
                 <span style="font-size:10px;color:{{ T.faint }};min-width:70px;">{{ ex.mkt }}</span>
                 <span style="font-size:9px;padding:2px 6px;border-radius:999px;background:{{ ex.statusBg }};color:{{ ex.statusColor }};white-space:nowrap;flex-shrink:0;">{{ ex.status }}</span>
+                <span style="font-size:9px;padding:2px 6px;border-radius:999px;background:{{ ex.finalBg }};color:{{ ex.finalColor }};white-space:nowrap;flex-shrink:0;min-width:60px;text-align:center;">{{ ex.finalLabel }}</span>
               </div>
             </sc-for>
           </sc-if>
@@ -523,7 +529,7 @@ class Component extends DCLogic {
     devSel: localStorage.getItem('jamswap_identity') || 'browser',
     book: [], lastPrice: null, volume: 0, mempool: [], sealedOnchain: 0, orderLife: null,
     bals: {0:0,1:0,2:0}, pending: [], executions: [],
-    trades: {list:[],metrics:null}, priceHist: [],
+    trades: {list:[],metrics:null}, priceHist: [], finality: {available:false},
     explorerFilter: 'all', marketSearch: '', marketDropdownOpen: false,
     fAsset: '0', fAmt: '100000',
     toasts: [], _tid: 0, lastSeq: 0, regInflight: {},
@@ -591,19 +597,20 @@ class Component extends DCLogic {
     return { ...shared, ...(v[colorTheme]||v.midnight) };
   }
 
-  _es=null; _ri=null; _fi=null; _ti=null;
+  _es=null; _ri=null; _fi=null; _ti=null; _yi=null;
 
   componentDidMount() {
     this._ri=setInterval(()=>{this.refreshBals();this.refreshMine();this.refreshExecs();},6000);
     this._fi=setInterval(()=>this.refreshFp(),3000);
     this._ti=setInterval(()=>this.refreshTrades(),3000);
-    this.subscribe(); this.refresh(); this.refreshTrades();
+    this._yi=setInterval(()=>this.refreshFinality(),3000);
+    this.subscribe(); this.refresh(); this.refreshTrades(); this.refreshFinality();
     const s=this.state.devSel;
     if(s&&s!=='browser') setTimeout(()=>this.switchIdentity(s),400);
     else if(localStorage.getItem('jamswap_sk_default')) setTimeout(()=>this.connectAccount(),300);
   }
   componentWillUnmount(){
-    clearInterval(this._ri);clearInterval(this._fi);clearInterval(this._ti);
+    clearInterval(this._ri);clearInterval(this._fi);clearInterval(this._ti);clearInterval(this._yi);
     if(this._es) this._es.close();
   }
 
@@ -683,6 +690,7 @@ class Component extends DCLogic {
   async refreshExecs(){if(!this.isConn()||this.myAcct()==null){this.setState({executions:[]});return;}const r=await this.api('/api/executions?account='+this.myAcct());this.setState({executions:(r&&r.executions)||[]});}
   async refreshFp(){}
   async refreshTrades(){const r=await this.api('/api/trades?market='+this.state.market.id);this.setState({trades:r&&r.trades?{list:r.trades,metrics:r.metrics}:{list:[],metrics:null}});}
+  async refreshFinality(){const r=await this.api('/api/finality');if(r)this.setState({finality:r});}
 
   async placeOrder(){
     if(!this.isConn()){this.connectAccount();return;}if(this.myAcct()==null){this.toast('Account not registered yet.','err');return;}
@@ -763,8 +771,9 @@ class Component extends DCLogic {
   renderVals() {
     const{tab,colorTheme,darkMode,market,side,otype,sealed,tif,priceVal,qtyVal,wallet,handle,devSel,
           book,lastPrice,volume,mempool,sealedOnchain,orderLife,bals,pending,executions,
-          trades,priceHist,explorerFilter,fAsset,fAmt,toasts}=this.state;
+          trades,priceHist,finality,explorerFilter,fAsset,fAmt,toasts}=this.state;
     const T=this.getT();
+    const fin=finality||{},finalHt=fin.available?fin.finalized_height:null;
     const connected=!!wallet;
     const{baseLabel,quoteLabel}=market;
     const qty=parseFloat(qtyVal)||0,price=parseFloat(priceVal)||0;
@@ -792,6 +801,9 @@ class Component extends DCLogic {
     const execList=executions.slice(0,60).map(ex=>{
       const esd=this._sideStr(ex.side),dp=String(ex.disposition||'');
       const isCanc=dp.indexOf('cancel')>=0,isPart=!isCanc&&(dp.indexOf('partial')>=0||dp==='resting'||ex.remainder>0);
+      // finality: a fill is β-final once the finalized head reaches its settle block.
+      // null => unknown (no finality feed, or a cancel with no balance delta to finalize).
+      const fnl=(finalHt!=null&&ex.settle_height!=null&&!isCanc)?(finalHt>=ex.settle_height):null;
       return {
         sideColor:esd==='buy'?T.buy:T.sell,side:esd.toUpperCase(),
         filled:ex.filled!=null?String(ex.filled):'?',price:ex.price!=null?String(ex.price):'?',
@@ -799,6 +811,10 @@ class Component extends DCLogic {
         status:isCanc?'cancelled':(isPart?'partial':'filled'),
         statusBg:isCanc?'rgba(220,38,38,.1)':(isPart?'rgba(245,158,11,.1)':'rgba(22,163,74,.1)'),
         statusColor:isCanc?T.sell:(isPart?'#F59E0B':T.buy),
+        finalizing:fnl===false,
+        finalLabel:fnl===null?'':(fnl?'✓ final':'⧗ finalizing'),
+        finalBg:fnl===false?'rgba(245,158,11,.12)':(fnl?'rgba(74,222,128,.1)':'transparent'),
+        finalColor:fnl===false?'#F59E0B':(fnl?T.buy:T.faint),
       };
     });
 
@@ -888,6 +904,8 @@ class Component extends DCLogic {
       mempoolCount:mempool.length,mempoolFilters,hasSealedOnchain:sealedOnchain>0,sealedOnchain,
       // executions
       execList,hasExecs:execList.length>0,hasNoExecs:execList.length===0,execCount:execList.length,
+      finalityAvailable:fin.available===true,
+      finalityChip:fin.available?('β #'+fin.finalized_height+' · head #'+fin.block_height+(fin.lag?' · lag '+fin.lag:'')):'',
       // orders
       orderList,hasOrders:orderList.length>0,hasNoOrders:orderList.length===0,orderCount:String(orderList.length),
       // trade card
