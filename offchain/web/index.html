@@ -1,1117 +1,927 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>JAMswap — order-book DEX on JAM</title>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-  body{background:radial-gradient(ellipse 120% 40% at 50% -4%,rgba(230,0,122,.09) 0%,transparent 55%),#0d0d14;
-       color:#f0f0ff;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;}
-  input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;}
-  input[type=number]{-moz-appearance:textfield;}
-  input,select,button,textarea{font-family:inherit;}
-  a{color:#E6007A;}
-  .mono{font-family:'IBM Plex Mono',monospace;}
-  .hidden{display:none !important;}
-  @keyframes slideIn{from{opacity:0;transform:translateX(14px);}to{opacity:1;transform:none;}}
-  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
-  ::-webkit-scrollbar{width:3px;} ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:2px;}
-</style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./react.js"></script>
+<script src="./react-dom.js"></script>
+<script src="./support.js"></script>
 </head>
 <body>
+<x-dc>
+<helmet>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
+    body{background:#0c0c13;font-family:'IBM Plex Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;min-height:100vh;}
+    input::-webkit-outer-spin-button,input::-webkit-inner-spin-button{-webkit-appearance:none;}
+    input[type=number]{-moz-appearance:textfield;}
+    input,select,button,textarea{font-family:inherit;}
+    a{text-decoration:none;}
+    @keyframes slideIn{from{opacity:0;transform:translateX(12px);}to{opacity:1;transform:none;}}
+    @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.3;}}
+    ::-webkit-scrollbar{width:4px;height:4px;}
+    ::-webkit-scrollbar-thumb{background:var(--sb,rgba(128,128,128,.25));border-radius:3px;}
+  </style>
+</helmet>
 
-<!-- NAV -->
-<nav style="position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:4px;padding:0 32px;height:62px;background:rgba(13,13,20,.9);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-bottom:1px solid rgba(255,255,255,.06);">
-  <a href="#" style="display:flex;align-items:baseline;text-decoration:none;flex-shrink:0;margin-right:14px;">
-    <span style="font-size:20px;font-weight:700;color:#E6007A;letter-spacing:-.03em;">JAM</span><span style="font-size:20px;font-weight:700;color:#f0f0ff;letter-spacing:-.03em;">swap</span>
+<div style="min-height:100vh;background:{{ T.pageBg }};color:{{ T.text }};--sb:{{ T.sbColor }};">
+
+<!-- ═══ NAV ═══ -->
+<nav style="position:sticky;top:0;z-index:200;display:flex;align-items:center;gap:4px;padding:0 22px;height:62px;background:{{ T.navBg }};backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-bottom:1px solid {{ T.navBorder }};">
+
+  <!-- Jar logo + wordmark -->
+  <a href="#" style="display:flex;align-items:center;gap:9px;text-decoration:none;flex-shrink:0;margin-right:8px;">
+    <svg viewBox="0 0 40 50" width="26" height="33" xmlns="http://www.w3.org/2000/svg">
+      <rect x="7" y="1" width="26" height="9" rx="3" fill="#7B304A"></rect>
+      <rect x="9" y="8" width="22" height="4" fill="#8B3A52"></rect>
+      <rect x="4" y="11" width="32" height="37" rx="7" fill="#F5EDD6"></rect>
+      <rect x="4" y="11" width="32" height="37" rx="7" fill="none" stroke="#8B3A52" stroke-width="2.5"></rect>
+      <clipPath id="jc0"><rect x="4" y="11" width="32" height="37" rx="7"></rect></clipPath>
+      <g clip-path="url(#jc0)">
+        <path d="M4,21 Q8,17 12,21 Q16,25 20,21 Q24,17 28,21 Q32,25 36,21 L36,48 L4,48 Z" fill="#E8738A"></path>
+        <circle cx="13" cy="30" r="2.2" fill="#8B3A52"></circle>
+        <circle cx="26" cy="26" r="1.8" fill="#8B3A52"></circle>
+        <circle cx="30" cy="35" r="2" fill="#8B3A52"></circle>
+        <rect x="9" y="30" width="22" height="11" rx="2.5" fill="#F5EDD6"></rect>
+        <path d="M13,42 L18,39 L18,44 Z" fill="#F5EDD6" opacity="0.75"></path>
+        <path d="M27,42 L22,39 L22,44 Z" fill="#F5EDD6" opacity="0.75"></path>
+        <circle cx="20" cy="42" r="1.5" fill="#F5EDD6"></circle>
+        <ellipse cx="11" cy="18" rx="2.5" ry="4.5" fill="white" opacity="0.38"></ellipse>
+      </g>
+    </svg>
+    <span style="font-size:18px;font-weight:700;color:{{ T.text }};letter-spacing:-.03em;">JAMswap</span>
   </a>
-  <button id="nav-trade">Trade</button>
-  <button id="nav-faucet">Faucet</button>
-  <a href="https://github.com/abutlabs/jamswap" target="_blank" style="padding:7px 14px;border-radius:10px;color:rgba(240,240,255,.35);font-size:14px;font-weight:500;text-decoration:none;">Docs ↗</a>
+
+  <button onClick="{{ onTradeTab }}" style="{{ navTradeStyle }}">Trade</button>
+  <button onClick="{{ onExplorerTab }}" style="{{ navExplStyle }}">Explorer</button>
+  <button onClick="{{ onFaucetTab }}" style="{{ navFaucetStyle }}">Faucet</button>
+  <a href="https://github.com/abutlabs/jamswap" target="_blank" style="padding:7px 11px;border-radius:10px;color:{{ T.dim }};font-size:14px;font-weight:500;">Docs ↗</a>
+
   <div style="flex:1;"></div>
-  <div style="display:flex;align-items:center;gap:7px;padding:6px 14px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:999px;font-size:12px;color:rgba(240,240,255,.5);margin-right:10px;flex-shrink:0;">
+
+  <!-- Dark/light toggle -->
+  <button onClick="{{ onModeToggle }}" title="Toggle light/dark" style="{{ modeToggleStyle }}">{{ modeIcon }}</button>
+
+  <!-- Network badge -->
+  <div style="display:flex;align-items:center;gap:6px;padding:5px 12px;background:{{ T.rowBg }};border:1px solid {{ T.rowBorder }};border-radius:999px;font-size:11px;color:{{ T.sub }};margin:0 8px;flex-shrink:0;">
     <div style="width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 8px rgba(74,222,128,.9);animation:pulse 2s infinite;flex-shrink:0;"></div>
     <span>lasair · localhost</span>
   </div>
-  <select id="who" title="Trade as a standard JAM dev account (Alice, Bob, …) — swap identities in one browser to watch open orders from every side" style="margin-right:10px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);color:#f0f0ff;font-size:13px;font-weight:600;padding:8px 12px;border-radius:12px;outline:none;cursor:pointer;font-family:inherit;flex-shrink:0;">
+
+  <select value="{{ devSel }}" onChange="{{ onDevChange }}" style="background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};color:{{ T.text }};font-size:12px;font-weight:600;padding:7px 10px;border-radius:10px;outline:none;cursor:pointer;margin-right:8px;flex-shrink:0;">
     <option value="browser">Browser key</option>
+    <option value="0">Alice</option>
+    <option value="1">Bob</option>
+    <option value="2">Carol</option>
+    <option value="3">David</option>
+    <option value="4">Eve</option>
+    <option value="5">Fergie</option>
   </select>
-  <button id="connect"><span id="wallet-label">Create account</span></button>
+
+  <button onClick="{{ onConnect }}" style="{{ walletBtnStyle }}">{{ walletLabel }}</button>
 </nav>
 
-<!-- BODY -->
-<div style="max-width:1440px;margin:0 auto;padding:0 28px 64px;">
+<!-- ═══ BODY ═══ -->
+<div style="max-width:1440px;margin:0 auto;padding:0 22px 64px;">
 
-  <!-- ═══════════════════ TRADE TAB ═══════════════════ -->
-  <section id="tab-trade">
+<!-- ── TRADE TAB ── -->
+<sc-if value="{{ isTradeTab }}" hint-placeholder-val="{{ true }}">
+  <div style="display:flex;align-items:center;gap:12px;padding:16px 0 13px;flex-wrap:wrap;">
+    <div style="position:relative;">
+      <button onClick="{{ onMarketDropdownToggle }}" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;background:{{ T.accentBg }};border:1px solid {{ T.accentBorder }};color:{{ T.text }};">
+        <span style="color:#E6007A;font-weight:700;">{{ baseLabel }}</span>
+        <span style="color:{{ T.dim }};">/</span>
+        <span>{{ quoteLabel }}</span>
+        <span style="font-size:11px;color:{{ T.dim }};margin-left:2px;">▾</span>
+      </button>
+      <sc-if value="{{ marketDropdownOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ onMarketDropdownClose }}" style="position:fixed;inset:0;z-index:99;"></div>
+        <div style="position:absolute;top:calc(100% + 6px);left:0;width:300px;background:{{ T.centerCardBg }};border:1px solid {{ T.centerCardBorder }};border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.22);z-index:100;overflow:hidden;">
+          <div style="padding:10px 12px;border-bottom:1px solid {{ T.rowBorder }};">
+            <input type="text" value="{{ marketSearch }}" onChange="{{ onMarketSearch }}" placeholder="Search token…" style="width:100%;background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};border-radius:8px;padding:8px 10px;font-size:13px;color:{{ T.text }};outline:none;" />
+          </div>
+          <div style="max-height:280px;overflow-y:auto;">
+            <sc-for list="{{ filteredTokenPairs }}" as="tp" hint-placeholder-count="5">
+              <div onClick="{{ tp.onClick }}" style="{{ tp.rowStyle }}">
+                <span style="font-size:13px;font-weight:700;color:{{ T.text }};min-width:88px;">{{ tp.display }}</span>
+                <span style="font-size:11px;color:{{ T.dim }};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ tp.tokenName }}</span>
+                <span style="font-size:9px;padding:2px 6px;border-radius:999px;background:{{ tp.badgeBg }};color:{{ tp.badgeColor }};font-weight:700;flex-shrink:0;white-space:nowrap;">{{ tp.badgeLabel }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+    <div style="font-size:11px;color:{{ T.faint }};display:flex;align-items:center;gap:8px;">
+      <span>Frequent batch auctions</span><span style="opacity:.4;">·</span><span>flat fee</span><span style="opacity:.4;">·</span><span>MEV-resistant</span>
+    </div>
+  </div>
 
-    <!-- Market selector + meta -->
-    <div style="display:flex;align-items:center;gap:8px;padding:20px 0 16px;flex-wrap:wrap;">
-      <div id="mtabs" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"></div>
-      <div style="margin-left:auto;display:flex;align-items:center;gap:10px;font-size:11px;color:rgba(240,240,255,.28);letter-spacing:.02em;">
-        <span>Frequent batch auctions</span><span style="opacity:.5;">·</span>
-        <span>flat cost-based fee</span><span style="opacity:.5;">·</span>
-        <span>MEV-resistant</span>
+  <div style="display:grid;grid-template-columns:minmax(236px,1fr) 376px minmax(218px,1fr);gap:11px;align-items:start;">
+
+    <!-- COL 1 -->
+    <div style="display:flex;flex-direction:column;gap:10px;">
+
+      <!-- Order book -->
+      <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:15px 13px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{{ T.dim }};font-weight:600;">Order Book · {{ marketName }}</span>
+          <div style="display:flex;align-items:baseline;gap:7px;">
+            <span style="font-size:20px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};line-height:1;">{{ lastPrice }}</span>
+            <span style="font-size:10px;color:{{ T.dim }};">vol {{ displayVolume }}</span>
+          </div>
+        </div>
+        <div style="display:flex;justify-content:space-between;padding:0 2px;margin-bottom:4px;">
+          <span style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:{{ T.faint }};">Price</span>
+          <span style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:{{ T.faint }};">Size</span>
+        </div>
+        <sc-if value="{{ hasNoAsks }}" hint-placeholder-val="{{ true }}"><div style="font-size:11px;color:{{ T.faint }};padding:6px 2px;text-align:center;">No asks</div></sc-if>
+        <sc-if value="{{ hasAsks }}" hint-placeholder-val="{{ false }}">
+          <sc-for list="{{ processedAsks }}" as="ask" hint-placeholder-count="5">
+            <div style="position:relative;display:flex;justify-content:space-between;padding:3px 2px;border-radius:3px;margin-bottom:1px;overflow:hidden;">
+              <div style="position:absolute;right:0;top:0;bottom:0;width:{{ ask.depthPct }}%;background:rgba(248,113,113,.07);pointer-events:none;"></div>
+              <span style="position:relative;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ T.sell }};font-weight:500;">{{ ask.price }}</span>
+              <span style="position:relative;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ T.mono }};">{{ ask.qty }}</span>
+            </div>
+          </sc-for>
+        </sc-if>
+        <div style="display:flex;align-items:center;gap:8px;margin:6px 0;">
+          <div style="flex:1;height:1px;background:{{ T.spread }};"></div>
+          <span style="font-size:10px;color:{{ T.faint }};font-family:'IBM Plex Mono',monospace;white-space:nowrap;">spread {{ spread }}</span>
+          <div style="flex:1;height:1px;background:{{ T.spread }};"></div>
+        </div>
+        <sc-if value="{{ hasNoBids }}" hint-placeholder-val="{{ true }}"><div style="font-size:11px;color:{{ T.faint }};padding:6px 2px;text-align:center;">No bids</div></sc-if>
+        <sc-if value="{{ hasBids }}" hint-placeholder-val="{{ false }}">
+          <sc-for list="{{ processedBids }}" as="bid" hint-placeholder-count="5">
+            <div style="position:relative;display:flex;justify-content:space-between;padding:3px 2px;border-radius:3px;margin-bottom:1px;overflow:hidden;">
+              <div style="position:absolute;left:0;top:0;bottom:0;width:{{ bid.depthPct }}%;background:rgba(74,222,128,.07);pointer-events:none;"></div>
+              <span style="position:relative;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ T.buy }};font-weight:500;">{{ bid.price }}</span>
+              <span style="position:relative;font-family:'IBM Plex Mono',monospace;font-size:11px;color:{{ T.mono }};">{{ bid.qty }}</span>
+            </div>
+          </sc-for>
+        </sc-if>
+      </div>
+
+      <!-- Recent trades -->
+      <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:15px 13px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{{ T.dim }};font-weight:600;">Recent Trades</span>
+          <span style="font-size:9px;padding:2px 8px;background:rgba(96,165,250,.1);color:#60A5FA;border-radius:999px;font-weight:700;letter-spacing:.06em;">6 s AUCTIONS</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin-bottom:8px;">
+          <div><div style="font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};">{{ tradeLast }}</div><div style="font-size:9px;color:{{ T.dim }};margin-top:2px;">last</div></div>
+          <div><div style="font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};">{{ tradeVol }}</div><div style="font-size:9px;color:{{ T.dim }};margin-top:2px;">vol</div></div>
+          <div><div style="font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:{{ T.buy }};">{{ tradeHigh }}</div><div style="font-size:9px;color:{{ T.dim }};margin-top:2px;">high</div></div>
+          <div><div style="font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:{{ T.sell }};">{{ tradeLow }}</div><div style="font-size:9px;color:{{ T.dim }};margin-top:2px;">low</div></div>
+        </div>
+        <div style="max-height:180px;overflow-y:auto;">
+          <sc-if value="{{ hasNoTrades }}" hint-placeholder-val="{{ true }}"><div style="font-size:11px;color:{{ T.faint }};padding:4px 0;">No trades yet</div></sc-if>
+          <sc-if value="{{ hasTrades }}" hint-placeholder-val="{{ false }}">
+            <sc-for list="{{ tradeRows }}" as="tr" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;font-size:11px;padding:3px 2px;border-bottom:1px solid {{ T.tapeRow }};">
+                <span style="font-family:'IBM Plex Mono',monospace;color:{{ tr.color }};min-width:72px;">{{ tr.arrow }} {{ tr.price }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;flex:1;text-align:right;padding-right:10px;color:{{ T.mono }};">{{ tr.volume }}</span>
+                <span style="color:{{ T.faint }};min-width:48px;text-align:right;">{{ tr.ago }}</span>
+              </div>
+            </sc-for>
+          </sc-if>
+        </div>
       </div>
     </div>
 
-    <!-- 3-column grid -->
-    <div style="display:grid;grid-template-columns:minmax(268px,1fr) 396px minmax(230px,1fr);gap:14px;align-items:start;">
-
-      <!-- ─── COL 1: ORDER BOOK ─── -->
-      <div style="display:flex;flex-direction:column;gap:12px;">
-
-        <!-- Order book panel -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-            <span id="ob-market" style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Order Book</span>
-            <div style="display:flex;align-items:baseline;gap:8px;">
-              <span id="last-price" class="mono" style="font-size:22px;font-weight:600;color:#f0f0ff;line-height:1;">—</span>
-              <span style="font-size:11px;color:rgba(240,240,255,.3);">vol <span id="vol">0</span></span>
+    <!-- COL 2: Trade card -->
+    <div>
+      <div style="background:{{ T.centerCardBg }};border:1px solid {{ T.centerCardBorder }};border-radius:24px;padding:20px;position:sticky;top:76px;box-shadow:{{ T.cardShadow }};">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:17px;">
+          <span style="font-size:15px;font-weight:700;color:{{ T.text }};">Place order</span>
+          <div style="display:flex;gap:2px;background:{{ T.rowBg }};border-radius:10px;padding:3px;">
+            <button onClick="{{ onLimit }}" style="{{ limitBtnStyle }}">Limit</button>
+            <button onClick="{{ onMarket }}" style="{{ marketBtnStyle }}">Market</button>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:15px;">
+          <button onClick="{{ onBuy }}" style="{{ buyBtnStyle }}">Buy {{ baseLabel }}</button>
+          <button onClick="{{ onSell }}" style="{{ sellBtnStyle }}">Sell {{ baseLabel }}</button>
+        </div>
+        <div style="background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};border-radius:14px;padding:12px 14px;margin-bottom:7px;">
+          <div style="font-size:11px;color:{{ T.dim }};margin-bottom:6px;">{{ sideLabel }}</div>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <input type="number" value="{{ qtyVal }}" onChange="{{ onQtyChange }}" placeholder="0" style="flex:1;background:transparent;border:none;outline:none;font-size:26px;font-weight:600;color:{{ T.text }};font-family:'IBM Plex Mono',monospace;min-width:0;" />
+            <div style="display:flex;align-items:center;gap:6px;padding:6px 11px;background:{{ baseChipBg }};border-radius:10px;flex-shrink:0;">
+              <div style="width:7px;height:7px;border-radius:50%;background:{{ baseChipColor }};flex-shrink:0;"></div>
+              <span style="font-size:13px;font-weight:700;color:{{ T.text }};">{{ baseLabel }}</span>
             </div>
           </div>
-          <div style="display:flex;justify-content:space-between;padding:0 4px;margin-bottom:4px;">
-            <span style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.2);">Price</span>
-            <span style="font-size:9px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.2);">Size</span>
-          </div>
-          <div id="asks"></div>
-          <div style="display:flex;align-items:center;gap:8px;margin:7px 0;">
-            <div style="flex:1;height:1px;background:rgba(255,255,255,.07);"></div>
-            <span id="spread" class="mono" style="font-size:10px;color:rgba(240,240,255,.25);white-space:nowrap;">spread —</span>
-            <div style="flex:1;height:1px;background:rgba(255,255,255,.07);"></div>
-          </div>
-          <div id="bids"></div>
         </div>
-
-        <!-- Mempool -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Mempool</span>
-            <button id="mem-toggle" style="padding:4px 10px;background:transparent;border:1px solid rgba(255,255,255,.08);color:rgba(240,240,255,.35);border-radius:6px;font-size:11px;cursor:pointer;">hide</button>
-          </div>
-          <div id="memwrap">
-            <div id="mempool"></div>
-            <div id="seal-summary" style="font-size:11px;color:#F59E0B;margin-top:8px;"></div>
-          </div>
-        </div>
-
-        <!-- Recent trades (the active pair's tape) -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Recent Trades · <span id="trades-pair">DOT/USDC</span></span>
-            <span style="font-size:9px;padding:2px 8px;background:rgba(96,165,250,.08);color:#60A5FA;border-radius:999px;font-weight:700;letter-spacing:.06em;">6 s AUCTIONS</span>
-          </div>
-          <!-- volume metrics -->
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:12px;">
-            <div><div id="tm-last" class="mono" style="font-size:15px;font-weight:700;color:#f0f0ff;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">last</div></div>
-            <div><div id="tm-vol" class="mono" style="font-size:15px;font-weight:700;color:#f0f0ff;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">volume</div></div>
-            <div><div id="tm-high" class="mono" style="font-size:15px;font-weight:700;color:#4ADE80;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">high</div></div>
-            <div><div id="tm-low" class="mono" style="font-size:15px;font-weight:700;color:#F87171;line-height:1.1;">—</div><div style="font-size:9px;color:rgba(240,240,255,.28);margin-top:3px;">low</div></div>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:rgba(240,240,255,.25);padding:0 2px 6px;border-bottom:1px solid rgba(255,255,255,.05);">
-            <span>price</span><span style="flex:1;text-align:right;padding-right:14px;">size</span><span>time</span>
-          </div>
-          <div id="trades" style="max-height:260px;overflow-y:auto;margin-top:4px;"></div>
-        </div>
-
-      </div>
-
-      <!-- ─── COL 2: TRADE CARD ─── -->
-      <div>
-        <div style="background:rgba(255,255,255,.045);border:1px solid rgba(255,255,255,.1);border-radius:24px;padding:22px;position:sticky;top:78px;">
-
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
-            <span style="font-size:15px;font-weight:700;color:#f0f0ff;">Place order</span>
-            <div style="display:flex;gap:2px;background:rgba(255,255,255,.055);border-radius:10px;padding:3px;">
-              <button id="tlimit">Limit</button>
-              <button id="tmarket">Market</button>
-            </div>
-          </div>
-
-          <div style="display:flex;gap:8px;margin-bottom:18px;">
-            <button id="sbuy">Buy DOT</button>
-            <button id="ssell">Sell DOT</button>
-          </div>
-
-          <!-- Qty -->
-          <div style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:14px 16px;margin-bottom:8px;">
-            <div id="side-label" style="font-size:11px;color:rgba(240,240,255,.32);margin-bottom:8px;">You buy</div>
-            <div style="display:flex;align-items:center;gap:12px;">
-              <input id="qty-in" type="number" value="10" placeholder="0" class="mono" style="flex:1;background:transparent;border:none;outline:none;font-size:28px;font-weight:600;color:#f0f0ff;min-width:0;" />
-              <div id="base-chip" style="display:flex;align-items:center;gap:7px;padding:7px 13px;border-radius:10px;flex-shrink:0;">
-                <div id="base-dot" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></div>
-                <span id="base-label" style="font-size:13px;font-weight:700;color:#f0f0ff;white-space:nowrap;">DOT</span>
+        <sc-if value="{{ isLimit }}" hint-placeholder-val="{{ true }}">
+          <div style="background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};border-radius:14px;padding:12px 14px;margin-bottom:7px;">
+            <div style="font-size:11px;color:{{ T.dim }};margin-bottom:6px;">At price (per {{ baseLabel }})</div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <input type="number" value="{{ priceVal }}" onChange="{{ onPriceChange }}" placeholder="0" style="flex:1;background:transparent;border:none;outline:none;font-size:26px;font-weight:600;color:{{ T.text }};font-family:'IBM Plex Mono',monospace;min-width:0;" />
+              <div style="display:flex;align-items:center;gap:6px;padding:6px 11px;background:{{ quoteChipBg }};border-radius:10px;flex-shrink:0;">
+                <div style="width:7px;height:7px;border-radius:50%;background:{{ quoteChipColor }};flex-shrink:0;"></div>
+                <span style="font-size:13px;font-weight:700;color:{{ T.text }};">{{ quoteLabel }}</span>
               </div>
             </div>
           </div>
-
-          <!-- Price (limit only) -->
-          <div id="price-block" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:16px;padding:14px 16px;margin-bottom:8px;">
-            <div style="font-size:11px;color:rgba(240,240,255,.32);margin-bottom:8px;">At price</div>
-            <div style="display:flex;align-items:center;gap:12px;">
-              <input id="price-in" type="number" value="100" placeholder="0" class="mono" style="flex:1;background:transparent;border:none;outline:none;font-size:28px;font-weight:600;color:#f0f0ff;min-width:0;" />
-              <div id="quote-chip" style="display:flex;align-items:center;gap:7px;padding:7px 13px;border-radius:10px;flex-shrink:0;">
-                <div id="quote-dot" style="width:7px;height:7px;border-radius:50%;flex-shrink:0;"></div>
-                <span id="quote-label" style="font-size:13px;font-weight:700;color:#f0f0ff;white-space:nowrap;">USDC</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Summary -->
-          <div style="padding:10px 14px;border-radius:12px;background:rgba(255,255,255,.025);margin-bottom:16px;">
-            <span id="summary" style="font-size:12px;color:rgba(240,240,255,.42);">Enter quantity and price to see total</span>
-          </div>
-
-          <!-- Time in force (non-sealed orders rest until they fill / expire / are cancelled) -->
-          <div id="tif-block" style="padding:0 2px;margin-bottom:14px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;">
-              <span style="font-size:12px;color:rgba(240,240,255,.32);">Time in force</span>
-              <select id="tif" style="background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:8px;color:#f0f0ff;font-size:12px;padding:6px 8px;outline:none;cursor:pointer;">
-                <option value="0">Good-till-cancelled</option>
-                <option value="30">Expire in 30 s</option>
-                <option value="60">Expire in 1 min</option>
-                <option value="300">Expire in 5 min</option>
-                <option value="3600">Expire in 1 hour</option>
-              </select>
-            </div>
-            <div id="tif-note" style="font-size:10px;color:rgba(240,240,255,.28);margin-top:6px;line-height:1.4;">No order rests forever — even GTC auto-expires once the fee stops covering its JAMKB state rent.</div>
-          </div>
-
-          <!-- Seal toggle -->
-          <div id="seal-toggle" style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);border-radius:14px;cursor:pointer;margin-bottom:14px;user-select:none;">
-            <div id="seal-track" style="width:38px;height:22px;background:rgba(255,255,255,.12);border-radius:11px;position:relative;flex-shrink:0;transition:background .18s;">
-              <div id="seal-knob" style="position:absolute;width:16px;height:16px;background:#fff;border-radius:50%;top:3px;left:3px;box-shadow:0 1px 4px rgba(0,0,0,.45);transition:left .18s;"></div>
-            </div>
-            <div>
-              <div style="font-size:13px;font-weight:500;color:#f0f0ff;">🔒 Seal order</div>
-              <div id="seal-note" style="font-size:11px;color:rgba(240,240,255,.28);margin-top:2px;">Hidden on-chain · <b style="color:rgba(240,240,255,.5);">rests sealed until a counterparty crosses it</b> · revealed only when it clears · MEV-resistant</div>
-            </div>
-          </div>
-
-          <!-- Fee -->
-          <div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px;margin-bottom:16px;">
-            <span style="font-size:12px;color:rgba(240,240,255,.28);">Fee (flat, per order)</span>
-            <span class="mono" style="font-size:12px;color:rgba(240,240,255,.48);"><span id="fee">—</span> <span id="fee-quote">DOT</span></span>
-          </div>
-
-          <!-- CTA -->
-          <button id="place" style="width:100%;">Create account to trade</button>
-          <div style="text-align:center;margin-top:12px;font-size:11px;color:rgba(240,240,255,.2);">Signs with your JAM account key · queues for the next 6 s auction</div>
-
+        </sc-if>
+        <div style="padding:8px 12px;border-radius:11px;background:{{ T.summaryBg }};margin-bottom:12px;">
+          <span style="font-size:12px;color:{{ T.sub }};">{{ quoteSummary }}</span>
         </div>
-      </div>
-
-      <!-- ─── COL 3: ACCOUNT ─── -->
-      <div style="display:flex;flex-direction:column;gap:12px;">
-
-        <!-- Balances -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">Your Balances</span>
-            <span id="wallet-addr" class="mono" style="font-size:10px;color:rgba(240,240,255,.22);overflow:hidden;max-width:120px;text-overflow:ellipsis;white-space:nowrap;"></span>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <span style="font-size:12px;color:{{ T.dim }};">Time in force</span>
+          <select value="{{ tif }}" onChange="{{ onTifChange }}" style="background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};border-radius:8px;color:{{ T.text }};font-size:12px;padding:5px 8px;outline:none;cursor:pointer;">
+            <option value="0">Good-till-cancelled</option>
+            <option value="30">Expire in 30 s</option>
+            <option value="60">Expire in 1 min</option>
+            <option value="300">Expire in 5 min</option>
+            <option value="3600">Expire in 1 hour</option>
+          </select>
+        </div>
+        <div style="font-size:10px;color:{{ T.faint }};margin-bottom:12px;line-height:1.4;">{{ tifNote }}</div>
+        <div onClick="{{ onSealToggle }}" style="display:flex;align-items:center;gap:11px;padding:10px 12px;background:{{ T.sealBg }};border:1px solid {{ T.sealBorder }};border-radius:12px;cursor:pointer;margin-bottom:12px;user-select:none;">
+          <div style="width:36px;height:20px;background:{{ sealTrackBg }};border-radius:10px;position:relative;flex-shrink:0;transition:background .18s;">
+            <div style="position:absolute;width:14px;height:14px;background:#fff;border-radius:50%;top:3px;left:{{ sealKnobLeft }};box-shadow:0 1px 4px rgba(0,0,0,.3);transition:left .18s;"></div>
           </div>
-          <div id="bals"></div>
-          <div style="margin-top:12px;padding-top:12px;border-top:1px solid rgba(255,255,255,.06);">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:7px;">
-              <span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.28);font-weight:600;">JAM Account</span>
-              <span id="acct-handle" class="mono" style="font-size:10px;color:#4ADE80;"></span>
-            </div>
-            <div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:rgba(240,240,255,.22);margin-bottom:3px;">ed25519 public key</div>
-            <div id="acct-pubkey" class="mono" title="click to copy" style="font-size:10px;color:rgba(240,240,255,.42);word-break:break-all;cursor:pointer;line-height:1.45;">—</div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:9px;">
-              <span style="font-size:10px;color:rgba(240,240,255,.28);flex:1;">held in this browser</span>
-              <button id="acct-export" style="padding:3px 9px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.4);border-radius:6px;font-size:10px;cursor:pointer;">export</button>
-              <button id="acct-import" style="padding:3px 9px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.4);border-radius:6px;font-size:10px;cursor:pointer;">import</button>
-            </div>
+          <div>
+            <div style="font-size:13px;font-weight:500;color:{{ T.text }};">🔒 Seal order</div>
+            <div style="font-size:11px;color:{{ T.dim }};margin-top:2px;">Rests sealed until a counterparty crosses it · MEV-resistant</div>
           </div>
         </div>
-
-        <!-- Pending orders -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;display:block;margin-bottom:14px;">Your Orders</span>
-          <div id="mine"></div>
-          <div style="margin-top:10px;font-size:11px;color:rgba(240,240,255,.2);">Sealed orders decrypted for you (you hold the nonce)</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;padding:0 2px;margin-bottom:13px;">
+          <span style="font-size:12px;color:{{ T.dim }};">Fee (flat, per order)</span>
+          <span style="font-size:12px;color:{{ T.sub }};font-family:'IBM Plex Mono',monospace;">0.0300 {{ baseLabel }}</span>
         </div>
-
-        <!-- Execution report: per-order fill receipts (what the matching engine actually did) -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;display:block;margin-bottom:14px;">Execution report</span>
-          <div id="execs"></div>
-          <div style="margin-top:10px;font-size:11px;color:rgba(240,240,255,.2);line-height:1.5;">What each of your orders did at clearing — filled qty at the <b>uniform</b> price, plus any remainder that <b>rested</b> (limit) or was <b>cancelled</b> (sealed / no supply at your limit).</div>
-        </div>
-
-        <!-- JAMKB footprint -->
-        <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);border-radius:20px;padding:18px 16px;">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
-            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;">JAM State Footprint</span>
-            <span id="fp-badge" style="font-size:9px;padding:2px 8px;background:rgba(74,222,128,.08);color:#4ADE80;border-radius:999px;font-weight:700;letter-spacing:.06em;">READ-ONLY</span>
-          </div>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
-            <div>
-              <div id="fp-items" class="mono" style="font-size:22px;font-weight:700;color:#f0f0ff;line-height:1.1;">0</div>
-              <div style="font-size:10px;color:rgba(240,240,255,.28);margin-top:4px;">items</div>
-            </div>
-            <div>
-              <div id="fp-octets" class="mono" style="font-size:16px;font-weight:700;color:#f0f0ff;line-height:1.2;">0 B</div>
-              <div style="font-size:10px;color:rgba(240,240,255,.28);margin-top:4px;">validator RAM</div>
-            </div>
-            <div>
-              <div id="fp-jamkb" class="mono" style="font-size:22px;font-weight:700;color:#E6007A;line-height:1.1;">0</div>
-              <div style="font-size:10px;color:rgba(240,240,255,.28);margin-top:4px;">JAMKB</div>
-            </div>
-          </div>
-          <!-- live footprint sparkline: the state "breathing" block-to-block (grows on orders, shrinks on auctions) -->
-          <div style="display:flex;align-items:center;gap:8px;margin:6px 0 6px;">
-            <svg id="fp-spark" width="100%" height="30" viewBox="0 0 200 30" preserveAspectRatio="none" style="flex:1;overflow:visible;">
-              <polygon id="fp-spark-area" fill="rgba(230,0,122,.12)" points=""></polygon>
-              <polyline id="fp-spark-line" fill="none" stroke="#E6007A" stroke-width="1.5" points=""></polyline>
-            </svg>
-            <span id="fp-delta" class="mono" style="font-size:11px;min-width:56px;text-align:right;color:rgba(240,240,255,.4);">—</span>
-          </div>
-          <div style="font-size:11px;color:rgba(240,240,255,.2);line-height:1.5;">1 JAMKB = 1 KB of validator-RAM · place orders → grows · 6 s auctions → shrinks. <span style="color:rgba(240,240,255,.34);">Footprint is <b>state</b> (priced in JAMKB, held); each block's matching is <b>compute</b> (priced in gas, spent per run).</span></div>
-
-          <!-- self-funding treasury: fees cover the JAMKB rent first; only profit is withdrawable -->
-          <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.07);">
-            <div style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:rgba(240,240,255,.28);font-weight:600;margin-bottom:10px;">Self-funding treasury</div>
-            <!-- JAMKB-standard backpressure badge: shown only when the service is under-reserved -->
-            <div id="tr-backpressure" style="display:none;font-size:10px;background:rgba(248,113,113,.12);border:1px solid rgba(248,113,113,.35);color:#F87171;border-radius:6px;padding:6px 8px;margin-bottom:10px;line-height:1.4;">⚠ Under-reserved — new orders paused until the JAMKB reserve covers the state footprint. Top up below or let auctions clear the book.</div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:5px;">
-              <span>JAMKB rent (locked)</span><span id="tr-rent" class="mono" style="color:#E6007A;">—</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:5px;">
-              <span id="tr-solv-label">Reserve held</span><span id="tr-reserve" class="mono">—</span>
-            </div>
-            <!-- reserve-coverage gauge: how much of the held JAMKB reserve the live footprint obligation consumes -->
-            <div style="margin:6px 0 9px;">
-              <div style="height:6px;background:rgba(255,255,255,.06);border-radius:999px;overflow:hidden;">
-                <div id="tr-gauge" style="height:100%;width:0%;background:#4ADE80;transition:width .4s ease,background .4s ease;"></div>
-              </div>
-              <div id="tr-gauge-label" style="font-size:9px;color:rgba(240,240,255,.28);margin-top:4px;">state obligation vs JAMKB reserve</div>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:11px;color:rgba(240,240,255,.55);margin-bottom:8px;">
-              <span>Withdrawable profit (fees)</span><span id="tr-profit" class="mono" style="color:#4ADE80;">—</span>
-            </div>
-            <div style="font-size:10px;color:rgba(240,240,255,.2);line-height:1.5;">JAMKB is a <b>finite</b> RAM-right (<span id="tr-supply" class="mono">—</span> total). The reserve holds only what the footprint needs; <b>profit is the leftover fee revenue</b> (USDC/DOT), swept by the owner → <span id="tr-benef" class="mono" style="color:rgba(240,240,255,.4);word-break:break-all;">—</span></div>
-            <!-- beneficiary top-up: ACQUIRE JAMKB from the finite pool, capped at obligation+buffer -->
-            <div style="margin-top:10px;display:flex;gap:6px;align-items:center;">
-              <input id="tr-topup-amt" class="mono" type="number" min="0" step="1" placeholder="JAMKB"
-                     style="flex:1;background:rgba(0,0,0,.25);border:1px solid rgba(255,255,255,.1);color:#eee;border-radius:6px;padding:6px 8px;font-size:11px;">
-              <button id="tr-topup-btn" style="background:rgba(230,0,122,.15);border:1px solid rgba(230,0,122,.4);color:#E6007A;border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Acquire to target</button>
-            </div>
-            <!-- beneficiary access: sweep profit to your account, then swap on the DEX -->
-            <div id="tr-sweep" style="margin-top:10px;"></div>
-          </div>
-        </div>
-
+        <button onClick="{{ onPlace }}" style="{{ ctaStyle }}">{{ ctaLabel }}</button>
+        <div style="text-align:center;margin-top:9px;font-size:11px;color:{{ T.faint }};">Signs with your JAM account key · queues for the next 6 s auction</div>
       </div>
     </div>
-  </section>
 
-  <!-- ═══════════════════ FAUCET TAB ═══════════════════ -->
-  <section id="tab-faucet" class="hidden">
-    <div style="max-width:480px;margin:36px auto;">
-      <div style="background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:24px;padding:28px;">
-        <h2 style="font-size:18px;font-weight:700;color:#f0f0ff;margin-bottom:6px;">Testnet faucet</h2>
-        <p style="font-size:13px;color:rgba(240,240,255,.38);margin-bottom:26px;line-height:1.6;">Fund your connected account on lasair — no real value. Withdraw is overdraft-protected.</p>
-
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.32);font-weight:600;margin-bottom:8px;">Asset</div>
-        <div id="fassets" style="display:flex;gap:6px;margin-bottom:18px;"></div>
-
-        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.32);font-weight:600;margin-bottom:8px;">Amount</div>
-        <input id="famt" type="number" value="100000" class="mono" style="width:100%;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.09);border-radius:14px;padding:14px 16px;font-size:18px;color:#f0f0ff;outline:none;margin-bottom:20px;" />
-
-        <div style="display:flex;gap:8px;margin-bottom:24px;">
-          <button id="deposit">Deposit</button>
-          <button id="withdraw">Withdraw</button>
+    <!-- COL 3: Account -->
+    <div style="display:flex;flex-direction:column;gap:10px;">
+      <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:15px 13px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{{ T.dim }};font-weight:600;">Your Balances</span>
+          <span style="font-size:10px;color:{{ T.faint }};font-family:'IBM Plex Mono',monospace;overflow:hidden;max-width:110px;text-overflow:ellipsis;white-space:nowrap;">{{ walletAddr }}</span>
         </div>
-
-        <div style="font-size:12px;color:rgba(240,240,255,.26);padding:12px 14px;background:rgba(255,255,255,.02);border-radius:12px;border:1px solid rgba(255,255,255,.05);line-height:1.6;margin-bottom:24px;">
-          <strong style="color:rgba(240,240,255,.48);">JAMKB</strong> = prototype state-footprint token — 1 JAMKB = 1 KB of the service's validator-RAM footprint.
-          See <a href="https://github.com/abutlabs/jamswap/blob/main/docs/JAMKB.md" target="_blank" style="text-decoration:none;">docs/JAMKB.md</a>.
+        <sc-if value="{{ connected }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:13px;">
+            <sc-for list="{{ balList }}" as="bal" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 10px;background:{{ T.rowBg }};border-radius:11px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <div style="width:7px;height:7px;border-radius:50%;background:{{ bal.chipColor }};box-shadow:0 0 8px {{ bal.chipColor }};flex-shrink:0;"></div>
+                  <span style="font-size:13px;font-weight:500;color:{{ T.sub }};">{{ bal.symbol }}</span>
+                </div>
+                <span style="font-size:14px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};">{{ bal.amount }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <sc-if value="{{ isNotConnected }}" hint-placeholder-val="{{ true }}">
+          <div style="font-size:13px;color:{{ T.faint }};padding:4px 0;margin-bottom:13px;">Create an account to view balances</div>
+        </sc-if>
+        <div style="padding-top:11px;border-top:1px solid {{ T.rowBorder }};">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">
+            <span style="font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:{{ T.dim }};font-weight:600;">JAM Account</span>
+            <span style="font-size:10px;color:#4ADE80;font-family:'IBM Plex Mono',monospace;">{{ acctHandle }}</span>
+          </div>
+          <div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:{{ T.faint }};margin-bottom:3px;">ed25519 public key</div>
+          <div onClick="{{ onCopyPubkey }}" style="font-size:10px;color:{{ T.dim }};font-family:'IBM Plex Mono',monospace;word-break:break-all;cursor:pointer;line-height:1.45;margin-bottom:7px;">{{ pubkeyDisplay }}</div>
+          <div style="display:flex;align-items:center;gap:5px;">
+            <span style="font-size:10px;color:{{ T.faint }};flex:1;">held in this browser</span>
+            <button onClick="{{ onExport }}" style="padding:3px 8px;background:transparent;border:1px solid {{ T.btnBorder }};color:{{ T.dim }};border-radius:6px;font-size:10px;cursor:pointer;">export</button>
+            <button onClick="{{ onImport }}" style="padding:3px 8px;background:transparent;border:1px solid {{ T.btnBorder }};color:{{ T.dim }};border-radius:6px;font-size:10px;cursor:pointer;">import</button>
+          </div>
         </div>
+      </div>
 
-        <div style="border-top:1px solid rgba(255,255,255,.07);padding-top:22px;">
-          <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,240,255,.32);font-weight:600;margin-bottom:14px;">Current Balances</div>
-          <div id="bals-faucet"></div>
+      <!-- Orders (capped + scrollable) -->
+      <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:15px 13px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{{ T.dim }};font-weight:600;">Your Orders</span>
+          <sc-if value="{{ hasOrders }}" hint-placeholder-val="{{ false }}">
+            <span style="font-size:10px;color:{{ T.dim }};background:{{ T.rowBg }};padding:2px 7px;border-radius:999px;font-family:'IBM Plex Mono',monospace;">{{ orderCount }}</span>
+          </sc-if>
+        </div>
+        <sc-if value="{{ hasNoOrders }}" hint-placeholder-val="{{ true }}">
+          <div style="font-size:12px;color:{{ T.faint }};">No pending orders</div>
+        </sc-if>
+        <sc-if value="{{ hasOrders }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:4px;max-height:260px;overflow-y:auto;padding-right:2px;">
+            <sc-for list="{{ orderList }}" as="po" hint-placeholder-count="2">
+              <div style="display:flex;align-items:center;gap:5px;padding:7px 9px;background:{{ T.rowBg }};border:1px solid {{ T.rowBorder }};border-radius:10px;flex-shrink:0;">
+                <span style="font-size:9px;font-weight:700;letter-spacing:.04em;padding:2px 5px;border-radius:999px;background:{{ po.srcBg }};color:{{ po.srcColor }};flex-shrink:0;white-space:nowrap;">{{ po.srcLabel }}</span>
+                <span style="font-size:11px;font-weight:700;color:{{ po.sideColor }};flex-shrink:0;">{{ po.side }}</span>
+                <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:{{ T.mono }};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ po.detail }}</span>
+                <button onClick="{{ po.onCancel }}" style="padding:2px 6px;background:transparent;border:1px solid {{ T.btnBorder }};color:{{ T.dim }};border-radius:5px;font-size:10px;cursor:pointer;flex-shrink:0;">✕</button>
+              </div>
+            </sc-for>
+          </div>
+        </sc-if>
+        <div style="margin-top:8px;font-size:10px;color:{{ T.faint }};line-height:1.5;"><span style="color:#E6007A;">mempool</span> = next auction · <span style="color:#60A5FA;">resting</span> = on-chain · <a href="#" onClick="{{ onExplorerTab }}" style="color:{{ T.dim }};">Explorer →</a></div>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+<!-- ── EXPLORER TAB ── -->
+<sc-if value="{{ isExplorerTab }}" hint-placeholder-val="{{ false }}">
+  <div style="display:flex;align-items:center;gap:12px;padding:16px 0 13px;flex-wrap:wrap;">
+    <div style="position:relative;">
+      <button onClick="{{ onMarketDropdownToggle }}" style="display:flex;align-items:center;gap:7px;padding:9px 16px;border-radius:12px;font-size:15px;font-weight:600;cursor:pointer;background:{{ T.accentBg }};border:1px solid {{ T.accentBorder }};color:{{ T.text }};">
+        <span style="color:#E6007A;font-weight:700;">{{ baseLabel }}</span>
+        <span style="color:{{ T.dim }};">/</span>
+        <span>{{ quoteLabel }}</span>
+        <span style="font-size:11px;color:{{ T.dim }};margin-left:2px;">▾</span>
+      </button>
+      <sc-if value="{{ marketDropdownOpen }}" hint-placeholder-val="{{ false }}">
+        <div onClick="{{ onMarketDropdownClose }}" style="position:fixed;inset:0;z-index:99;"></div>
+        <div style="position:absolute;top:calc(100% + 6px);left:0;width:300px;background:{{ T.centerCardBg }};border:1px solid {{ T.centerCardBorder }};border-radius:14px;box-shadow:0 16px 48px rgba(0,0,0,.22);z-index:100;overflow:hidden;">
+          <div style="padding:10px 12px;border-bottom:1px solid {{ T.rowBorder }};">
+            <input type="text" value="{{ marketSearch }}" onChange="{{ onMarketSearch }}" placeholder="Search token…" style="width:100%;background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};border-radius:8px;padding:8px 10px;font-size:13px;color:{{ T.text }};outline:none;" />
+          </div>
+          <div style="max-height:280px;overflow-y:auto;">
+            <sc-for list="{{ filteredTokenPairs }}" as="tp" hint-placeholder-count="5">
+              <div onClick="{{ tp.onClick }}" style="{{ tp.rowStyle }}">
+                <span style="font-size:13px;font-weight:700;color:{{ T.text }};min-width:88px;">{{ tp.display }}</span>
+                <span style="font-size:11px;color:{{ T.dim }};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ tp.tokenName }}</span>
+                <span style="font-size:9px;padding:2px 6px;border-radius:999px;background:{{ tp.badgeBg }};color:{{ tp.badgeColor }};font-weight:700;flex-shrink:0;white-space:nowrap;">{{ tp.badgeLabel }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+    <div style="font-size:11px;color:{{ T.faint }};">Live data · refreshes every 6 s auction</div>
+  </div>
+
+  <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:20px;margin-bottom:11px;">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:15px;flex-wrap:wrap;gap:12px;">
+      <div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">
+        <span style="font-size:36px;font-weight:700;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};line-height:1;">{{ lastPrice }}</span>
+        <span style="font-size:14px;color:{{ T.dim }};">{{ marketName }}</span>
+        <span style="font-size:9px;padding:2px 8px;background:rgba(96,165,250,.1);color:#60A5FA;border-radius:999px;font-weight:700;letter-spacing:.06em;">6 s AUCTIONS</span>
+      </div>
+      <div style="display:flex;gap:24px;flex-shrink:0;">
+        <div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};">{{ tradeVol }}</div><div style="font-size:10px;color:{{ T.dim }};margin-top:3px;">volume</div></div>
+        <div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:{{ T.buy }};">{{ tradeHigh }}</div><div style="font-size:10px;color:{{ T.dim }};margin-top:3px;">high</div></div>
+        <div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:{{ T.sell }};">{{ tradeLow }}</div><div style="font-size:10px;color:{{ T.dim }};margin-top:3px;">low</div></div>
+        <div><div style="font-size:16px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};">{{ tradeLast }}</div><div style="font-size:10px;color:{{ T.dim }};margin-top:3px;">last trade</div></div>
+      </div>
+    </div>
+    <sc-if value="{{ hasNoTrades }}" hint-placeholder-val="{{ true }}">
+      <div style="height:80px;display:flex;align-items:center;justify-content:center;font-size:12px;color:{{ T.faint }};">Waiting for first trade on {{ marketName }}…</div>
+    </sc-if>
+    <sc-if value="{{ hasTrades }}" hint-placeholder-val="{{ false }}">
+      <svg width="100%" height="80" viewBox="0 0 600 80" preserveAspectRatio="none" style="display:block;overflow:visible;">
+        <polygon fill="{{ T.chartFill }}" points="{{ priceSparkArea }}"></polygon>
+        <polyline fill="none" stroke="#E6007A" stroke-width="1.5" stroke-linejoin="round" points="{{ priceSparkPts }}"></polyline>
+      </svg>
+    </sc-if>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:11px;align-items:start;">
+    <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:15px 13px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{{ T.dim }};font-weight:600;">Mempool · {{ marketName }}</span>
+        <span style="font-size:10px;color:{{ T.dim }};font-family:'IBM Plex Mono',monospace;">{{ mempoolCount }} queued</span>
+      </div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;">
+        <sc-for list="{{ mempoolFilters }}" as="mf" hint-placeholder-count="5">
+          <button onClick="{{ mf.onClick }}" style="{{ mf.style }}">{{ mf.label }}</button>
+        </sc-for>
+      </div>
+      <sc-if value="{{ hasSealedOnchain }}" hint-placeholder-val="{{ false }}">
+        <div style="font-size:10px;color:#F59E0B;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:8px;padding:6px 10px;margin-bottom:8px;line-height:1.4;">🔒 {{ sealedOnchain }} sealed commitments on-chain — hash only public</div>
+      </sc-if>
+      <div style="display:flex;flex-direction:column;gap:3px;max-height:540px;overflow-y:auto;padding-right:2px;">
+        <sc-if value="{{ hasNoFilteredMempool }}" hint-placeholder-val="{{ true }}"><div style="font-size:12px;color:{{ T.faint }};padding:8px 0;">No matching orders</div></sc-if>
+        <sc-if value="{{ hasFilteredMempool }}" hint-placeholder-val="{{ false }}">
+          <sc-for list="{{ filteredMempool }}" as="mo" hint-placeholder-count="0">
+            <div style="display:flex;align-items:center;gap:5px;padding:5px 8px;background:{{ T.summaryBg }};border:1px solid {{ T.rowBorder }};border-radius:8px;flex-shrink:0;">
+              <span style="font-size:9px;font-weight:700;letter-spacing:.04em;padding:2px 5px;border-radius:999px;background:{{ mo.badgeBg }};color:{{ mo.badgeColor }};flex-shrink:0;white-space:nowrap;">{{ mo.badge }}</span>
+              <span style="font-size:11px;font-weight:700;color:{{ mo.sideColor }};flex-shrink:0;">{{ mo.side }}</span>
+              <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:{{ T.mono }};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ mo.detail }}</span>
+              <span style="font-size:10px;color:{{ T.faint }};font-family:'IBM Plex Mono',monospace;flex-shrink:0;">{{ mo.who }}</span>
+            </div>
+          </sc-for>
+        </sc-if>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:11px;">
+      <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:15px 13px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:11px;">
+          <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{{ T.dim }};font-weight:600;">Execution Report</span>
+          <span style="font-size:10px;color:{{ T.dim }};font-family:'IBM Plex Mono',monospace;">{{ execCount }} fills</span>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:{{ T.faint }};padding:0 2px 5px;border-bottom:1px solid {{ T.rowBorder }};margin-bottom:5px;">
+          <span style="min-width:36px;">side</span><span style="flex:1;">filled</span><span style="min-width:60px;">@ price</span><span style="min-width:70px;">mkt</span><span>status</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:3px;max-height:280px;overflow-y:auto;padding-right:2px;">
+          <sc-if value="{{ hasNoExecs }}" hint-placeholder-val="{{ true }}"><div style="font-size:12px;color:{{ T.faint }};padding:8px 0;">No fills yet</div></sc-if>
+          <sc-if value="{{ hasExecs }}" hint-placeholder-val="{{ false }}">
+            <sc-for list="{{ execList }}" as="ex" hint-placeholder-count="0">
+              <div style="display:flex;align-items:center;gap:5px;padding:6px 8px;background:{{ T.summaryBg }};border-radius:8px;flex-shrink:0;">
+                <span style="font-size:11px;font-weight:700;color:{{ ex.sideColor }};flex-shrink:0;min-width:36px;">{{ ex.side }}</span>
+                <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:{{ T.muted }};flex:1;">{{ ex.filled }}</span>
+                <span style="font-size:10px;font-family:'IBM Plex Mono',monospace;color:{{ T.mono }};min-width:60px;">@ {{ ex.price }}</span>
+                <span style="font-size:10px;color:{{ T.faint }};min-width:70px;">{{ ex.mkt }}</span>
+                <span style="font-size:9px;padding:2px 6px;border-radius:999px;background:{{ ex.statusBg }};color:{{ ex.statusColor }};white-space:nowrap;flex-shrink:0;">{{ ex.status }}</span>
+              </div>
+            </sc-for>
+          </sc-if>
+        </div>
+      </div>
+
+      <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:{{ T.cardRad }};padding:15px 13px;">
+        <span style="font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:{{ T.dim }};font-weight:600;display:block;margin-bottom:10px;">Trade Tape · {{ marketName }}</span>
+        <div style="display:flex;justify-content:space-between;font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:{{ T.faint }};padding:0 2px 4px;">
+          <span>price</span><span>size</span><span>when</span>
+        </div>
+        <div style="max-height:220px;overflow-y:auto;">
+          <sc-if value="{{ hasNoTrades }}" hint-placeholder-val="{{ true }}"><div style="font-size:11px;color:{{ T.faint }};padding:8px 0;">No trades yet</div></sc-if>
+          <sc-if value="{{ hasTrades }}" hint-placeholder-val="{{ false }}">
+            <sc-for list="{{ tradeRows }}" as="tr" hint-placeholder-count="3">
+              <div style="display:flex;align-items:center;font-size:11px;padding:4px 2px;border-bottom:1px solid {{ T.tapeRow }};">
+                <span style="font-family:'IBM Plex Mono',monospace;color:{{ tr.color }};min-width:80px;">{{ tr.arrow }} {{ tr.price }}</span>
+                <span style="font-family:'IBM Plex Mono',monospace;flex:1;text-align:right;padding-right:12px;color:{{ T.mono }};">{{ tr.volume }}</span>
+                <span style="color:{{ T.faint }};min-width:52px;text-align:right;">{{ tr.ago }}</span>
+              </div>
+            </sc-for>
+          </sc-if>
         </div>
       </div>
     </div>
-  </section>
+  </div>
+</sc-if>
 
+<!-- ── FAUCET TAB ── -->
+<sc-if value="{{ isFaucetTab }}" hint-placeholder-val="{{ false }}">
+  <div style="max-width:480px;margin:36px auto;">
+    <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:24px;padding:26px;">
+      <h2 style="font-size:18px;font-weight:700;color:{{ T.text }};margin-bottom:5px;">Testnet faucet</h2>
+      <p style="font-size:13px;color:{{ T.dim }};margin-bottom:24px;line-height:1.6;">Fund your connected account on lasair — no real value. Withdraw is signed + overdraft-protected.</p>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:{{ T.dim }};font-weight:600;margin-bottom:7px;">Asset</div>
+      <div style="display:flex;gap:6px;margin-bottom:16px;">
+        <sc-for list="{{ faucetAssets }}" as="fa" hint-placeholder-count="3">
+          <button onClick="{{ fa.onClick }}" style="{{ fa.style }}">{{ fa.label }}</button>
+        </sc-for>
+      </div>
+      <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:{{ T.dim }};font-weight:600;margin-bottom:7px;">Amount</div>
+      <input type="number" value="{{ fAmt }}" onChange="{{ onFAmtChange }}" style="width:100%;background:{{ T.innerBg }};border:1px solid {{ T.innerBorder }};border-radius:13px;padding:13px 14px;font-size:18px;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};outline:none;margin-bottom:18px;" />
+      <div style="display:flex;gap:8px;margin-bottom:22px;">
+        <button onClick="{{ onDeposit }}" style="{{ depositBtnStyle }}">Deposit</button>
+        <button onClick="{{ onWithdraw }}" style="{{ withdrawBtnStyle }}">Withdraw</button>
+      </div>
+      <div style="font-size:12px;color:{{ T.faint }};padding:11px 13px;background:{{ T.sealBg }};border-radius:11px;border:1px solid {{ T.sealBorder }};line-height:1.6;margin-bottom:22px;">
+        <strong style="color:{{ T.sub }};">JAMKB</strong> = prototype state-footprint token — 1 JAMKB = 1 KB of validator-RAM footprint.
+        See <a href="https://github.com/abutlabs/jamswap/blob/main/docs/JAMKB.md" target="_blank" style="color:#E6007A;">docs/JAMKB.md</a>.
+      </div>
+      <div style="border-top:1px solid {{ T.rowBorder }};padding-top:20px;">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:{{ T.dim }};font-weight:600;margin-bottom:12px;">Current Balances</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">
+          <sc-for list="{{ balList }}" as="bal" hint-placeholder-count="3">
+            <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <div style="width:7px;height:7px;border-radius:50%;background:{{ bal.chipColor }};box-shadow:0 0 8px {{ bal.chipColor }};"></div>
+                <span style="font-size:13px;color:{{ T.sub }};">{{ bal.symbol }}</span>
+              </div>
+              <span style="font-size:15px;font-weight:600;font-family:'IBM Plex Mono',monospace;color:{{ T.text }};">{{ bal.amount }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </div>
+</sc-if>
+
+</div>
 </div>
 
 <!-- TOASTS -->
-<div id="toasts" style="position:fixed;top:76px;right:20px;display:flex;flex-direction:column;gap:8px;z-index:500;max-width:340px;pointer-events:none;"></div>
+<div style="position:fixed;top:74px;right:18px;display:flex;flex-direction:column;gap:7px;z-index:500;max-width:340px;pointer-events:none;">
+  <sc-for list="{{ toasts }}" as="t" hint-placeholder-count="0">
+    <div style="padding:12px 15px;background:rgba(10,10,18,.97);border:1px solid rgba(255,255,255,.1);border-left:3px solid {{ t.borderColor }};border-radius:13px;font-size:13px;color:#f0f0ff;box-shadow:0 8px 40px rgba(0,0,0,.6);animation:slideIn .18s ease;display:flex;align-items:flex-start;gap:9px;pointer-events:auto;">
+      <span style="flex:1;line-height:1.5;">{{ t.msg }}</span>
+      <button onClick="{{ t.onClose }}" style="background:transparent;border:none;color:rgba(240,240,255,.35);cursor:pointer;font-size:16px;padding:0;line-height:1;flex-shrink:0;">✕</button>
+    </div>
+  </sc-for>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    tab: 'trade',
+    colorTheme: 'obsidian',
+    darkMode: localStorage.getItem('jamswap_dark') !== 'false',
+    market: {id:1,name:'DOT/USDC',base:1,quote:0,baseLabel:'DOT',quoteLabel:'USDC'},
+    side: 'buy', otype: 'limit', sealed: false, tif: '0',
+    priceVal: '1', qtyVal: '10',
+    wallet: null, handle: null,
+    devSel: localStorage.getItem('jamswap_identity') || 'browser',
+    book: [], lastPrice: null, volume: 0, mempool: [], sealedOnchain: 0, orderLife: null,
+    bals: {0:0,1:0,2:0}, pending: [], executions: [],
+    trades: {list:[],metrics:null}, priceHist: [],
+    explorerFilter: 'all', marketSearch: '', marketDropdownOpen: false,
+    fAsset: '0', fAmt: '100000',
+    toasts: [], _tid: 0, lastSeq: 0, regInflight: {},
+  };
 
-<script>
-// ═══════════════════ config ═══════════════════
-const FEE_FLAT = 0.03;   // flat cost-based fee per filled order, in BASE units (matches FEE_FLAT=300 atomic in the service)
-const ASSETS = {0:"USDC",1:"DOT",2:"JAMKB"};
-const DOT_COLORS = ["#60A5FA","#E6007A","#F59E0B"];            // USDC, DOT, JAMKB
-const DOT_BG     = ["rgba(96,165,250,.13)","rgba(230,0,122,.13)","rgba(245,158,11,.13)"];
-const MARKETS = [
-  {id:1,name:"DOT/USDC",  base:1,quote:0,baseLabel:"DOT",  quoteLabel:"USDC"},
-  {id:2,name:"JAMKB/USDC",base:2,quote:0,baseLabel:"JAMKB",quoteLabel:"USDC"},
-  {id:3,name:"JAMKB/DOT", base:2,quote:1,baseLabel:"JAMKB",quoteLabel:"DOT"},
-];
+  MARKETS = [
+    {id:1,name:'DOT/USDC',base:1,quote:0,baseLabel:'DOT',quoteLabel:'USDC'},
+    {id:2,name:'JAMKB/USDC',base:2,quote:0,baseLabel:'JAMKB',quoteLabel:'USDC'},
+    {id:3,name:'JAMKB/DOT',base:2,quote:1,baseLabel:'JAMKB',quoteLabel:'DOT'},
+  ];
+  ASSETS = {0:'USDC',1:'DOT',2:'JAMKB'};
+  DOT_COLORS = ['#60A5FA','#E6007A','#F59E0B'];
+  DOT_BG = ['rgba(96,165,250,.13)','rgba(230,0,122,.13)','rgba(245,158,11,.13)'];
+  DEV_ACCOUNTS = [
+    {name:'Alice',  seed:'996542becdf1e78278dc795679c825faca2e9ed2bf101bf3c4a236d3ed79cf59', pub:'4418fb8c85bb3985394a8c2756d3643457ce614546202a2f50b093d762499ace'},
+    {name:'Bob',    seed:'b81e308145d97464d2bc92d35d227a9e62241a16451af6da5053e309be4f91d7', pub:'ad93247bd01307550ec7acd757ce6fb805fcf73db364063265b30a949e90d933'},
+    {name:'Carol',  seed:'0093c8c10a88ebbc99b35b72897a26d259313ee9bad97436a437d2e43aaafa0f', pub:'cab2b9ff25c2410fbe9b8a717abb298c716a03983c98ceb4def2087500b8e341'},
+    {name:'David',  seed:'69b3a7031787e12bfbdcac1b7a737b3e5a9f9450c37e215f6d3b57730e21001a', pub:'f30aa5444688b3cab47697b37d5cac5707bb3289e986b19b17db437206931a8d'},
+    {name:'Eve',    seed:'b4de9ebf8db5428930baa5a98d26679ab2a03eae7c791d582e6b75b7f018d0d4', pub:'8b8c5d436f92ecf605421e873a99ec528761eb52a88a2f9a057b3b3003e6f32a'},
+    {name:'Fergie', seed:'4a6482f8f479e3ba2b845f8cef284f4b3208ba3241ed82caa1b5ce9fc6281730', pub:'ab0084d01534b31c1dd87c81645fd762482a90027754041ca1b56133d0466c06'},
+  ];
 
-const state = {
-  tab:"trade", market:MARKETS[0], side:"buy", otype:"limit", sealed:false, wallet:null, handle:null,
-  book:[], lastPrice:null, volume:0, mempool:[], sealedOnchain:0,
-  bals:{0:0,1:0,2:0}, pending:[],
-  fp:{items:0,octets:"—",jamkb:0,available:true}, mempoolOpen:true, tr:null,
-  trades:{list:[],metrics:null},
-  fAsset:"0", tif:"0",
-};
-
-const $ = id => document.getElementById(id);
-const api = (p, body) => fetch(p, body
-  ? {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify(body)}
-  : {}).then(r => r.json()).catch(() => ({}));
-
-// ═══════════════════ style builders ═══════════════════
-const NAV = on => "padding:7px 16px;border-radius:10px;font-size:14px;font-weight:500;border:none;cursor:pointer;" +
-  (on ? "background:rgba(255,255,255,.07);color:#f0f0ff;" : "background:transparent;color:rgba(240,240,255,.42);");
-const WALLET = c => "padding:8px 20px;border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;" +
-  (c ? "background:rgba(255,255,255,.07);color:#f0f0ff;border:1px solid rgba(255,255,255,.12);" : "background:#E6007A;color:#fff;border:none;");
-const MTAB = on => "padding:9px 20px;border-radius:12px;font-size:14px;cursor:pointer;" +
-  (on ? "font-weight:700;background:rgba(230,0,122,.1);color:#E6007A;border:1px solid rgba(230,0,122,.28);"
-      : "font-weight:500;background:rgba(255,255,255,.04);color:rgba(240,240,255,.48);border:1px solid rgba(255,255,255,.07);");
-const RUN = d => "padding:5px 12px;border-radius:8px;font-size:11px;font-weight:500;cursor:pointer;background:transparent;" +
-  (d ? "border:1px solid rgba(255,255,255,.05);color:rgba(240,240,255,.18);cursor:not-allowed;" : "border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.52);");
-const SEG = on => "padding:5px 14px;border-radius:8px;font-size:12px;border:none;cursor:pointer;" +
-  (on ? "background:rgba(255,255,255,.1);color:#f0f0ff;font-weight:600;" : "background:transparent;color:rgba(240,240,255,.38);");
-const BUY = on => "flex:1;padding:12px;border-radius:14px;font-size:14px;font-weight:600;cursor:pointer;" +
-  (on ? "background:rgba(74,222,128,.12);color:#4ADE80;border:1px solid rgba(74,222,128,.25);" : "background:rgba(255,255,255,.04);color:rgba(240,240,255,.38);border:1px solid rgba(255,255,255,.08);");
-const SELL = on => "flex:1;padding:12px;border-radius:14px;font-size:14px;font-weight:600;cursor:pointer;" +
-  (on ? "background:rgba(248,113,113,.12);color:#F87171;border:1px solid rgba(248,113,113,.25);" : "background:rgba(255,255,255,.04);color:rgba(240,240,255,.38);border:1px solid rgba(255,255,255,.08);");
-const CTA = (c, side) => "width:100%;padding:16px;border-radius:16px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:.01em;font-family:inherit;" +
-  (c ? (side==="buy" ? "background:rgba(74,222,128,.14);color:#4ADE80;border:1.5px solid rgba(74,222,128,.3);"
-                     : "background:rgba(248,113,113,.14);color:#F87171;border:1.5px solid rgba(248,113,113,.3);")
-     : "background:#E6007A;color:#fff;border:none;");
-const FASSET = on => "flex:1;padding:9px 16px;border-radius:10px;font-size:13px;cursor:pointer;" +
-  (on ? "background:#E6007A;color:#fff;border:none;font-weight:700;" : "background:rgba(255,255,255,.04);color:rgba(240,240,255,.48);border:1px solid rgba(255,255,255,.07);font-weight:500;");
-const FBTN = (kind, c) => kind==="deposit"
-  ? "flex:1;padding:14px;border:none;border-radius:14px;font-size:14px;font-weight:700;font-family:inherit;background:#E6007A;color:#fff;" + (c?"cursor:pointer;":"cursor:not-allowed;opacity:.4;")
-  : "flex:1;padding:14px;border-radius:14px;font-size:14px;font-weight:600;border:1px solid rgba(255,255,255,.1);font-family:inherit;background:rgba(255,255,255,.06);color:rgba(240,240,255,.75);" + (c?"cursor:pointer;":"cursor:not-allowed;opacity:.4;");
-
-// ═══════════════════ toasts (imperative) ═══════════════════
-function toast(msg, kind="info", ms=4500){
-  const border = kind==="ok" ? "#4ADE80" : kind==="err" ? "#F87171" : "#E6007A";
-  const el = document.createElement("div");
-  el.style.cssText = "padding:13px 16px;background:rgba(12,12,20,.97);border:1px solid rgba(255,255,255,.1);border-left:3px solid "+border+";border-radius:14px;font-size:13px;color:#f0f0ff;box-shadow:0 8px 40px rgba(0,0,0,.55);animation:slideIn .18s ease;display:flex;align-items:flex-start;gap:10px;pointer-events:auto;";
-  const span = document.createElement("span"); span.style.cssText="flex:1;line-height:1.5;"; span.innerHTML = msg;
-  const x = document.createElement("button"); x.textContent="✕";
-  x.style.cssText = "background:transparent;border:none;color:rgba(240,240,255,.32);cursor:pointer;font-size:16px;padding:0;line-height:1;flex-shrink:0;";
-  const close = () => el.remove(); x.onclick = close;
-  el.append(span, x); $("toasts").appendChild(el);
-  if (ms) setTimeout(close, ms);
-}
-
-// ═══════════════════ wallet + signing ═══════════════════
-// An account is a collision-free handle the service assigns to an ed25519 public key at
-// registration; every mutating op is signed with that key and verified in the service. Two
-// signer paths: a connected wallet (signRaw — needs an **ed25519** account, since the service
-// verifies ed25519) or, with no wallet, a browser-held ed25519 key (WebCrypto). The signed
-// message matches canon() in server.py / lib.rs exactly.
-const short = a => a && a.length>14 ? a.slice(0,6)+"…"+a.slice(-6) : (a||"");
-const toHex = s => "0x"+Array.from(new TextEncoder().encode(s)).map(b=>b.toString(16).padStart(2,"0")).join("");
-const isConn = () => !!state.wallet;
-const myAcct = () => (state.wallet && state.handle!=null) ? state.handle : null;
-const sleep = ms => new Promise(r=>setTimeout(r,ms));
-const hexRaw = u8 => Array.from(u8).map(b=>b.toString(16).padStart(2,"0")).join("");
-const fromHex = h => new Uint8Array((h.match(/../g)||[]).map(x=>parseInt(x,16)));
-const hexToBytes = h => { h=h.replace(/^0x/,""); const a=new Uint8Array(h.length/2); for(let i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16); return a; };
-const te = new TextEncoder();
-function concatB(...arrs){ let n=arrs.reduce((s,a)=>s+a.length,0),o=new Uint8Array(n),p=0; for(const a of arrs){o.set(a,p);p+=a.length;} return o; }
-function u32le(n){ const b=new Uint8Array(4); new DataView(b.buffer).setUint32(0,n>>>0,true); return b; }
-function u64le(n){ const b=new Uint8Array(8); new DataView(b.buffer).setBigUint64(0,BigInt(n),true); return b; }
-function canonBytes(action, ...parts){ return concatB(te.encode("jamswap:v1:"+action), ...parts); }
-const SCALE = 10000, toAtomic = x => Math.round(parseFloat(x)*SCALE);
-
-// The jamswap account key is a browser-held **ed25519** key (WebCrypto), persisted per identity
-// in localStorage. The service verifies ed25519; Talisman's default accounts are sr25519 — a
-// different curve the PVM can't cheaply verify — so we sign with this key and use the wallet for
-// identity/connection. (A wallet ed25519 account signing via signRaw is a straightforward later add.)
-async function loadOrCreateKey(ns){
-  const skHex = localStorage.getItem("jamswap_sk_"+ns), pkHex = localStorage.getItem("jamswap_pk_"+ns);
-  if (skHex && pkHex){
-    const key = await crypto.subtle.importKey("pkcs8", hexToBytes(skHex), {name:"Ed25519"}, true, ["sign"]);
-    return { key, pub: hexToBytes(pkHex) };
+  getT() {
+    const { colorTheme, darkMode: D } = this.state;
+    const shared = {
+      accent: '#E6007A', accentBg: 'rgba(230,0,122,.1)', accentBorder: 'rgba(230,0,122,.28)',
+      buy: D ? '#4ADE80' : '#16A34A', sell: D ? '#F87171' : '#DC2626',
+      buyBg: D ? 'rgba(74,222,128,.12)' : 'rgba(22,163,74,.1)',
+      buyBorder: D ? 'rgba(74,222,128,.25)' : 'rgba(22,163,74,.25)',
+      sellBg: D ? 'rgba(248,113,113,.12)' : 'rgba(220,38,38,.1)',
+      sellBorder: D ? 'rgba(248,113,113,.25)' : 'rgba(220,38,38,.25)',
+      text: D ? '#f0f0ff' : '#18181c',
+      dim: D ? 'rgba(240,240,255,.3)' : 'rgba(24,24,28,.45)',
+      faint: D ? 'rgba(240,240,255,.2)' : 'rgba(24,24,28,.25)',
+      sub: D ? 'rgba(240,240,255,.48)' : 'rgba(24,24,28,.6)',
+      muted: D ? 'rgba(240,240,255,.65)' : 'rgba(24,24,28,.78)',
+      mono: D ? 'rgba(240,240,255,.42)' : 'rgba(24,24,28,.52)',
+      rowBg: D ? 'rgba(255,255,255,.03)' : 'rgba(0,0,0,.025)',
+      rowBorder: D ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.07)',
+      centerCardBg: D ? 'rgba(255,255,255,.045)' : '#fff',
+      centerCardBorder: D ? 'rgba(255,255,255,.1)' : 'rgba(0,0,0,.1)',
+      cardShadow: D ? 'none' : '0 4px 24px rgba(0,0,0,.07)',
+      summaryBg: D ? 'rgba(255,255,255,.025)' : 'rgba(0,0,0,.03)',
+      sealBg: D ? 'rgba(255,255,255,.025)' : 'rgba(0,0,0,.02)',
+      sealBorder: D ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.08)',
+      spread: D ? 'rgba(255,255,255,.07)' : 'rgba(0,0,0,.1)',
+      navBorder: D ? 'rgba(255,255,255,.06)' : 'rgba(0,0,0,.08)',
+      tapeRow: D ? 'rgba(255,255,255,.04)' : 'rgba(0,0,0,.04)',
+      btnBorder: D ? 'rgba(255,255,255,.1)' : 'rgba(0,0,0,.12)',
+      sbColor: D ? 'rgba(255,255,255,.18)' : 'rgba(0,0,0,.18)',
+      chartFill: D ? 'rgba(230,0,122,.07)' : 'rgba(230,0,122,.06)',
+      mode: D ? 'dark' : 'light',
+    };
+    const v = {
+      midnight: D
+        ? {pageBg:'radial-gradient(ellipse 120% 40% at 50% -4%,rgba(230,0,122,.09) 0%,transparent 55%),#0c0c13',navBg:'rgba(12,12,19,.92)',cardBg:'rgba(255,255,255,.03)',cardBorder:'rgba(255,255,255,.07)',cardRad:'20px',innerBg:'rgba(255,255,255,.04)',innerBorder:'rgba(255,255,255,.09)',label:'Polkadot',dot:'#E6007A'}
+        : {pageBg:'#f8f4ef',navBg:'rgba(248,244,239,.95)',cardBg:'#fff',cardBorder:'rgba(0,0,0,.08)',cardRad:'20px',innerBg:'rgba(0,0,0,.04)',innerBorder:'rgba(0,0,0,.1)',label:'Polkadot',dot:'#E6007A'},
+      obsidian: D
+        ? {pageBg:'#131418',navBg:'rgba(19,20,24,.96)',cardBg:'rgba(255,255,255,.04)',cardBorder:'rgba(255,255,255,.09)',cardRad:'16px',innerBg:'rgba(255,255,255,.05)',innerBorder:'rgba(255,255,255,.12)',label:'Obsidian',dot:'#94A3B8'}
+        : {pageBg:'#f2f4f7',navBg:'rgba(242,244,247,.96)',cardBg:'#fff',cardBorder:'rgba(0,0,0,.09)',cardRad:'16px',innerBg:'rgba(0,0,0,.05)',innerBorder:'rgba(0,0,0,.12)',label:'Slate',dot:'#64748B'},
+      amethyst: D
+        ? {pageBg:'radial-gradient(ellipse 100% 50% at 50% 0%,rgba(139,92,246,.13) 0%,rgba(230,0,122,.06) 45%,transparent 70%),#100d1c',navBg:'rgba(16,13,28,.93)',cardBg:'rgba(139,92,246,.04)',cardBorder:'rgba(139,92,246,.15)',cardRad:'20px',innerBg:'rgba(139,92,246,.05)',innerBorder:'rgba(139,92,246,.18)',label:'Amethyst',dot:'#8B5CF6'}
+        : {pageBg:'#f4f2fb',navBg:'rgba(244,242,251,.95)',cardBg:'#fff',cardBorder:'rgba(139,92,246,.16)',cardRad:'20px',innerBg:'rgba(139,92,246,.06)',innerBorder:'rgba(139,92,246,.2)',label:'Blossom',dot:'#8B5CF6'},
+    };
+    return { ...shared, ...(v[colorTheme]||v.midnight) };
   }
-  const kp = await crypto.subtle.generateKey({name:"Ed25519"}, true, ["sign","verify"]);
-  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
-  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
-  localStorage.setItem("jamswap_sk_"+ns, hexRaw(pkcs8));
-  localStorage.setItem("jamswap_pk_"+ns, hexRaw(raw));
-  return { key: kp.privateKey, pub: raw };
-}
-async function signBytes(msg){
-  return new Uint8Array(await crypto.subtle.sign({name:"Ed25519"}, state.wallet.key, msg));
-}
-// Register the account key → handle (idempotent server-side), then poll until the
-// registration ACCUMULATES. On the mixed lasair+PolkaJam chain settlement takes slots
-// (sometimes minutes right after launch — see docs/MIXED_CHAIN_DEX_SETTLEMENT.md), so
-// this polls with backoff for up to 4 minutes and reports progress instead of asking
-// the user to re-click. Re-entry while a registration is in flight does NOT re-submit
-// (the payload is byte-identical; the chain drops duplicates) — it just keeps polling.
-const regInflight = {};                 // pubhex -> true while submitted-but-unsettled
-async function registerAccount(){
-  const pub = state.wallet.pub, pubhex = hexRaw(pub);
-  const r0 = await api("/api/handle?pubkey="+pubhex);   // already on-chain?
-  if (r0 && r0.handle!=null){ state.handle=r0.handle; return true; }
-  if (!regInflight[pubhex]){
-    regInflight[pubhex] = true;
-    const sig = await signBytes(canonBytes("register", pub));
-    await api("/api/register", { pubkey:pubhex, sig:hexRaw(sig) });
+
+  _es=null; _ri=null; _fi=null; _ti=null;
+
+  componentDidMount() {
+    this._ri=setInterval(()=>{this.refreshBals();this.refreshMine();this.refreshExecs();},6000);
+    this._fi=setInterval(()=>this.refreshFp(),3000);
+    this._ti=setInterval(()=>this.refreshTrades(),3000);
+    this.subscribe(); this.refresh(); this.refreshTrades();
+    const s=this.state.devSel;
+    if(s&&s!=='browser') setTimeout(()=>this.switchIdentity(s),400);
+    else if(localStorage.getItem('jamswap_sk_default')) setTimeout(()=>this.connectAccount(),300);
   }
-  const t0 = Date.now(), name = (state.wallet.selected && state.wallet.selected.name) || "account";
-  for (let i=0; Date.now()-t0 < 240000; i++){
-    const r = await api("/api/handle?pubkey="+pubhex);
-    if (r && r.handle!=null){
-      delete regInflight[pubhex];
-      if (state.wallet && hexRaw(state.wallet.pub)===pubhex){ state.handle=r.handle; }
-      return true;
+  componentWillUnmount(){
+    clearInterval(this._ri);clearInterval(this._fi);clearInterval(this._ti);
+    if(this._es) this._es.close();
+  }
+
+  _hexRaw(u8){return Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');}
+  _fromHex(h){h=h.replace(/^0x/,'');const a=new Uint8Array(h.length/2);for(let i=0;i<a.length;i++)a[i]=parseInt(h.substr(i*2,2),16);return a;}
+  _u32le(n){const b=new Uint8Array(4);new DataView(b.buffer).setUint32(0,n>>>0,true);return b;}
+  _u64le(n){const b=new Uint8Array(8);new DataView(b.buffer).setBigUint64(0,BigInt(n),true);return b;}
+  _concat(...arrs){let n=arrs.reduce((s,a)=>s+a.length,0),o=new Uint8Array(n),p=0;for(const a of arrs){o.set(a,p);p+=a.length;}return o;}
+  _canon(action,...parts){const te=new TextEncoder();return this._concat(te.encode('jamswap:v1:'+action),...parts);}
+  _short(a){return a&&a.length>14?a.slice(0,6)+'…'+a.slice(-6):(a||'');}
+  _sideStr(s){return (typeof s==='number')?(s===0?'buy':'sell'):String(s||'').toLowerCase();}
+
+  async _loadOrCreateKey(ns){
+    const skH=localStorage.getItem('jamswap_sk_'+ns),pkH=localStorage.getItem('jamswap_pk_'+ns);
+    if(skH&&pkH){const key=await crypto.subtle.importKey('pkcs8',this._fromHex(skH),{name:'Ed25519'},true,['sign']);return{key,pub:this._fromHex(pkH)};}
+    const kp=await crypto.subtle.generateKey({name:'Ed25519'},true,['sign','verify']);
+    const pkcs8=new Uint8Array(await crypto.subtle.exportKey('pkcs8',kp.privateKey));
+    const raw=new Uint8Array(await crypto.subtle.exportKey('raw',kp.publicKey));
+    localStorage.setItem('jamswap_sk_'+ns,this._hexRaw(pkcs8));localStorage.setItem('jamswap_pk_'+ns,this._hexRaw(raw));
+    return{key:kp.privateKey,pub:raw};
+  }
+  async _loadDevKey(seedHex){const pkcs8=this._fromHex('302e020100300506032b657004220420'+seedHex);return crypto.subtle.importKey('pkcs8',pkcs8,{name:'Ed25519'},true,['sign']);}
+  async _sign(msg){const{wallet}=this.state;if(!wallet||!wallet.key)throw new Error('No signing key');return new Uint8Array(await crypto.subtle.sign({name:'Ed25519'},wallet.key,msg));}
+
+  api(p,body){return fetch(p,body?{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}:{}).then(r=>r.json()).catch(()=>({}));}
+
+  toast(msg,kind='info',ms=4500){
+    this.setState(s=>{
+      const id=s._tid+1;const dismiss=()=>this.setState(st=>({toasts:st.toasts.filter(t=>t.id!==id)}));
+      if(ms)setTimeout(dismiss,ms);
+      const borderColor=kind==='ok'?'#4ADE80':kind==='err'?'#F87171':'#E6007A';
+      return{_tid:id,toasts:[...s.toasts,{id,msg,kind,borderColor,onClose:dismiss}]};
+    });
+  }
+
+  async _registerAccount(){
+    const{wallet}=this.state;const pub=wallet.pub,pubhex=this._hexRaw(pub);
+    const r0=await this.api('/api/handle?pubkey='+pubhex);
+    if(r0&&r0.handle!=null){this.setState({handle:r0.handle});return true;}
+    if(!this.state.regInflight[pubhex]){const ni={...this.state.regInflight};ni[pubhex]=true;this.setState({regInflight:ni});const sig=await this._sign(this._canon('register',pub));await this.api('/api/register',{pubkey:pubhex,sig:this._hexRaw(sig)});}
+    const t0=Date.now();
+    for(let i=0;Date.now()-t0<240000;i++){
+      const r=await this.api('/api/handle?pubkey='+pubhex);
+      if(r&&r.handle!=null){const ni={...this.state.regInflight};delete ni[pubhex];this.setState({handle:r.handle,regInflight:ni});return true;}
+      if(i===7)this.toast('Registering on-chain…','info');
+      await new Promise(res=>setTimeout(res,i<15?2000:5000));
     }
-    if (i===7) toast(name+" registering — settlement takes a few slots on the mixed chain, hang tight…", "ok");
-    await sleep(i<15 ? 2000 : 5000);
+    return false;
   }
-  delete regInflight[pubhex];
-  return false;
-}
 
-// JAM has no protocol accounts or transactions — services define their own account model
-// (per the JAM designers: "JAM Services all have one account type"). Ours is an ed25519 key
-// this app holds for you: no extension, no sr25519 mismatch, and exactly the per-service model
-// JAM intends. The key is persisted locally and exportable; a future JAM wallet standard
-// (a `jam:` WalletConnect namespace, or wallets signing ed25519 for services) can slot in later.
-async function connectAccount(){
-  try {
-    localStorage.setItem("jamswap_identity", "browser");
-    const who = $("who"); if (who) who.value = "browser";
-    const kp = await loadOrCreateKey("default");
-    const address = "jam:" + hexRaw(kp.pub).slice(0, 16);
-    state.wallet = { key: kp.key, pub: kp.pub, selected: { address, name: "JAM account" } };
-    if (await registerAccount()) toast("Account ready.", "ok");
-    else toast("Registration did not settle in 4 min — the chain may be stalled (see /api/pending).", "err");
-    renderWallet(); refreshBals(); refreshMine(); refreshExecs();
-  } catch(e){ toast("Account setup failed: "+(e && e.message ? e.message : e)+" — this browser needs WebCrypto Ed25519 (Chrome 137+/Safari 17+).", "err"); }
-}
+  async connectAccount(){
+    localStorage.setItem('jamswap_identity','browser');this.setState({devSel:'browser'});
+    try{const kp=await this._loadOrCreateKey('default');this.setState({wallet:{key:kp.key,pub:kp.pub,selected:{address:'jam:'+this._hexRaw(kp.pub).slice(0,16),name:'JAM account'}},handle:null});
+    const ok=await this._registerAccount();if(ok)this.toast('Account ready.','ok');else this.toast('Registration timed out.','err');
+    this.refreshBals();this.refreshMine();this.refreshExecs();}catch(e){this.toast('Account setup failed: '+(e&&e.message||e),'err');}
+  }
+  async switchIdentity(sel){
+    localStorage.setItem('jamswap_identity',sel);this.setState({devSel:sel});
+    if(sel==='browser'){this.connectAccount();return;}
+    const acct=this.DEV_ACCOUNTS[+sel];if(!acct){this.connectAccount();return;}
+    try{const key=await this._loadDevKey(acct.seed);const pub=this._fromHex(acct.pub);
+    this.setState({wallet:{key,pub,selected:{address:'jam:'+acct.pub.slice(0,16),name:acct.name}},handle:null});
+    const ok=await this._registerAccount();if(ok)this.toast('Trading as '+acct.name+'.','ok');else this.toast(acct.name+' registration did not settle.','err');
+    this.refreshBals();this.refreshMine();this.refreshExecs();}catch(e){this.toast('Switch failed: '+(e&&e.message||e),'err');}
+  }
+  exportAccount(){const sk=localStorage.getItem('jamswap_sk_default'),pk=localStorage.getItem('jamswap_pk_default');if(!sk){this.toast('No account yet.','err');return;}const blob=new Blob([JSON.stringify({v:1,sk,pk})],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='jamswap-account.json';a.click();URL.revokeObjectURL(a.href);this.toast('Account key exported.','ok');}
+  async importAccount(){const txt=prompt('Paste your exported account JSON:');if(!txt)return;try{const{sk,pk}=JSON.parse(txt);if(!sk||!pk)throw new Error();localStorage.setItem('jamswap_sk_default',sk);localStorage.setItem('jamswap_pk_default',pk);await this.connectAccount();this.toast('Account imported.','ok');}catch(e){this.toast('Import failed: '+(e&&e.message||e),'err');}}
 
-// ═══════════════════ standard JAM dev accounts ═══════════════════
-// The six canonical dev accounts (Alice..Fergie; docs.jamcha.in/basics/dev-accounts) —
-// the SAME validators lasair and PolkaJam run. Their ed25519 keys are public dev keys,
-// so we can hold them in-browser and let you trade AS any of them, then swap in one
-// browser to watch the same order book from every counterparty's side. `seed` is the
-// 32-byte RFC-8032 ed25519 secret; `pub` is its public key (verified against the docs).
-const DEV_ACCOUNTS = [
-  {name:"Alice",  seed:"996542becdf1e78278dc795679c825faca2e9ed2bf101bf3c4a236d3ed79cf59", pub:"4418fb8c85bb3985394a8c2756d3643457ce614546202a2f50b093d762499ace"},
-  {name:"Bob",    seed:"b81e308145d97464d2bc92d35d227a9e62241a16451af6da5053e309be4f91d7", pub:"ad93247bd01307550ec7acd757ce6fb805fcf73db364063265b30a949e90d933"},
-  {name:"Carol",  seed:"0093c8c10a88ebbc99b35b72897a26d259313ee9bad97436a437d2e43aaafa0f", pub:"cab2b9ff25c2410fbe9b8a717abb298c716a03983c98ceb4def2087500b8e341"},
-  {name:"David",  seed:"69b3a7031787e12bfbdcac1b7a737b3e5a9f9450c37e215f6d3b57730e21001a", pub:"f30aa5444688b3cab47697b37d5cac5707bb3289e986b19b17db437206931a8d"},
-  {name:"Eve",    seed:"b4de9ebf8db5428930baa5a98d26679ab2a03eae7c791d582e6b75b7f018d0d4", pub:"8b8c5d436f92ecf605421e873a99ec528761eb52a88a2f9a057b3b3003e6f32a"},
-  {name:"Fergie", seed:"4a6482f8f479e3ba2b845f8cef284f4b3208ba3241ed82caa1b5ce9fc6281730", pub:"ab0084d01534b31c1dd87c81645fd762482a90027754041ca1b56133d0466c06"},
-];
-// Import a raw 32-byte ed25519 seed into WebCrypto by wrapping it in the standard
-// PKCS#8 DER prefix for an Ed25519 private key (302e020100300506032b657004220420 ++ seed).
-async function loadDevKey(seedHex){
-  const pkcs8 = fromHex("302e020100300506032b657004220420" + seedHex);
-  return crypto.subtle.importKey("pkcs8", pkcs8, {name:"Ed25519"}, true, ["sign"]);
-}
-// Populate the identity dropdown and restore the last-selected identity.
-function initIdentity(){
-  const sel = $("who");
-  DEV_ACCOUNTS.forEach((a,i) => {
-    const o = document.createElement("option"); o.value = String(i); o.textContent = a.name; sel.appendChild(o);
-  });
-  const saved = localStorage.getItem("jamswap_identity") || "browser";
-  sel.value = saved;
-  sel.onchange = () => switchIdentity(sel.value);
-  if (saved !== "browser") switchIdentity(saved);
-}
-// Swap the active signer. "browser" = the random per-browser key (connectAccount);
-// otherwise become dev account [idx]: load its key, register, and refresh so this
-// account's balances + OPEN ORDERS show. The 6 s poll then keeps them live.
-async function switchIdentity(sel){
-  localStorage.setItem("jamswap_identity", sel);
-  $("who").value = sel;
-  if (sel === "browser"){ return connectAccount(); }
-  const acct = DEV_ACCOUNTS[+sel];
-  if (!acct) return connectAccount();
-  try {
-    const key = await loadDevKey(acct.seed);
-    const pub = fromHex(acct.pub);
-    state.wallet = { key, pub, selected:{ address:"jam:"+acct.pub.slice(0,16), name:acct.name } };
-    state.handle = null; renderWallet();
-    if (await registerAccount()) toast("Trading as "+acct.name+".", "ok");
-    else toast(acct.name+" registration did not settle in 4 min — the chain may be stalled (see /api/pending).", "err");
-    renderWallet(); refreshBals(); refreshMine(); refreshExecs();
-  } catch(e){ toast("Switch to "+acct.name+" failed: "+(e && e.message ? e.message : e), "err"); }
-}
-// Export the account keypair (so it survives a browser wipe / moves to another device).
-function exportAccount(){
-  const sk = localStorage.getItem("jamswap_sk_default"), pk = localStorage.getItem("jamswap_pk_default");
-  if (!sk){ toast("No account yet — create one first.", "err"); return; }
-  const blob = new Blob([JSON.stringify({ v:1, sk, pk })], { type:"application/json" });
-  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-  a.download = "jamswap-account.json"; a.click(); URL.revokeObjectURL(a.href);
-  toast("Account key exported — keep it safe.", "ok");
-}
-async function importAccount(){
-  const txt = prompt("Paste your exported account JSON:");
-  if (!txt) return;
-  try {
-    const { sk, pk } = JSON.parse(txt);
-    if (!sk || !pk) throw new Error("missing sk/pk");
-    localStorage.setItem("jamswap_sk_default", sk); localStorage.setItem("jamswap_pk_default", pk);
-    await connectAccount(); toast("Account imported.", "ok");
-  } catch(e){ toast("Import failed: "+(e && e.message ? e.message : e), "err"); }
-}
+  isConn(){return !!this.state.wallet;}
+  myAcct(){return this.state.handle;}
 
-// ═══════════════════ data ═══════════════════
-let es = null;
-function subscribe(){
-  if (es) es.close();
-  es = new EventSource("/api/stream?market="+state.market.id);
-  es.onmessage = e => { try { applyState(JSON.parse(e.data)); } catch {} };
-}
-async function refresh(){
-  const s = await api("/api/state?market="+state.market.id);
-  if (s && s.book !== undefined) applyState(s);
-}
-function applyState(s){
-  state.book = s.book || [];
-  state.lastPrice = s.price || null;
-  state.volume = s.volume || 0;
-  state.mempool = s.mempool || [];
-  state.sealedOnchain = s.sealed_onchain || 0;
-  if (s.order_life){
-    state.orderLife = s.order_life;
-    const ol = s.order_life, note = $("tif-note");
-    if (note) note.textContent = "No order rests forever — even GTC auto-expires once its fee stops covering JAMKB rent (≈ "
-      + fmtDur(ol.public_secs) + " public · " + fmtDur(ol.sealed_secs) + " sealed, max " + fmtDur(ol.max_secs)
-      + (ol.max_open ? "; up to " + ol.max_open + " open orders/market" : "") + ").";
-  }
-  renderBook(); renderMempool();
-  $("last-price").textContent = state.lastPrice !== null ? String(state.lastPrice) : "—";
-  $("vol").textContent = state.volume;
-}
-async function refreshBals(){
-  if (!isConn()){ renderBals(); return; }
-  const a = myAcct(); const bals = {};
-  for (const id of [0,1,2]){ const b = await api("/api/balance?account="+a+"&asset="+id); bals[id] = (b && b.balance) || 0; }
-  state.bals = bals; renderBals();
-}
-async function refreshMine(){
-  if (!isConn()){ state.pending = []; renderMine(); return; }
-  const r = await api("/api/mine?account="+myAcct());
-  state.pending = (r && r.orders) || []; renderMine();
-}
-async function refreshFp(){
-  const f = await api("/api/footprint");
-  if (!f || f.available === false) state.fp = {items:0, octets:"—", octetsNum:null, jamkb:0, available:false};
-  else state.fp = {items:f.items||0, octets:(f.octets||0)+" B", octetsNum:f.octets||0, jamkb:f.jamkb_required||0, available:true};
-  // sample the live footprint into a rolling buffer so it visibly "breathes" block-to-block
-  if (state.fp.available){
-    state.fpHist = (state.fpHist || []);
-    state.fpHist.push(state.fp.octetsNum);
-    if (state.fpHist.length > 80) state.fpHist.shift();
-  }
-  state.tr = await api("/api/treasury_status");
-  renderFp();
-}
-function renderSpark(){
-  const line = $("fp-spark-line"), area = $("fp-spark-area");
-  if (!line) return;
-  const h = state.fpHist || [];
-  if (h.length < 2){ line.setAttribute("points",""); area.setAttribute("points",""); return; }
-  const W = 200, H = 30, n = h.length;
-  const min = Math.min(...h), max = Math.max(...h), span = (max - min) || 1;
-  const pts = h.map((v, i) => {
-    const x = (i / (n - 1)) * W;
-    const y = (H - 3) - ((v - min) / span) * (H - 6);   // 3px padding top/bottom
-    return x.toFixed(1) + "," + y.toFixed(1);
-  });
-  line.setAttribute("points", pts.join(" "));
-  area.setAttribute("points", "0," + H + " " + pts.join(" ") + " " + W + "," + H);
-}
-function renderFpDelta(){
-  const el = $("fp-delta");
-  if (!el) return;
-  if (!state.fp.available){ el.textContent = "—"; el.style.color = "rgba(240,240,255,.4)"; return; }
-  const cur = state.fp.octetsNum, prev = state.fpPrev;
-  state.fpPrev = cur;
-  if (prev == null || cur === prev){ el.textContent = "steady"; el.style.color = "rgba(240,240,255,.4)"; return; }
-  const d = cur - prev;
-  el.textContent = (d > 0 ? "▲ +" : "▼ ") + d + " B";
-  el.style.color = d > 0 ? "#F87171" : "#4ADE80";   // growth costs JAMKB (red); a clear frees it (green)
-}
-function renderReserveGauge(t){
-  const bar = $("tr-gauge"), label = $("tr-gauge-label");
-  if (!bar || !t) return;
-  const held   = +t.held_jamkb || 0;            // JAMKB the treasury actually holds
-  const oblig  = +t.rent_jamkb || 0;            // KB the live footprint must back (the obligation)
-  const target = +t.reserve_target_jamkb || 0;  // obligation + buffer — the anti-hoard cap
-  const over   = +t.over_reserved_jamkb || 0;   // idle RAM rights above the obligation
-  let pct, color, note;
-  if (!t.solvent){                              // held < obligation
-    pct = target > 0 ? held / target * 100 : 0;
-    color = "#F87171"; note = "shortfall · short " + t.shortfall_jamkb + " JAMKB — backpressure on";
-  } else if (over > 0 && held > target){        // holding more RAM rights than needed
-    pct = 100; color = "#FBBF24";
-    note = "over-reserved · " + over + " idle JAMKB to release (holding " + held + ", target " + target + ")";
-  } else {                                      // obligation ≤ held ≤ target — right-sized
-    pct = target > 0 ? Math.min(100, held / target * 100) : 0;
-    color = "#4ADE80"; note = "right-sized · held " + held + " / target " + target + " JAMKB (obligation " + oblig + ")";
-  }
-  bar.style.width = Math.max(pct, held > 0 ? 3 : 0) + "%";
-  bar.style.background = color;
-  label.textContent = note;
-}
+  subscribe(){if(this._es)this._es.close();this._es=new EventSource('/api/stream?market='+this.state.market.id);this._es.onmessage=e=>{try{this.applyState(JSON.parse(e.data));}catch{}};}
+  async refresh(){const s=await this.api('/api/state?market='+this.state.market.id);if(s&&s.book!==undefined)this.applyState(s);}
+  applyState(s){const np=s.price;this.setState(prev=>{const ph=np!=null?[...prev.priceHist,np].slice(-120):prev.priceHist;return{book:s.book||[],lastPrice:s.price||null,volume:s.volume||0,mempool:s.mempool||[],sealedOnchain:s.sealed_onchain||0,orderLife:s.order_life||null,priceHist:ph};});}
+  async refreshBals(){if(!this.isConn()||this.myAcct()==null)return;const a=this.myAcct(),bals={};for(const id of[0,1,2]){const b=await this.api('/api/balance?account='+a+'&asset='+id);bals[id]=(b&&b.balance)||0;}this.setState({bals});}
+  async refreshMine(){if(!this.isConn()||this.myAcct()==null){this.setState({pending:[]});return;}const r=await this.api('/api/mine?account='+this.myAcct());this.setState({pending:(r&&r.orders)||[]});}
+  async refreshExecs(){if(!this.isConn()||this.myAcct()==null){this.setState({executions:[]});return;}const r=await this.api('/api/executions?account='+this.myAcct());this.setState({executions:(r&&r.executions)||[]});}
+  async refreshFp(){}
+  async refreshTrades(){const r=await this.api('/api/trades?market='+this.state.market.id);this.setState({trades:r&&r.trades?{list:r.trades,metrics:r.metrics}:{list:[],metrics:null}});}
 
-// ═══════════════════ actions ═══════════════════
-async function placeOrder(){
-  if (!isConn()){ connectAccount(); return; }
-  if (myAcct()==null){ toast("Account not registered yet — reconnect.", "err"); return; }
-  const qty = parseFloat($("qty-in").value), price = parseFloat($("price-in").value);
-  const {market, side, otype, sealed} = state;
-  if (!qty || (otype==="limit" && !price)){ toast("Enter "+(otype==="limit"?"a price and ":"")+"a quantity.", "err"); return; }
-  $("place").disabled = true;
-  // sign the order intent (market price is server-derived, so signed as 0) — matches api_order.
-  // seq: a per-account monotonic value (ms clock, bumped on ties). It's part of the signed
-  // message and enforced on-chain as a strictly-rising floor, so this signature can never be
-  // replayed into a later batch — the signature is verified per-order IN REFINE (trustless).
-  const seq = Math.max(Date.now(), (state.lastSeq||0)+1); state.lastSeq = seq;
-  const signedPrice = otype==="market" ? 0 : toAtomic(price);
-  const msg = canonBytes("order", u32le(myAcct()), u32le(market.id), new Uint8Array([side==="buy"?0:1]),
-    u32le(toAtomic(qty)), new Uint8Array([otype==="market"?1:0]), new Uint8Array([sealed?1:0]),
-    u32le(signedPrice), u64le(seq));
-  let sig;
-  try { sig = await signBytes(msg); }   // signs with the browser-held ed25519 key (no wallet/extension)
-  catch { $("place").disabled=false; toast("Signing failed — order not placed.", "err"); return; }
-  try {
-    const body = {market:market.id, base:market.base, quote:market.quote, account:myAcct(),
-      address:state.wallet.selected.address, side, qty, type:otype, sealed, sig:hexRaw(sig), seq};
-    if (otype==="limit") body.price = price;
-    body.ttl = parseInt(state.tif) || 0;   // good-till-cancelled (0) or a timed expiry (sealed too)
-    if (sealed){
-      // two-phase sealed placement: the server prepares the hiding material and returns the
-      // 32-byte commit id; the OWNER signs it (canon commit ‖ market ‖ account ‖ id ‖ seq) —
-      // the service accepts no unsigned sealed commit, so nobody can seal onto your account.
-      const prep = await api("/api/seal_prepare", {market:market.id, account:myAcct(), side, qty,
-        type:otype, ...(otype==="limit" ? {price} : {})});
-      if (prep.error){ toast(prep.error, "err"); $("place").disabled=false; return; }
-      const cseq = Math.max(Date.now(), (state.lastSeq||0)+1); state.lastSeq = cseq;
-      const cmsg = canonBytes("commit", u32le(market.id), u32le(myAcct()), fromHex(prep.commit), u64le(cseq));
-      body.oid = prep.oid; body.commit_seq = cseq; body.commit_sig = hexRaw(await signBytes(cmsg));
-    }
-    const r = await api("/api/order", body);
-    if (r.error){ toast(r.error, "err"); $("place").disabled=false; return; }
-    const tifLabel = body.ttl ? " · expires in "+(body.ttl>=3600?body.ttl/3600+"h":body.ttl>=60?body.ttl/60+"m":body.ttl+"s") : "";
-    toast((sealed?"🔒 ":"")+otype+" "+side+" "+qty+(otype==="limit"?" @ "+price:"")+tifLabel+" queued (#"+(r.order_id||"?")+").", "ok");
-    // sealed orders now REST HIDDEN until a counterparty crosses them — reassure the trader
-    // that a non-crossing sealed order isn't lost, it waits (hidden) for a match.
-    if (sealed && otype==="limit"){
-      const cross = state.book.some(o => side==="buy" ? (o.side==="sell" && o.price<=price) : (o.side==="buy" && o.price>=price));
-      if (!cross) toast("🔒 No counterparty crosses your price yet — your sealed order rests hidden on-chain and will match automatically when one arrives (revealed only when it clears).", "info", 9000);
-    }
-  } catch { toast("Order failed.", "err"); }
-  $("place").disabled = false; refresh(); refreshMine();
-}
-async function cancelOrder(oid){
-  try { const r = await api("/api/cancel_pending", {account:myAcct(), order_id:oid});
-    toast(r.removed ? "Cancelled #"+oid+"." : "Order #"+oid+" already cleared.", r.removed?"ok":"info"); }
-  catch { toast("Cancel failed.", "err"); }
-  refreshMine(); refresh();
-}
-async function faucet(kind){
-  if (!isConn()){ toast("Create an account first.", "err"); return; }
-  if (myAcct()==null){ toast("Account not registered yet.", "err"); return; }
-  const amount = parseFloat($("famt").value);
-  if (!amount){ toast("Enter an amount.", "err"); return; }
-  const asset = +state.fAsset;
-  try {
-    if (kind==="deposit"){                 // faucet funding is permissionless
-      await api("/api/deposit", {account:myAcct(), address:state.wallet.selected.address, asset, amount});
-      toast("Deposited "+amount+" "+ASSETS[asset]+".", "ok");
-    } else {                               // withdraw is signed + nonce'd (verified in the service)
-      const amt = toAtomic(amount);
-      const nr = await api("/api/nonce?handle="+myAcct()); const nonce = (nr && nr.nonce) || 0;
-      const msg = canonBytes("withdraw", u32le(myAcct()), u32le(asset), u64le(amt), u64le(nonce));
-      const sig = await signBytes(msg);   // browser-held ed25519 key
-      const r = await api("/api/withdraw", {account:myAcct(), asset, amount_atomic:amt, nonce, sig:hexRaw(sig)});
-      if (r.error){ toast(r.error, "err"); return; }
-      toast("Withdrew "+amount+" "+ASSETS[asset]+".", "ok");
-    }
-  } catch { toast(kind+" failed.", "err"); }
-  refreshBals();
-}
-function switchMarket(m){ state.market = m; renderMarketTabs(); renderMarketDeps(); renderTrades(); subscribe(); refresh(); refreshTrades(); }
-
-// ═══════════════════ render ═══════════════════
-function renderTabs(){
-  const t = state.tab;
-  $("nav-trade").style.cssText  = NAV(t==="trade");
-  $("nav-faucet").style.cssText = NAV(t==="faucet");
-  $("tab-trade").classList.toggle("hidden", t!=="trade");
-  $("tab-faucet").classList.toggle("hidden", t!=="faucet");
-}
-function renderWallet(){
-  const c = isConn();
-  $("wallet-label").textContent = c ? (state.handle!=null ? "handle #"+state.handle : short(state.wallet.selected.address)) : "Create account";
-  $("connect").style.cssText = WALLET(c);
-  $("wallet-addr").textContent = c ? short(state.wallet.selected.address) : "";
-  // account readout: on-chain handle + full ed25519 public key
-  $("acct-handle").textContent = c ? (state.handle!=null ? "handle #"+state.handle : "registering…") : "";
-  $("acct-pubkey").textContent = c ? ("0x"+hexRaw(state.wallet.pub)) : "—";
-  renderCTA();
-  renderFaucetBtns();
-}
-function renderMarketTabs(){
-  $("mtabs").innerHTML = "";
-  MARKETS.forEach(m => {
-    const b = document.createElement("button");
-    b.textContent = m.name; b.style.cssText = MTAB(m.id===state.market.id);
-    b.onclick = () => switchMarket(m);
-    $("mtabs").appendChild(b);
-  });
-}
-function renderMarketDeps(){
-  const m = state.market;
-  $("ob-market").textContent = "Order Book · "+m.name;
-  $("base-label").textContent = m.baseLabel;
-  $("quote-label").textContent = m.quoteLabel;
-  $("fee-quote").textContent = m.baseLabel;   // flat fee is charged in the BASE asset
-  $("base-chip").style.background = DOT_BG[m.base];   $("base-dot").style.background = DOT_COLORS[m.base];
-  $("quote-chip").style.background = DOT_BG[m.quote];  $("quote-dot").style.background = DOT_COLORS[m.quote];
-  renderSide(); renderSummaryFee();
-}
-function renderSide(){
-  const buy = state.side==="buy", m = state.market;
-  $("sbuy").textContent = "Buy "+m.baseLabel;  $("sbuy").style.cssText  = BUY(buy);
-  $("ssell").textContent = "Sell "+m.baseLabel; $("ssell").style.cssText = SELL(!buy);
-  $("side-label").textContent = buy ? "You buy" : "You sell";
-  renderCTA(); renderSummaryFee();
-}
-function renderType(){
-  const limit = state.otype==="limit";
-  $("tlimit").style.cssText  = SEG(limit);
-  $("tmarket").style.cssText = SEG(!limit);
-  $("price-block").classList.toggle("hidden", !limit);
-  renderSummaryFee();
-}
-function renderSeal(){
-  $("seal-track").style.background = state.sealed ? "#E6007A" : "rgba(255,255,255,.12)";
-  $("seal-knob").style.left = state.sealed ? "19px" : "3px";
-  // expiry (time-in-force) applies to sealed orders too now — they rest hidden until they
-  // cross, so a good-till-time bounds how long a sealed order waits before it's dropped.
-  $("tif-block").classList.remove("hidden");
-}
-function renderCTA(){
-  const c = isConn(), m = state.market;
-  $("place").textContent = c ? (state.side==="buy" ? "Buy "+m.baseLabel : "Sell "+m.baseLabel) : "Create account to trade";
-  $("place").style.cssText = CTA(c, state.side);
-}
-function renderSummaryFee(){
-  const qty = parseFloat($("qty-in").value) || 0;
-  const price = parseFloat($("price-in").value) || 0;
-  const notional = qty*price;
-  const q = state.market.quoteLabel, b = state.market.baseLabel;
-  const fee = qty>0 ? Math.min(FEE_FLAT, qty) : 0;   // flat cost-based fee in BASE units, capped at the fill
-  let summary;
-  if (state.otype==="market") summary = "Market order · takes the uniform clearing price";
-  else if (notional>0) summary = state.side==="buy"
-      ? "You pay ~"+notional.toFixed(2)+" "+q+" · receive ~"+(qty-fee).toFixed(2)+" "+b
-      : "You deliver ~"+(qty+fee).toFixed(2)+" "+b+" · receive ~"+notional.toFixed(2)+" "+q;
-  else summary = "Enter quantity and price to see total";
-  $("summary").textContent = summary;
-  $("fee").textContent = fee>0 ? fee.toFixed(4) : "—";
-}
-function bookRow(o, color, barBg, edge){
-  return '<div style="position:relative;display:flex;justify-content:space-between;padding:3px 4px;border-radius:3px;margin-bottom:1px;overflow:hidden;">'
-    + '<div style="position:absolute;'+edge+':0;top:0;bottom:0;width:'+o.depthPct+'%;background:'+barBg+';pointer-events:none;"></div>'
-    + '<span class="mono" style="position:relative;font-size:12px;color:'+color+';font-weight:500;">'+o.price+'</span>'
-    + '<span class="mono" style="position:relative;font-size:12px;color:rgba(240,240,255,.45);">'+o.qty+'</span></div>';
-}
-const emptyBook = t => '<div style="font-size:12px;color:rgba(240,240,255,.18);padding:10px 4px;text-align:center;">'+t+'</div>';
-function renderBook(){
-  const asks = state.book.filter(o=>o.side==="sell");
-  const bids = state.book.filter(o=>o.side==="buy");
-  const maxQ = Math.max(1, ...asks.map(o=>o.qty), ...bids.map(o=>o.qty));
-  const pAsks = asks.slice().sort((a,b)=>b.price-a.price).slice(0,8).map(a=>({price:a.price,qty:a.qty,depthPct:Math.round(100*a.qty/maxQ)}));
-  const pBids = bids.slice().sort((a,b)=>b.price-a.price).slice(0,8).map(b=>({price:b.price,qty:b.qty,depthPct:Math.round(100*b.qty/maxQ)}));
-  $("asks").innerHTML = pAsks.length ? pAsks.map(a=>bookRow(a,"#F87171","rgba(248,113,113,.07)","right")).join("") : emptyBook("No asks");
-  $("bids").innerHTML = pBids.length ? pBids.map(b=>bookRow(b,"#4ADE80","rgba(74,222,128,.07)","left")).join("") : emptyBook("No bids");
-  const loAsk = pAsks.length ? pAsks[pAsks.length-1].price : null;
-  const hiBid = pBids.length ? pBids[0].price : null;
-  // round to the price scale (4 dp) to avoid float-subtraction artifacts (1.356-1.234)
-  const spread = (loAsk!==null && hiBid!==null) ? String(Math.round((loAsk-hiBid)*1e4)/1e4) : "—";
-  $("spread").textContent = "spread "+spread;
-}
-function renderMempool(){
-  $("memwrap").classList.toggle("hidden", !state.mempoolOpen);
-  $("mem-toggle").textContent = state.mempoolOpen ? "hide" : "show";
-  if (!state.mempoolOpen) return;
-  const mp = $("mempool");
-  if (!state.mempool.length){
-    mp.innerHTML = '<div style="font-size:12px;color:rgba(240,240,255,.22);padding:4px 0;">No orders queued for next auction</div>';
-  } else {
-    mp.innerHTML = '<div style="display:flex;flex-direction:column;gap:4px;">' + state.mempool.map(o => {
-      const badgeBg = o.sealed ? "rgba(245,158,11,.12)" : (o.type==="market" ? "rgba(230,0,122,.12)" : "rgba(74,222,128,.12)");
-      const badgeColor = o.sealed ? "#F59E0B" : (o.type==="market" ? "#E6007A" : "#4ADE80");
-      const badgeLabel = o.sealed ? "🔒 SEALED" : (o.type==="market" ? "⚡ MKT" : "◉ LIMIT");
-      const sideColor = o.side==="buy" ? "#4ADE80" : "#F87171";
-      const qtyDisplay = o.sealed ? "hidden" : (o.type==="market" ? String(o.qty) : o.qty+" @ "+o.price);
-      const who = o.who ? String(o.who).slice(0,6)+"…" : "";
-      return '<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.06);border-radius:10px;">'
-        + '<span style="font-size:9px;font-weight:700;letter-spacing:.05em;padding:2px 7px;border-radius:999px;background:'+badgeBg+';color:'+badgeColor+';flex-shrink:0;">'+badgeLabel+'</span>'
-        + '<span style="font-size:12px;font-weight:700;color:'+sideColor+';flex-shrink:0;">'+(o.side||"").toUpperCase()+'</span>'
-        + '<span class="mono" style="font-size:11px;color:rgba(240,240,255,.5);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+qtyDisplay+'</span>'
-        + '<span class="mono" style="font-size:10px;color:rgba(240,240,255,.22);flex-shrink:0;">'+who+'</span></div>';
-    }).join("") + '</div>';
-  }
-  $("seal-summary").textContent = state.sealedOnchain
-    ? "🔒 "+state.sealedOnchain+" sealed commitment"+(state.sealedOnchain!==1?"s":"")+" on-chain — hash only public"
-    : "";
-}
-function balRow(id, big){
-  return '<div style="display:flex;align-items:center;justify-content:space-between;'
-    + (big ? 'padding:8px 0;' : 'padding:10px 12px;background:rgba(255,255,255,.03);border-radius:12px;') + '">'
-    + '<div style="display:flex;align-items:center;gap:9px;">'
-    + '<div style="width:8px;height:8px;border-radius:50%;background:'+DOT_COLORS[id]+';box-shadow:0 0 8px '+DOT_COLORS[id]+';flex-shrink:0;"></div>'
-    + '<span style="font-size:13px;'+(big?'color:rgba(240,240,255,.58);':'font-weight:500;color:rgba(240,240,255,.6);')+'">'+ASSETS[id]+'</span></div>'
-    + '<span class="mono" style="font-size:'+(big?"15px":"14px")+';font-weight:600;color:#f0f0ff;">'+(state.bals[id]||0).toLocaleString()+'</span></div>';
-}
-function renderBals(){
-  if (!isConn()){
-    $("bals").innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);padding:4px 0;">Create an account to view balances</div>';
-  } else {
-    $("bals").innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;">'+[0,1,2].map(id=>balRow(id,false)).join("")+'</div>';
-  }
-  $("bals-faucet").innerHTML = '<div style="display:flex;flex-direction:column;gap:10px;">'+[0,1,2].map(id=>balRow(id,true)).join("")+'</div>';
-}
-function renderMine(){
-  const mine = $("mine");
-  if (!state.pending.length){ mine.innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);">No pending orders</div>'; return; }
-  mine.innerHTML = '<div style="display:flex;flex-direction:column;gap:6px;">' + state.pending.map(o => {
-    const mname = (MARKETS.find(m=>m.id===o.market)||{}).name || ("mkt "+o.market);
-    const sideColor = o.side==="buy" ? "#4ADE80" : "#F87171";
-    const priceDisplay = o.type==="market" ? "market" : String(o.price);
-    const exp = (o.expires_in != null)
-      ? '<span style="font-size:9px;color:'+(o.expires_in<60?"#FB923C":"rgba(240,240,255,.3)")+';flex-shrink:0;" title="auto-expires (rent-funded)">⌛'+fmtDur(o.expires_in)+'</span>' : '';
-    return '<div style="display:flex;align-items:center;gap:7px;padding:9px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;">'
-      + '<span style="font-size:12px;font-weight:700;color:'+sideColor+';flex-shrink:0;">'+(o.side||"").toUpperCase()+'</span>'
-      + '<span class="mono" style="font-size:11px;color:rgba(240,240,255,.5);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+o.qty+' @ '+priceDisplay+'</span>'
-      + exp
-      + '<span style="font-size:10px;color:rgba(240,240,255,.28);flex-shrink:0;">'+mname+'</span>'
-      + '<button data-cancel="'+o.oid+'" style="padding:3px 8px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(240,240,255,.4);border-radius:6px;font-size:11px;cursor:pointer;flex-shrink:0;">✕</button></div>';
-  }).join("") + '</div>';
-  mine.querySelectorAll("[data-cancel]").forEach(b => b.onclick = () => cancelOrder(+b.dataset.cancel));
-}
-// per-order fill receipts — what the matching engine actually did with each of your orders
-const EXEC_DISPO = {
-  "filled":            {label:"filled",             color:"#4ADE80", note:o=>""},
-  "partial-carried":   {label:"partial · working",  color:"#38BDF8", note:o=>o.remainder+" carried (hidden, still working)"},
-  "partial-resting":   {label:"partial · rested",   color:"#FBBF24", note:o=>o.remainder+" resting"},
-  "partial-cancelled": {label:"partial · cancelled",color:"#FB923C", note:o=>o.remainder+" cancelled (expired)"},
-  "resting":           {label:"resting",            color:"#93C5FD", note:o=>o.qty+" resting"},
-  "cancelled":         {label:"cancelled",          color:"#F87171", note:o=>"no supply at your limit"},
-};
-function renderExecs(){
-  const el = $("execs");
-  const list = state.execs || [];
-  if (!isConn()){ el.innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);">Connect an account to see your fills</div>'; return; }
-  if (!list.length){ el.innerHTML = '<div style="font-size:13px;color:rgba(240,240,255,.25);">No fills yet — place an order and watch it clear</div>'; return; }
-  el.innerHTML = '<div style="display:flex;flex-direction:column;gap:6px;">' + list.map(e => {
-    const mkt = MARKETS.find(m=>m.id===e.market) || {name:"mkt "+e.market, baseLabel:"base", quoteLabel:""};
-    const isBuy = e.side === 0;
-    const d = EXEC_DISPO[e.disposition] || {label:e.disposition, color:"rgba(240,240,255,.5)", note:_=>""};
-    const noteTxt = d.note(e);
-    return '<div style="display:flex;flex-direction:column;gap:3px;padding:9px 12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.06);border-radius:12px;">'
-      + '<div style="display:flex;align-items:center;gap:7px;">'
-      +   '<span style="font-size:12px;font-weight:700;color:'+(isBuy?"#4ADE80":"#F87171")+';">'+(isBuy?"BUY":"SELL")+'</span>'
-      +   '<span class="mono" style="font-size:11px;color:rgba(240,240,255,.5);flex:1;">'+e.qty+' '+mkt.baseLabel+'</span>'
-      +   '<span style="font-size:10px;color:rgba(240,240,255,.28);">'+mkt.name+'</span>'
-      + '</div>'
-      + '<div style="display:flex;align-items:center;gap:7px;font-size:11px;">'
-      +   '<span class="mono" style="color:'+d.color+';">'+d.label+'</span>'
-      +   '<span class="mono" style="color:rgba(240,240,255,.5);flex:1;">'
-      +     (e.filled>0 ? ('filled '+e.filled+' @ '+e.price+' '+mkt.quoteLabel) : '')
-      +     (noteTxt ? (e.filled>0?' · ':'')+noteTxt : '')
-      +   '</span>'
-      +   '<span style="font-size:10px;color:rgba(240,240,255,.28);">'+agoLabel(e.ts)+'</span>'
-      + '</div></div>';
-  }).join("") + '</div>';
-}
-async function refreshExecs(){
-  if (!isConn()){ state.execs = []; renderExecs(); return; }
-  const r = await api("/api/executions?account="+myAcct());
-  state.execs = (r && r.executions) || []; renderExecs();
-}
-function renderFp(){
-  $("fp-items").textContent = state.fp.items;
-  $("fp-octets").textContent = state.fp.octets;
-  $("fp-jamkb").textContent = state.fp.jamkb;
-  renderSpark(); renderFpDelta();
-  $("fp-badge").textContent = state.fp.available ? "READ-ONLY" : "NODE UPGRADE";
-  $("fp-badge").style.cssText = state.fp.available
-    ? "font-size:9px;padding:2px 8px;background:rgba(74,222,128,.08);color:#4ADE80;border-radius:999px;font-weight:700;letter-spacing:.06em;"
-    : "font-size:9px;padding:2px 8px;background:rgba(245,158,11,.1);color:#F59E0B;border-radius:999px;font-weight:700;letter-spacing:.06em;";
-  const t = state.tr;
-  if (t){
-    $("tr-rent").textContent = t.rent_jamkb + " JAMKB";
-    if (t.solvent){
-      $("tr-solv-label").textContent = "Reserve held ✓";
-      $("tr-reserve").textContent = t.reserve_held_jamkb + " JAMKB";
-      $("tr-reserve").style.color = "#4ADE80";
+  async placeOrder(){
+    if(!this.isConn()){this.connectAccount();return;}if(this.myAcct()==null){this.toast('Account not registered yet.','err');return;}
+    const{market,side,otype,sealed,priceVal,qtyVal,tif}=this.state;
+    const qty=parseFloat(qtyVal),price=parseFloat(priceVal);
+    if(!qty||(otype==='limit'&&!price)){this.toast('Enter '+(otype==='limit'?'a price and ':'')+'a quantity.','err');return;}
+    const seq=Math.max(Date.now(),(this.state.lastSeq||0)+1);this.setState({lastSeq:seq});
+    const SCALE=10000,sp=otype==='market'?0:Math.round(price*SCALE),qa=Math.round(qty*SCALE);
+    const msg=this._canon('order',this._u32le(this.myAcct()),this._u32le(market.id),new Uint8Array([side==='buy'?0:1]),this._u32le(qa),new Uint8Array([otype==='market'?1:0]),new Uint8Array([sealed?1:0]),this._u32le(sp),this._u64le(seq));
+    let sig;try{sig=await this._sign(msg);}catch{this.toast('Signing failed.','err');return;}
+    if(sealed){
+      try{const prep=await this.api('/api/seal_prepare',{market:market.id,account:this.myAcct(),side,qty,type:otype,...(otype==='limit'?{price}:{})});if(prep.error){this.toast(prep.error,'err');return;}
+      const cs=Math.max(Date.now(),(this.state.lastSeq||0)+1);this.setState({lastSeq:cs});
+      const cmsg=this._canon('commit',this._u32le(market.id),this._u32le(this.myAcct()),this._fromHex(prep.commit),this._u64le(cs));const csig=await this._sign(cmsg);
+      const body={market:market.id,base:market.base,quote:market.quote,account:this.myAcct(),address:this.state.wallet.selected.address,side,qty,type:otype,sealed:true,oid:prep.oid,commit_sig:this._hexRaw(csig),commit_seq:cs,sig:this._hexRaw(sig),seq,ttl:parseInt(tif)||0};
+      if(otype==='limit')body.price=price;const r=await this.api('/api/order',body);if(r.error){this.toast(r.error,'err');return;}
+      this.toast('🔒 Sealed '+otype+' '+side+' '+qty+(otype==='limit'?' @ '+price:'')+' (#'+(r.order_id||'?')+')','ok');}catch(e){this.toast('Sealed order failed: '+(e&&e.message||e),'err');return;}
     } else {
-      $("tr-solv-label").textContent = "Reserve shortfall";
-      $("tr-reserve").textContent = "−" + t.shortfall_jamkb + " JAMKB";
-      $("tr-reserve").style.color = "#F87171";
+      const body={market:market.id,base:market.base,quote:market.quote,account:this.myAcct(),address:this.state.wallet.selected.address,side,qty,type:otype,sealed:false,sig:this._hexRaw(sig),seq,ttl:parseInt(tif)||0};
+      if(otype==='limit')body.price=price;const r=await this.api('/api/order',body);if(r.error){this.toast(r.error,'err');return;}
+      this.toast(otype+' '+side+' '+qty+(otype==='limit'?' @ '+price:'')+' (#'+(r.order_id||'?')+')','ok');
     }
-    const w = t.withdrawable || {};
-    const parts = [[0,"USDC"],[1,"DOT"],[2,"JAMKB"]].map(([id,l]) => (w[id]||0)+" "+l).filter(p=>!p.startsWith("0 "));
-    $("tr-profit").textContent = t.solvent ? (parts.length ? parts.join(" · ") : "0") : "0 (rent unfunded)";
-    $("tr-benef").textContent = t.beneficiary ? (t.beneficiary.slice(0,8)+"…"+t.beneficiary.slice(-6)) : "—";
-    $("tr-benef").title = (t.beneficiary||"") + " (" + (t.beneficiary_chain||"") + ")";
-    if (t.supply_jamkb != null) $("tr-supply").textContent = Number(t.supply_jamkb).toLocaleString() + " JAMKB";
-    // JAMKB-standard backpressure badge: visible only when new state growth is paused
-    $("tr-backpressure").style.display = t.backpressure ? "block" : "none";
-    renderReserveGauge(t);
+    this.refresh();this.refreshMine();
   }
-  renderSweep(t);
-}
-// beneficiary top-up: inject JAMKB into the state-rent reserve (the runway/backstop inflow)
-async function reserveTopup(){
-  const amt = +($("tr-topup-amt").value || 0);
-  if (!(amt > 0)){ toast("Enter a JAMKB amount to top up.", "err"); return; }
-  try {
-    const r = await api("/api/reserve_topup", {amount: amt});
-    if (r.error){ toast(r.error, "err"); return; }
-    toast("Acquired JAMKB → "+r.reserve_jamkb+" / "+r.target_jamkb+" JAMKB (obligation + buffer).", "ok");
-    $("tr-topup-amt").value = "";
-    refresh(); refreshFp();
-  } catch { toast("Top-up failed.", "err"); }
-}
-// beneficiary access: sweep withdrawable profit to your account, then swap it on the DEX
-function renderSweep(t){
-  const el = $("tr-sweep");
-  const w = (t && t.withdrawable) || {};
-  const assets = [[2,"JAMKB"],[1,"DOT"],[0,"USDC"]].filter(([id]) => (w[id]||0) > 0);
-  if (!t || !t.sweep_enabled){
-    el.innerHTML = assets.length
-      ? '<div style="font-size:10px;color:rgba(240,240,255,.28);">Profit sweep is operator-gated (set BENEFICIARY_SWEEP=1). Once swept, swap JAMKB/DOT/USDC on the DEX.</div>' : '';
-    return;
+
+  async cancelOrder(oid,source,mktName){
+    if(source==='resting'){if(this.myAcct()==null){this.toast('Account not registered.','err');return;}const nr=await this.api('/api/nonce?handle='+this.myAcct());const nonce=(nr&&nr.nonce!=null)?nr.nonce:0;const mkt=this.MARKETS.find(m=>m.name===mktName)||this.state.market;const msg=this._canon('cancel',this._u32le(this.myAcct()),this._u32le(mkt.id),this._u32le(oid),this._u64le(nonce));const sig=await this._sign(msg);const r=await this.api('/api/cancel',{account:this.myAcct(),market:mkt.id,order_id:oid,nonce,sig:this._hexRaw(sig)});if(r&&r.ok)this.toast('Cancel submitted for #'+oid,'ok');else this.toast((r&&r.error)||'Cancel failed','err');}
+    else{const r=await this.api('/api/cancel_pending',{account:this.myAcct(),order_id:oid});this.toast(r&&r.removed?'Cancelled #'+oid:'Order #'+oid+' already cleared',r&&r.removed?'ok':'info');}
+    this.refreshMine();this.refresh();
   }
-  if (!isConn()){ el.innerHTML = '<div style="font-size:10px;color:rgba(240,240,255,.28);">Connect your account to sweep profit to it.</div>'; return; }
-  if (!assets.length){ el.innerHTML = '<div style="font-size:10px;color:rgba(240,240,255,.28);">No withdrawable profit yet.</div>'; return; }
-  el.innerHTML = '<div style="font-size:9px;text-transform:uppercase;letter-spacing:.06em;color:rgba(240,240,255,.28);margin-bottom:6px;">Beneficiary · sweep profit → your account</div>'
-    + '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + assets.map(([id,l]) =>
-        '<button data-sweep="'+id+'" data-amt="'+w[id]+'" style="padding:5px 10px;background:rgba(74,222,128,.1);border:1px solid rgba(74,222,128,.25);color:#4ADE80;border-radius:8px;font-size:11px;cursor:pointer;">Sweep '+w[id]+' '+l+'</button>'
-      ).join("") + '</div>'
-    + '<div style="font-size:10px;color:rgba(240,240,255,.2);margin-top:6px;">Then swap JAMKB/DOT/USDC on the DEX above.</div>';
-  el.querySelectorAll("[data-sweep]").forEach(b => b.onclick = () => beneficiarySweep(+b.dataset.sweep, +b.dataset.amt));
-}
-async function beneficiarySweep(asset, amount){
-  if (!isConn()){ toast("Connect an account first.", "err"); return; }
-  try {
-    const r = await api("/api/beneficiary_sweep", {asset, amount, dest: myAcct()});
-    if (r.error){ toast(r.error, "err"); return; }
-    toast("Swept "+r.swept+" "+r.asset+" → your account. Now swap it on the DEX.", "ok");
-  } catch { toast("Sweep failed.", "err"); }
-  refreshBals(); refreshFp();
-}
-function renderFaucetTabs(){
-  $("fassets").innerHTML = "";
-  [{v:"0",l:"USDC"},{v:"1",l:"DOT"},{v:"2",l:"JAMKB"}].forEach(a => {
-    const b = document.createElement("button"); b.textContent = a.l; b.style.cssText = FASSET(a.v===state.fAsset);
-    b.onclick = () => { state.fAsset = a.v; renderFaucetTabs(); };
-    $("fassets").appendChild(b);
-  });
-}
-function renderFaucetBtns(){
-  const c = isConn();
-  $("deposit").style.cssText = FBTN("deposit", c);
-  $("withdraw").style.cssText = FBTN("withdraw", c);
-}
+  async faucetDeposit(){if(!this.isConn()){this.toast('Create an account first.','err');return;}if(this.myAcct()==null){this.toast('Account not registered yet.','err');return;}const{fAsset,fAmt}=this.state;if(!parseFloat(fAmt)){this.toast('Enter an amount.','err');return;}const r=await this.api('/api/deposit',{account:this.myAcct(),address:this.state.wallet.selected.address,asset:+fAsset,amount:+fAmt});if(r&&r.error){this.toast(r.error,'err');return;}this.toast('Deposited '+fAmt+' '+this.ASSETS[+fAsset],'ok');this.refreshBals();}
+  async faucetWithdraw(){if(!this.isConn()||this.myAcct()==null){this.toast('Create an account first.','err');return;}const{fAsset,fAmt}=this.state;if(!parseFloat(fAmt)){this.toast('Enter an amount.','err');return;}const SCALE=10000,amt=Math.round(parseFloat(fAmt)*SCALE);const nr=await this.api('/api/nonce?handle='+this.myAcct());const nonce=(nr&&nr.nonce!=null)?nr.nonce:0;const msg=this._canon('withdraw',this._u32le(this.myAcct()),this._u32le(+fAsset),this._u64le(amt),this._u64le(nonce));const sig=await this._sign(msg);const r=await this.api('/api/withdraw',{account:this.myAcct(),asset:+fAsset,amount_atomic:amt,nonce,sig:this._hexRaw(sig)});if(r&&r.error){this.toast(r.error,'err');return;}this.toast('Withdrew '+fAmt+' '+this.ASSETS[+fAsset],'ok');this.refreshBals();}
 
-// recent trades (the active pair's tape) + volume metrics
-function agoLabel(ts){
-  const s = Math.max(0, Math.floor(Date.now()/1000 - ts));
-  if (s < 60) return s+"s ago";
-  if (s < 3600) return Math.floor(s/60)+"m ago";
-  return Math.floor(s/3600)+"h ago";
-}
-function fmtDur(s){
-  s = Math.max(0, Math.round(s));
-  if (s < 60) return s+"s";
-  if (s < 3600) return Math.round(s/60)+"m";
-  if (s < 86400) return Math.round(s/3600)+"h";
-  return Math.round(s/86400)+"d";
-}
-async function refreshTrades(){
-  const r = await api("/api/trades?market="+state.market.id);
-  state.trades = r && r.trades ? {list:r.trades, metrics:r.metrics} : {list:[], metrics:null};
-  renderTrades();
-}
-function renderTrades(){
-  $("trades-pair").textContent = state.market.name;
-  const m = state.trades.metrics || {};
-  $("tm-last").textContent = m.last != null ? m.last : "—";
-  $("tm-vol").textContent  = m.volume != null ? m.volume : "—";
-  $("tm-high").textContent = m.high != null ? m.high : "—";
-  $("tm-low").textContent  = m.low != null ? m.low : "—";
-  const el = $("trades");
-  const rows = state.trades.list || [];
-  if (!rows.length){
-    el.innerHTML = '<div style="font-size:12px;color:rgba(240,240,255,.22);padding:8px 0;">No trades yet on this pair</div>';
-    return;
+  switchMarket(m){this.setState({market:m},()=>{this.subscribe();this.refresh();this.refreshTrades();});}
+
+  TOP_TOKENS=[
+    {sym:'BTC',name:'Bitcoin'},{sym:'ETH',name:'Ethereum'},{sym:'BNB',name:'BNB'},
+    {sym:'SOL',name:'Solana'},{sym:'XRP',name:'XRP'},{sym:'DOGE',name:'Dogecoin'},
+    {sym:'ADA',name:'Cardano'},{sym:'TRX',name:'TRON'},{sym:'AVAX',name:'Avalanche'},
+    {sym:'SHIB',name:'Shiba Inu'},{sym:'DOT',name:'Polkadot'},{sym:'LINK',name:'Chainlink'},
+    {sym:'TON',name:'Toncoin'},{sym:'MATIC',name:'Polygon'},{sym:'LTC',name:'Litecoin'},
+    {sym:'UNI',name:'Uniswap'},{sym:'ATOM',name:'Cosmos'},{sym:'XMR',name:'Monero'},
+    {sym:'ETC',name:'Ethereum Classic'},{sym:'ICP',name:'Internet Computer'},
+    {sym:'FIL',name:'Filecoin'},{sym:'HBAR',name:'Hedera'},{sym:'APT',name:'Aptos'},
+    {sym:'ARB',name:'Arbitrum'},{sym:'OP',name:'Optimism'},{sym:'VET',name:'VeChain'},
+    {sym:'MKR',name:'Maker'},{sym:'AAVE',name:'Aave'},{sym:'GRT',name:'The Graph'},
+    {sym:'IMX',name:'Immutable'},{sym:'NEAR',name:'NEAR Protocol'},{sym:'ALGO',name:'Algorand'},
+    {sym:'EGLD',name:'MultiversX'},{sym:'XTZ',name:'Tezos'},{sym:'FTM',name:'Fantom'},
+    {sym:'SAND',name:'The Sandbox'},{sym:'MANA',name:'Decentraland'},{sym:'AXS',name:'Axie Infinity'},
+    {sym:'CHZ',name:'Chiliz'},{sym:'FLOW',name:'Flow'},{sym:'KAVA',name:'Kava'},
+    {sym:'ZEC',name:'Zcash'},{sym:'LDO',name:'Lido DAO'},{sym:'RPL',name:'Rocket Pool'},
+    {sym:'ENS',name:'Ethereum Name Service'},{sym:'DYDX',name:'dYdX'},{sym:'CRV',name:'Curve'},
+    {sym:'YFI',name:'yearn.finance'},{sym:'SNX',name:'Synthetix'},{sym:'COMP',name:'Compound'},
+    {sym:'BAL',name:'Balancer'},{sym:'SUSHI',name:'SushiSwap'},{sym:'CVX',name:'Convex Finance'},
+    {sym:'1INCH',name:'1inch'},{sym:'LRC',name:'Loopring'},{sym:'ZRX',name:'0x Protocol'},
+    {sym:'BAT',name:'Basic Attention Token'},{sym:'NMR',name:'Numeraire'},{sym:'BNT',name:'Bancor'},
+    {sym:'BAND',name:'Band Protocol'},{sym:'ANKR',name:'Ankr'},{sym:'STORJ',name:'Storj'},
+    {sym:'REN',name:'Ren'},{sym:'OGN',name:'Origin Protocol'},{sym:'RLC',name:'iExec RLC'},
+    {sym:'ICX',name:'ICON'},{sym:'ONT',name:'Ontology'},{sym:'QTUM',name:'Qtum'},
+    {sym:'DCR',name:'Decred'},{sym:'ROSE',name:'Oasis Network'},{sym:'CELO',name:'Celo'},
+    {sym:'THETA',name:'Theta Network'},{sym:'ZIL',name:'Zilliqa'},{sym:'ONE',name:'Harmony'},
+    {sym:'IOTA',name:'IOTA'},{sym:'HNT',name:'Helium'},{sym:'WAVES',name:'Waves'},
+    {sym:'NEO',name:'Neo'},{sym:'DASH',name:'Dash'},{sym:'BTT',name:'BitTorrent'},
+    {sym:'WLD',name:'Worldcoin'},{sym:'PENDLE',name:'Pendle'},{sym:'PYTH',name:'Pyth Network'},
+    {sym:'JUP',name:'Jupiter'},{sym:'KSM',name:'Kusama'},{sym:'GLMR',name:'Moonbeam'},
+    {sym:'ACA',name:'Acala'},{sym:'HDX',name:'HydraDX'},{sym:'CFG',name:'Centrifuge'},
+    {sym:'PHA',name:'Phala Network'},{sym:'MOVR',name:'Moonriver'},{sym:'KINT',name:'Kintsugi'},
+    {sym:'ZTG',name:'Zeitgeist'},{sym:'AIR',name:'Altair'},{sym:'TNKR',name:'Tinkernet'},
+    {sym:'PICA',name:'Picasso'},{sym:'PARA',name:'Parallel Finance'},{sym:'JAMKB',name:'JAMswap KB'},
+  ];
+  setColorTheme(c){localStorage.setItem('jamswap_color',c);this.setState({colorTheme:c});}
+  toggleMode(){const d=!this.state.darkMode;localStorage.setItem('jamswap_dark',String(d));this.setState({darkMode:d});}
+
+  _spark(vals,W,H){if(vals.length<2)return{pts:'',area:''};const n=vals.length,min=Math.min(...vals),max=Math.max(...vals),span=(max-min)||1;const pts=vals.map((v,i)=>`${((i/(n-1))*W).toFixed(1)},${((H-4)-((v-min)/span)*(H-8)).toFixed(1)}`);return{pts:pts.join(' '),area:`0,${H} ${pts.join(' ')} ${W},${H}`};}
+  _ago(ts){const s=Math.max(0,Math.floor(Date.now()/1000-ts));if(s<60)return s+'s ago';if(s<3600)return Math.floor(s/60)+'m ago';return Math.floor(s/3600)+'h ago';}
+  _fmtDur(s){s=Math.max(0,Math.round(s));if(s<60)return s+'s';if(s<3600)return Math.round(s/60)+'m';if(s<86400)return Math.round(s/3600)+'h';return Math.round(s/86400)+'d';}
+
+  renderVals() {
+    const{tab,colorTheme,darkMode,market,side,otype,sealed,tif,priceVal,qtyVal,wallet,handle,devSel,
+          book,lastPrice,volume,mempool,sealedOnchain,orderLife,bals,pending,executions,
+          trades,priceHist,explorerFilter,fAsset,fAmt,toasts}=this.state;
+    const T=this.getT();
+    const connected=!!wallet;
+    const{baseLabel,quoteLabel}=market;
+    const qty=parseFloat(qtyVal)||0,price=parseFloat(priceVal)||0;
+
+    // order book
+    const asks=book.filter(o=>o.side==='sell'),bids=book.filter(o=>o.side==='buy');
+    const allQ=[...asks,...bids].map(o=>o.qty),maxQ=Math.max(...allQ,1);
+    const processedAsks=asks.slice().sort((a,b)=>b.price-a.price).slice(0,8).map(a=>({price:a.price,qty:a.qty,depthPct:Math.round(100*a.qty/maxQ)}));
+    const processedBids=bids.slice().sort((a,b)=>b.price-a.price).slice(0,8).map(b=>({price:b.price,qty:b.qty,depthPct:Math.round(100*b.qty/maxQ)}));
+    const loAsk=processedAsks.length?processedAsks[processedAsks.length-1].price:null;
+    const hiBid=processedBids.length?processedBids[0].price:null;
+
+    const balList=[0,1,2].map(id=>({id,symbol:this.ASSETS[id],amount:(bals[id]||0).toLocaleString(),chipColor:this.DOT_COLORS[id]}));
+
+    const orderList=pending.map(o=>({
+      oid:o.oid,side:this._sideStr(o.side).toUpperCase(),
+      sideColor:this._sideStr(o.side)==='buy'?T.buy:T.sell,
+      srcLabel:o.source==='resting'?'◉ RESTING':'◎ MEMPOOL',
+      srcBg:o.source==='resting'?'rgba(96,165,250,.1)':'rgba(230,0,122,.1)',
+      srcColor:o.source==='resting'?'#60A5FA':'#E6007A',
+      detail:o.type==='market'?String(o.qty):(o.qty+' @ '+(o.price||'?')),
+      onCancel:()=>this.cancelOrder(o.oid,o.source||'pending',o.market_name||market.name),
+    }));
+
+    const execList=executions.slice(0,60).map(ex=>{
+      const esd=this._sideStr(ex.side),dp=String(ex.disposition||'');
+      const isCanc=dp.indexOf('cancel')>=0,isPart=!isCanc&&(dp.indexOf('partial')>=0||dp==='resting'||ex.remainder>0);
+      return {
+        sideColor:esd==='buy'?T.buy:T.sell,side:esd.toUpperCase(),
+        filled:ex.filled!=null?String(ex.filled):'?',price:ex.price!=null?String(ex.price):'?',
+        mkt:(this.MARKETS.find(m=>m.id===ex.market)||market).name,
+        status:isCanc?'cancelled':(isPart?'partial':'filled'),
+        statusBg:isCanc?'rgba(220,38,38,.1)':(isPart?'rgba(245,158,11,.1)':'rgba(22,163,74,.1)'),
+        statusColor:isCanc?T.sell:(isPart?'#F59E0B':T.buy),
+      };
+    });
+
+    const allMemo=mempool.map(o=>({
+      _side:o.side,_type:o.type,_sealed:!!o.sealed,
+      badgeBg:o.sealed?'rgba(245,158,11,.12)':(o.type==='market'?'rgba(230,0,122,.12)':'rgba(74,222,128,.12)'),
+      badgeColor:o.sealed?'#F59E0B':(o.type==='market'?'#E6007A':'#4ADE80'),
+      badge:o.sealed?'🔒 SEALED':(o.type==='market'?'⚡ MKT':'◉ LIMIT'),
+      sideColor:this._sideStr(o.side)==='buy'?T.buy:T.sell,side:this._sideStr(o.side).toUpperCase(),
+      detail:o.sealed?'hidden':(o.type==='market'?String(o.qty):o.qty+' @ '+o.price),
+      who:o.who?String(o.who).slice(0,6)+'…':'',
+    }));
+    const filteredMempool=allMemo.filter(mo=>{if(explorerFilter==='all')return true;if(explorerFilter==='buy')return mo._side==='buy';if(explorerFilter==='sell')return mo._side==='sell';if(explorerFilter==='limit')return mo._type==='limit'&&!mo._sealed;if(explorerFilter==='market')return mo._type==='market';if(explorerFilter==='sealed')return mo._sealed;return true;});
+
+    const tm=(trades.metrics)||{};
+    const tradeRows=(trades.list||[]).map(t=>({color:t.dir==='up'?T.buy:t.dir==='down'?T.sell:T.mono,arrow:t.dir==='up'?'▲':t.dir==='down'?'▼':'·',price:String(t.price),volume:String(t.volume),ago:this._ago(t.ts)}));
+
+    const pChart=this._spark(priceHist,600,80);
+
+    let tifNote='GTC auto-expires once fee stops covering JAMKB rent.';
+    if(orderLife)tifNote='GTC max: ~'+this._fmtDur(orderLife.public_secs)+' public · '+this._fmtDur(orderLife.sealed_secs)+' sealed'+(orderLife.max_open?'; max '+orderLife.max_open+' open/market':'');
+
+    const NB=on=>`padding:7px 13px;border-radius:10px;font-size:14px;font-weight:500;border:none;cursor:pointer;${on?`background:${T.rowBg};color:${T.text};border:1px solid ${T.rowBorder};`:`background:transparent;color:${T.dim};`}`;
+    const SEG=on=>`padding:5px 12px;border-radius:8px;font-size:12px;border:none;cursor:pointer;${on?`background:${T.rowBg};color:${T.text};font-weight:600;border:1px solid ${T.rowBorder};`:`background:transparent;color:${T.dim};`}`;
+
+    const FILTERS=[{v:'all',l:'All'},{v:'buy',l:'Buy'},{v:'sell',l:'Sell'},{v:'limit',l:'Limit'},{v:'market',l:'Market'},{v:'sealed',l:'Sealed'}];
+    const mempoolFilters=FILTERS.map(f=>({label:f.l,onClick:()=>this.setState({explorerFilter:f.v}),style:`padding:4px 10px;border-radius:7px;font-size:11px;cursor:pointer;${f.v===explorerFilter?'background:rgba(230,0,122,.12);color:#E6007A;border:1px solid rgba(230,0,122,.28);font-weight:600;':`background:${T.rowBg};color:${T.dim};border:1px solid ${T.rowBorder};`}`}));
+
+    return {
+      T,
+      // tabs
+      isTradeTab:tab==='trade',isExplorerTab:tab==='explorer',isFaucetTab:tab==='faucet',
+      onTradeTab:()=>this.setState({tab:'trade'}),onExplorerTab:()=>this.setState({tab:'explorer'}),onFaucetTab:()=>this.setState({tab:'faucet'}),
+      navTradeStyle:NB(tab==='trade'),navExplStyle:NB(tab==='explorer'),navFaucetStyle:NB(tab==='faucet'),
+      // theme (single: slate/obsidian, just dark/light toggle)
+      themePills:[],
+      onModeToggle:()=>this.toggleMode(),
+      modeIcon:darkMode?'☀':'🌙',
+      modeToggleStyle:`padding:7px 11px;border-radius:10px;font-size:15px;border:none;cursor:pointer;background:${T.rowBg};border:1px solid ${T.rowBorder};color:${T.sub};`,
+      // identity
+      devSel,onDevChange:e=>this.switchIdentity(e.target.value),
+      connected,isNotConnected:!connected,
+      walletLabel:connected?(wallet.selected.name||this._short(wallet.selected.address)):'Create account',
+      walletAddr:connected?this._short(wallet.selected.address):'',
+      acctHandle:handle!=null?('#'+handle):'—',
+      pubkeyDisplay:wallet?'0x'+this._hexRaw(wallet.pub).slice(0,24)+'…':'—',
+      onCopyPubkey:()=>{if(wallet){navigator.clipboard&&navigator.clipboard.writeText('0x'+this._hexRaw(wallet.pub));this.toast('Public key copied.','ok');}},
+      onConnect:()=>this.connectAccount(),onExport:()=>this.exportAccount(),onImport:()=>this.importAccount(),
+      walletBtnStyle:`padding:8px 17px;border-radius:12px;font-size:13px;font-weight:600;cursor:pointer;${connected?`background:${T.rowBg};color:${T.text};border:1px solid ${T.centerCardBorder};`:'background:#E6007A;color:#fff;border:none;'}`,
+      // market dropdown
+      marketDropdownOpen:this.state.marketDropdownOpen,
+      marketSearch:this.state.marketSearch,
+      onMarketDropdownToggle:()=>this.setState(s=>({marketDropdownOpen:!s.marketDropdownOpen,marketSearch:''})),
+      onMarketDropdownClose:()=>this.setState({marketDropdownOpen:false,marketSearch:''}),
+      onMarketSearch:e=>this.setState({marketSearch:e.target.value}),
+      filteredTokenPairs:(()=>{
+        const q=(this.state.marketSearch||'').toLowerCase();
+        const liveByName={'DOT/USDC':this.MARKETS[0],'JAMKB/USDC':this.MARKETS[1],'JAMKB/DOT':this.MARKETS[2]};
+        const pairs=this.TOP_TOKENS.map(t=>({sym:t.sym,tokenName:t.name,display:t.sym+'/USDC',isLive:!!(liveByName[t.sym+'/USDC']),market:liveByName[t.sym+'/USDC']||null}));
+        pairs.push({sym:'JAMKB',tokenName:'JAMswap KB / DOT',display:'JAMKB/DOT',isLive:true,market:this.MARKETS[2]});
+        const filtered=q?pairs.filter(p=>p.display.toLowerCase().includes(q)||p.tokenName.toLowerCase().includes(q)):pairs;
+        return filtered.slice(0,80).map(p=>({
+          display:p.display, tokenName:p.tokenName,
+          badgeBg:p.isLive?'rgba(74,222,128,.1)':T.rowBg,
+          badgeColor:p.isLive?'#4ADE80':T.faint,
+          badgeLabel:p.isLive?'LIVE':'soon',
+          rowStyle:`display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;border-bottom:1px solid ${T.tapeRow};`,
+          onClick:p.isLive&&p.market
+            ?()=>{this.switchMarket(p.market);this.setState({marketDropdownOpen:false,marketSearch:''});}
+            :()=>this.toast('🚧 '+p.display+' coming soon — only DOT/USDC, JAMKB/USDC and JAMKB/DOT are live on lasair','info',3500),
+        }));
+      })(),
+      marketName:market.name,
+      // book
+      processedAsks,processedBids,
+      hasAsks:processedAsks.length>0,hasNoAsks:processedAsks.length===0,
+      hasBids:processedBids.length>0,hasNoBids:processedBids.length===0,
+      lastPrice:lastPrice!=null?String(lastPrice):'—',displayVolume:volume,
+      spread:(loAsk!=null&&hiBid!=null)?String(loAsk-hiBid):'—',
+      // trades
+      tradeLast:tm.last!=null?String(tm.last):'—',tradeVol:tm.volume!=null?String(tm.volume):'—',
+      tradeHigh:tm.high!=null?String(tm.high):'—',tradeLow:tm.low!=null?String(tm.low):'—',
+      tradeRows,hasTrades:tradeRows.length>0,hasNoTrades:tradeRows.length===0,
+      priceSparkPts:pChart.pts,priceSparkArea:pChart.area,
+      // mempool
+      filteredMempool,hasFilteredMempool:filteredMempool.length>0,hasNoFilteredMempool:filteredMempool.length===0,
+      mempoolCount:mempool.length,mempoolFilters,hasSealedOnchain:sealedOnchain>0,sealedOnchain,
+      // executions
+      execList,hasExecs:execList.length>0,hasNoExecs:execList.length===0,execCount:execList.length,
+      // orders
+      orderList,hasOrders:orderList.length>0,hasNoOrders:orderList.length===0,orderCount:String(orderList.length),
+      // trade card
+      isLimit:otype==='limit',
+      onBuy:()=>this.setState({side:'buy'}),onSell:()=>this.setState({side:'sell'}),
+      onLimit:()=>this.setState({otype:'limit'}),onMarket:()=>this.setState({otype:'market'}),
+      priceVal,qtyVal,
+      onPriceChange:e=>this.setState({priceVal:e.target.value}),
+      onQtyChange:e=>this.setState({qtyVal:e.target.value}),
+      tif,onTifChange:e=>this.setState({tif:e.target.value}),tifNote,
+      sealed,onSealToggle:()=>this.setState(s=>({sealed:!s.sealed})),
+      sealTrackBg:sealed?'#E6007A':T.rowBorder,sealKnobLeft:sealed?'19px':'3px',
+      baseLabel,quoteLabel,
+      baseChipBg:this.DOT_BG[market.base]||T.rowBg,baseChipColor:this.DOT_COLORS[market.base]||T.text,
+      quoteChipBg:this.DOT_BG[market.quote]||T.rowBg,quoteChipColor:this.DOT_COLORS[market.quote]||T.text,
+      sideLabel:side==='buy'?'You buy':'You sell',
+      quoteSummary:otype==='market'?'Market order · takes the uniform clearing price':(qty>0&&price>0?(side==='buy'?'You pay ~'+(qty*price).toFixed(2)+' '+quoteLabel:'You receive ~'+(qty*price*0.997).toFixed(2)+' '+quoteLabel):'Enter quantity and price to see total'),
+      buyBtnStyle:`flex:1;padding:11px;border-radius:13px;font-size:14px;font-weight:600;cursor:pointer;${side==='buy'?`background:${T.buyBg};color:${T.buy};border:1px solid ${T.buyBorder};`:`background:${T.rowBg};color:${T.dim};border:1px solid ${T.rowBorder};`}`,
+      sellBtnStyle:`flex:1;padding:11px;border-radius:13px;font-size:14px;font-weight:600;cursor:pointer;${side==='sell'?`background:${T.sellBg};color:${T.sell};border:1px solid ${T.sellBorder};`:`background:${T.rowBg};color:${T.dim};border:1px solid ${T.rowBorder};`}`,
+      limitBtnStyle:SEG(otype==='limit'),marketBtnStyle:SEG(otype==='market'),
+      ctaLabel:connected?(side==='buy'?'Buy '+baseLabel:'Sell '+baseLabel):'Create account to trade',
+      ctaStyle:`width:100%;padding:15px;border-radius:15px;font-size:16px;font-weight:700;cursor:pointer;letter-spacing:.01em;font-family:inherit;${connected?(side==='buy'?`background:${T.buyBg};color:${T.buy};border:1.5px solid ${T.buyBorder};`:`background:${T.sellBg};color:${T.sell};border:1.5px solid ${T.sellBorder};`):'background:#E6007A;color:#fff;border:none;'}`,
+      onPlace:()=>this.placeOrder(),
+      balList,
+      // faucet
+      fAmt,onFAmtChange:e=>this.setState({fAmt:e.target.value}),
+      onDeposit:()=>this.faucetDeposit(),onWithdraw:()=>this.faucetWithdraw(),
+      faucetAssets:[{v:'0',label:'USDC'},{v:'1',label:'DOT'},{v:'2',label:'JAMKB'}].map(a=>({...a,onClick:()=>this.setState({fAsset:a.v}),style:`flex:1;padding:8px 13px;border-radius:10px;font-size:13px;cursor:pointer;${a.v===fAsset?'background:#E6007A;color:#fff;border:none;font-weight:700;':`background:${T.rowBg};color:${T.dim};border:1px solid ${T.rowBorder};font-weight:500;`}`})),
+      depositBtnStyle:`flex:1;padding:13px;border:none;border-radius:13px;font-size:14px;font-weight:700;font-family:inherit;background:#E6007A;color:#fff;cursor:pointer;`,
+      withdrawBtnStyle:`flex:1;padding:13px;border-radius:13px;font-size:14px;font-weight:600;border:1px solid ${T.centerCardBorder};font-family:inherit;background:${T.rowBg};color:${T.sub};cursor:pointer;`,
+      toasts,
+    };
   }
-  const color = d => d==="up" ? "#4ADE80" : d==="down" ? "#F87171" : "rgba(240,240,255,.6)";
-  const arrow = d => d==="up" ? "▲" : d==="down" ? "▼" : "·";
-  el.innerHTML = rows.map(t =>
-    '<div style="display:flex;align-items:center;font-size:11px;padding:4px 2px;border-bottom:1px solid rgba(255,255,255,.03);">'
-    + '<span class="mono" style="color:'+color(t.dir)+';min-width:64px;">'+arrow(t.dir)+' '+t.price+'</span>'
-    + '<span class="mono" style="flex:1;text-align:right;padding-right:14px;color:rgba(240,240,255,.55);">'+t.volume+'</span>'
-    + '<span style="color:rgba(240,240,255,.28);min-width:56px;text-align:right;">'+agoLabel(t.ts)+'</span></div>'
-  ).join("");
 }
-
-// ═══════════════════ boot ═══════════════════
-$("nav-trade").onclick  = () => { state.tab="trade"; renderTabs(); };
-$("nav-faucet").onclick = () => { state.tab="faucet"; renderTabs(); };
-$("connect").onclick    = connectAccount;
-$("acct-export").onclick = exportAccount;
-$("acct-import").onclick = importAccount;
-$("acct-pubkey").onclick = () => { if (state.wallet){ (navigator.clipboard && navigator.clipboard.writeText("0x"+hexRaw(state.wallet.pub))); toast("Public key copied.", "ok"); } };
-$("sbuy").onclick   = () => { state.side="buy";  renderSide(); };
-$("ssell").onclick  = () => { state.side="sell"; renderSide(); };
-$("tlimit").onclick = () => { state.otype="limit";  renderType(); };
-$("tmarket").onclick= () => { state.otype="market"; renderType(); };
-$("seal-toggle").onclick = () => { state.sealed = !state.sealed; renderSeal(); };
-$("tif").onchange = (e) => { state.tif = e.target.value; };
-$("place").onclick  = placeOrder;
-$("mem-toggle").onclick = () => { state.mempoolOpen = !state.mempoolOpen; renderMempool(); };
-$("deposit").onclick  = () => faucet("deposit");
-$("withdraw").onclick = () => faucet("withdraw");
-$("tr-topup-btn").onclick = reserveTopup;
-$("qty-in").oninput   = renderSummaryFee;
-$("price-in").oninput = renderSummaryFee;
-
-// initial paint
-renderTabs(); renderWallet(); renderMarketTabs(); renderMarketDeps();
-renderSide(); renderType(); renderSeal(); renderBook(); renderMempool(); renderTrades();
-renderBals(); renderMine(); renderFp(); renderFaucetTabs();
-initIdentity();   // populate the dev-account dropdown + restore the last-selected identity
-
-// live feeds
-subscribe(); refresh(); refreshFp(); refreshTrades(); refreshExecs();
-setInterval(() => { refreshBals(); refreshMine(); refreshExecs(); }, 6000);
-setInterval(refreshFp, 2000);
-setInterval(refreshTrades, 3000);
-if (localStorage.getItem("jamswap_sk_default")) setTimeout(connectAccount, 300);  // auto-load a saved account
 </script>
 </body>
 </html>
