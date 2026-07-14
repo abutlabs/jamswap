@@ -7,10 +7,10 @@
 #   docker compose -p lasair6 \
 #     -f docker-compose.lasair6.yml -f docker-compose.lasair6-monitor.yml \
 #     up -d prometheus grafana
-#   # Grafana: http://localhost:3000  (anonymous admin, no login)
+#   # Grafana: http://localhost:3010  (anonymous admin, no login)
 #   # Prometheus: http://localhost:9090
 #
-# Host ports are the standard 3000/9090 — this is the primary DEX dashboard. If the
+# Host ports are 3010/9090 — this is the primary DEX dashboard. If the
 # MIXED net's monitor (project jamswap) is also running it will collide on these
 # ports; stop its grafana/prometheus first (the mixed net cannot settle trades, so
 # its accounts dashboard is misleading — this all-lasair net is the real one).
@@ -39,7 +39,7 @@ services:
     volumes:
       - ./monitor/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitor/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    ports: ["3000:3000"]
+    ports: ["3010:3000"]
     depends_on: [prometheus]
     networks: { lasnet: {} }
     restart: unless-stopped

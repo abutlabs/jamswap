@@ -312,7 +312,7 @@ only then tag `client-vX.Y.Z` and let CI publish.
 ### Monitoring the mixed network
 
 ```sh
-make monitor        # mixed net + Prometheus + Grafana; dashboards on :3000, no login
+make monitor        # mixed net + Prometheus + Grafana; dashboards on :3010, no login
 make monitor-down
 ```
 

@@ -3,7 +3,7 @@
 # PolkaJam's bestBlock RPC) into metrics. Always used WITH the mixed compose file:
 #
 #   docker compose -f docker-compose.mixed.yml -f docker-compose.monitor.yml up -d --build
-#   # or: make monitor            ->  Grafana on http://localhost:3000 (no login)
+#   # or: make monitor            ->  Grafana on http://localhost:3010 (no login)
 #
 # The exporter mounts the Docker socket READ-ONLY to tail container logs — local
 # dev tooling only; don't ship this overlay anywhere multi-tenant.
@@ -58,7 +58,7 @@ services:
     volumes:
       - ./monitor/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./monitor/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    ports: ["3000:3000"]
+    ports: ["3010:3000"]
     depends_on: [prometheus]
     networks: { mixnet: {} }
     restart: unless-stopped

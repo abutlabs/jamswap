@@ -172,7 +172,7 @@ docker compose -p lasair6 \
 #   Prometheus: http://localhost:9091
 ```
 
-Ports are **3001 / 9091** so this coexists with the mixed net's monitor (3000 / 9090) if
+Ports are **3001 / 9091** so this coexists with the mixed net's monitor (3010 / 9090) if
 that is also up. Confirm the feed is live (verified output shown):
 
 ```sh
