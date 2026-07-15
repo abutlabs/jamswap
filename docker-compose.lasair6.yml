@@ -41,7 +41,13 @@ x-mesh-env: &mesh-env
   SERVICE_ID: "100"
   GUARANTOR_OWN: "0,1,2,3,4,5"
   INTERVAL: "1"
-  WALL: "1"
+  # CHAIN-PACED, not wall-clock. --wall (WALL=1) exists to co-pace with PolkaJam on the
+  # MIXED net; here there is no PolkaJam. The shared genesis is minted at slot 0, but the
+  # real JAM wall slot is ~8.05M, so every wall-paced validator saw head(0) lagging wall by
+  # 8M slots, declared itself out of sync, and back-filled forever instead of authoring —
+  # the chain never left genesis and nothing settled. Chain-paced authoring free-runs from
+  # genesis slot 0 (author head+1 every INTERVAL), so a fresh all-lasair net advances at once.
+  WALL: "0"
 
 services:
   # mint the all-lasair shared genesis (runs once, then exits 0). Reuses the mixed
