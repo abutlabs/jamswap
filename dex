@@ -1,0 +1,70 @@
+#!/usr/bin/env bash
+# jamswap DEX control — ONE script, clear verbs. Hides the compose sprawl.
+#
+# The DEX runs on the ALL-LASAIR finality net (six lasair validators, β-finality) —
+# the ONLY net where sealed orders settle durably (see docs/NETS.md for why, and for
+# what every other docker-compose.*.yml is). You almost never need anything else.
+#
+#   ./dex rebuild     # rebuild the on-chain service blob from source (service/*.jam)
+#   ./dex up          # start the net (no auto-load), wait for finality, print the URL
+#   ./dex load        # start the load generator (for soak tests)
+#   ./dex noload      # stop the load generator (so you trade manually)
+#   ./dex status      # finality + market state at a glance
+#   ./dex logs [svc]  # follow logs (default: dex)
+#   ./dex down        # tear down + wipe the chain (fresh genesis next up)
+#
+set -euo pipefail
+cd "$(dirname "$0")"
+
+COMPOSE=(docker compose -p lasair6 -f docker-compose.lasair6.yml)
+URL=http://localhost:8081
+
+_finality() { curl -s --max-time 5 "$URL/api/finality" 2>/dev/null; }
+_available() { _finality | python3 -c "import sys,json;print(json.load(sys.stdin).get('available',False))" 2>/dev/null || echo False; }
+
+cmd=${1:-help}
+case "$cmd" in
+  rebuild)
+    # rebuild the JAM service PVM blob (the on-chain matching/settlement code) from
+    # source. Needs the jam-pvm-build toolchain on the host (cargo install jam-pvm-build).
+    command -v jam-pvm-build >/dev/null || { echo "jam-pvm-build not on PATH — 'cargo install jam-pvm-build'"; exit 1; }
+    echo "building service/jamswap-service.jam …"
+    ( cd service && jam-pvm-build )
+    echo "✓ rebuilt service/jamswap-service.jam ($(wc -c < service/jamswap-service.jam) bytes)"
+    echo "  (the DEX code — offchain/ — is bind-mounted, so it needs no rebuild; just ./dex up)"
+    ;;
+
+  up)
+    "${COMPOSE[@]}" up -d
+    "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true   # manual trading by default
+    echo "net starting — warming up (Safrole tickets + finality bootstrap, ~5 min)…"
+    for i in $(seq 1 60); do
+      [ "$(_available)" = "True" ] && { echo "✓ finality live"; break; }
+      sleep 10
+      printf '.'
+    done
+    echo
+    echo "✓ DEX ready → $URL   (loadgen is OFF; './dex load' to drive it, './dex status' to watch)"
+    ;;
+
+  load)   "${COMPOSE[@]}" start loadgen; echo "✓ loadgen ON (PROFILE from compose; sealed crossing pairs)";;
+  noload) "${COMPOSE[@]}" stop loadgen;  echo "✓ loadgen OFF — trade manually at $URL";;
+
+  down)
+    "${COMPOSE[@]}" down -v --remove-orphans
+    echo "✓ net down, chain wiped (next ./dex up mints a fresh genesis)"
+    ;;
+
+  logs)   "${COMPOSE[@]}" logs -f "${2:-dex}";;
+
+  status)
+    echo "finality: $(_finality)"
+    curl -s --max-time 5 "$URL/api/state?market=1" \
+      | python3 -c "import sys,json;d=json.load(sys.stdin);print('market  :',{k:d.get(k) for k in ('price','volume','pending','sealed_onchain','in_auction')})" 2>/dev/null \
+      || echo "market  : (dex not up yet)"
+    ;;
+
+  help|*)
+    awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"
+    ;;
+esac
