@@ -48,6 +48,10 @@ x-mesh-env: &mesh-env
   # the chain never left genesis and nothing settled. Chain-paced authoring free-runs from
   # genesis slot 0 (author head+1 every INTERVAL), so a fresh all-lasair net advances at once.
   WALL: "0"
+  # Finality gadget: "ce192" = the proven lasair-native single-round gadget (default);
+  # "grandpa" = the jam-np PR #6 draft-spec multi-round gadget (Phase 5b — local GAP
+  # decisions documented in lasair/docs/GRANDPA_GAPS.md).
+  LASAIR_FINALITY: "${LASAIR_FINALITY:-ce192}"
 
 services:
   # mint the all-lasair shared genesis (runs once, then exits 0). Reuses the mixed
