@@ -82,9 +82,16 @@ Two honest paths (from `lasair/docs/FINALITY_PLAN.md`, Phase 3b):
 
 1. **A shared finality stream in the spec.** If JAM standardizes a β-commit message format
    + a CE stream number, every client implements the *same* wire protocol and votes count
-   cross-client — then a real 3:3 mixed net finalizes. This is the proper fix, and it's
-   **blocked on JAM specifying it** (reverse-engineering PolkaJam's private stream would
-   break the clean-room rule).
+   cross-client — then a real 3:3 mixed net finalizes. **UPDATE 2026-07-15: a public draft
+   of exactly this exists** — [`zdave-parity/jam-np` PR #6 "Grandpa protocols"](https://github.com/zdave-parity/jam-np/pull/6)
+   (opened 2025-05, actively revised through 2025-12, reviewed by the spec owner, unmerged).
+   It defines CE 130 (justification request), CE 149 (vote), CE 150 (commit), CE 151
+   (state), CE 152 (catch-up), CE 153 (warp sync), full multi-round GRANDPA types
+   (Set Id, Round Number, Target = header hash ‖ posterior state root), and the signing
+   domain `"jam_grandpa_vote"` — **the exact string observed in PolkaJam's binary**, so
+   pj's "private" finality protocol is in fact this draft. Implementing a *published
+   draft spec* is clean-room-safe (it's a public document, not their binary); the risk is
+   only that an unmerged draft can still change (CE numbers were renumbered 2025-11).
 
 2. **Agree on the *result*, not the votes** (what lasair built, and what's shippable today).
    Each client runs its own gadget internally, and they reconcile via the **one spec field
@@ -98,5 +105,9 @@ Two honest paths (from `lasair/docs/FINALITY_PLAN.md`, Phase 3b):
 
 The bottom line: cross-client finality *parity* doesn't require identical vote messages; it
 requires (a) each client reaching its own supermajority and (b) a spec-standard way to
-advertise + cross-check the finalized head. (2) works now; (1) is the long-term convergence
-once JAM specs a shared stream.
+advertise + cross-check the finalized head. (2) works now; (1) is no longer hypothetical —
+the jam-np PR #6 draft is implementable today, PolkaJam already speaks it, and a lasair
+implementation would give a 3:3 mixed net six voters in ONE gadget (5-of-6 quorum → true
+shared finality). Corroborating community signal (Let's JAM room, 2026-05): the spec author
+confirms no network protocol is specified yet for BEEFY (post-finality proof aggregation)
+and expects finality protocols "defined by the time M2 testing happens."
