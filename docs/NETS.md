@@ -49,19 +49,32 @@ needs a **≥2/3+1 supermajority** of validators to agree.
 - On the **all-lasair net**, all six speak lasair's finality gadget → 5-of-6 quorum →
   finalizes. That's why the DEX lives here.
 
-### Is PolkaJam "not following the spec"? No — there is no finality spec yet.
+### Is PolkaJam "not following the spec"? No — the finality *wire protocol* is unspecified.
 
-Correction to something I said earlier: **JAMNP-S (the JAM network protocol) specifies no
-finality stream at all** (it covers block announcement, state, tickets, work-packages —
-CE-128..148 — but nothing for finality votes). Both clients added their *own* private
-finality extension:
+Precision matters here (checked against the primary sources 2026-07-15). Finality IS
+partially specified:
+
+- **The Graypaper** (§"Grandpa and the Best Chain") says nodes "take part in the GRANDPA
+  protocol as defined by [the GRANDPA paper]", names the vote data — the best block's
+  header **plus its posterior state root** — and requires a block be audited before
+  voting to finalize it.
+- **JAMNP-S** gives every node a spec way to *announce* its result: the UP-0 handshake
+  `final` field (finalized header hash + slot). That field is what our bridge reconciles.
+
+What is **missing is the wire layer for the votes themselves** — JAMNP-S defines streams
+CE-128..148 + UP-0 (blocks, state, tickets, work-packages, shards, judgments) and **no
+stream for finality votes or justifications**. Concretely unspecified: the CE stream
+number, the vote message encoding, the exact signed byte layout (incl. domain separation),
+and round/voter-set/justification machinery. So both clients filled that gap with their
+*own* private extension:
 
 - **PolkaJam**: the Parity `finality_grandpa` crate — multi-round, set-ids, commit certs,
   over a private `SEND FIN`/`RECV FIN` stream.
 - **lasair**: a single-round, state-root-bound commit over a private CE-192 stream.
 
-Neither is non-conformant — there's nothing to conform to. They're just **different private
-protocols**, so their votes don't count toward each other's quorum.
+Neither is non-conformant — both plausibly "take part in GRANDPA" per the Graypaper; there
+is just no shared ballot format to conform to. They're **different private protocols**, so
+their votes can't count toward each other's quorum.
 
 ### So how do you get finality parity across clients in different languages?
 
