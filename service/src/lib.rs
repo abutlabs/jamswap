@@ -50,6 +50,15 @@ const TAG_CARRY_COMMIT: u8 = 13; // [tag][market][account][commitment(32)] — a
 const TAG_CARRY_ENC_COMMIT: u8 = 14; // [tag][market][C1][body][account] — allowance-gated re-seal
 // commit/enc set entries are hash(32) ‖ account(4): consumption must match BOTH.
 const SET_ENTRY_LEN: usize = 36;
+// Commit time-to-live. A sealed commitment that is never revealed (the trader lost the
+// nonce or went offline) would otherwise sit in b"commits" forever — state growing without
+// bound. Each commitment is mirrored in a parallel age index (b"cage"‖market) carrying its
+// expiry slot; a GC sweep on every new commit reaps entries whose expiry has passed, removing
+// them from BOTH the index and b"commits". The TTL rides ALONGSIDE b"commits" (not inside it)
+// because that set's 36-byte layout is matched byte-exact by consume_set and the off-chain
+// reveal gate. ~6 h at 6 s/slot — comfortably longer than any real good-till-time.
+const COMMIT_TTL_SLOTS: u32 = 3600;
+const CAGE_ENTRY_LEN: usize = SET_ENTRY_LEN + 4; // cid(32) ‖ account(4) ‖ expiry_slot(4)
 
 // Governance key authorised to sweep the fee treasury AND commit the encrypt-until-batch
 // committee. Derived from the documented demo seed b"jamswap:demo:governance:key:v1!!"
@@ -512,6 +521,51 @@ fn consume_set(key: &[u8], consumed: &[u8]) -> bool {
     true
 }
 
+// --- Commit time-to-live (b"cage"‖market) ------------------------------------------------
+// A parallel index to b"commits": one 40-byte entry per live commitment, cid(32) ‖ account(4)
+// ‖ expiry_slot(4). b"commits" itself has no room for the slot (its 36-byte entry is matched
+// byte-exact by consume_set + the off-chain gate), so the TTL lives here and is kept in step:
+// added when a commit is, purged when one is consumed, and swept when one expires.
+fn cage_key(market: u32) -> Vec<u8> {
+    mkey(b"cage", market)
+}
+// index a commitment with expiry = now + TTL.
+fn cage_add(market: u32, cid: &[u8], account: u32, slot: u32) {
+    let key = cage_key(market);
+    let mut cage = get_storage(&key).unwrap_or_default();
+    cage.extend_from_slice(cid); // 32
+    cage.extend_from_slice(&account.to_le_bytes()); // 4
+    cage.extend_from_slice(&slot.saturating_add(COMMIT_TTL_SLOTS).to_le_bytes()); // 4
+    set_storage(&key, &cage).ok();
+}
+// remove consumed (cid‖account, 36B each) entries from the age index, keeping it in step with
+// consume_set on b"commits" (setops::remove_first_match is pure + unit-tested in crates/setops).
+fn cage_purge(market: u32, consumed: &[u8]) {
+    let key = cage_key(market);
+    let cage = get_storage(&key).unwrap_or_default();
+    let out = setops::remove_first_match(&cage, consumed, CAGE_ENTRY_LEN, SET_ENTRY_LEN);
+    set_storage(&key, &out).ok();
+}
+// Reap expired commitments: drop age-index entries whose expiry slot has passed AND remove the
+// same (cid‖account) from b"commits". Called where commits are ADDED, so each market bounds its
+// own commit-set growth. Returns the number reaped. An abandoned commit (never revealed) is the
+// only thing this removes — a live order reveals long before its far-future TTL. The pure
+// reap/remove logic lives in crates/setops (host-tested); this wires it to storage.
+fn gc_commits(market: u32, slot: u32) -> usize {
+    let ckey = cage_key(market);
+    let (kept, reaped) =
+        setops::reap_expired(&get_storage(&ckey).unwrap_or_default(), slot, CAGE_ENTRY_LEN, SET_ENTRY_LEN);
+    if reaped.is_empty() {
+        return 0;
+    }
+    set_storage(&ckey, &kept).ok();
+    let bkey = mkey(b"commits", market);
+    let commits = get_storage(&bkey).unwrap_or_default();
+    let out = setops::remove_first_match(&commits, &reaped, SET_ENTRY_LEN, SET_ENTRY_LEN);
+    set_storage(&bkey, &out).ok();
+    reaped.len() / SET_ENTRY_LEN
+}
+
 // Carry-forward allowance (b"cw"‖market‖account → u32): a sealed order that PARTIALLY fills
 // mints one credit for its account (refine reports it; consumption above proves the account
 // really had a sealed order in the round), and the builder spends one credit to post the
@@ -755,7 +809,7 @@ impl Service for Jamswap {
         }
     }
 
-    fn accumulate(_slot: Slot, _service_id: ServiceId, _item_count: usize) -> Option<Hash> {
+    fn accumulate(slot: Slot, _service_id: ServiceId, _item_count: usize) -> Option<Hash> {
         for item in accumulate_items() {
             let rec = match item {
                 AccumulateItem::WorkItem(r) => r,
@@ -818,11 +872,13 @@ impl Service for Jamswap {
                         continue; // forged, replayed, or not the account owner
                     }
                     set_seq_floor(account, seq);
+                    gc_commits(market, slot); // reap this market's expired commits first
                     let key = mkey(b"commits", market);
                     let mut commits = get_storage(&key).unwrap_or_default();
                     commits.extend_from_slice(&cid);
                     commits.extend_from_slice(&account.to_le_bytes());
                     set_storage(&key, &commits).ok();
+                    cage_add(market, &cid, account, slot); // index it for TTL
                 }
                 // builder-posted re-seal of a partially-filled sealed order's remainder:
                 // [tag][market(4)][account(4)][commitment(32)] — ALLOWANCE-GATED: spends one
@@ -836,11 +892,13 @@ impl Service for Jamswap {
                         continue;
                     }
                     set_carry_allowance(market, account, cw - 1);
+                    gc_commits(market, slot); // reap expired commits before re-seal grows the set
                     let key = mkey(b"commits", market);
                     let mut commits = get_storage(&key).unwrap_or_default();
                     commits.extend_from_slice(&out[9..41]);
                     commits.extend_from_slice(&account.to_le_bytes());
                     set_storage(&key, &commits).ok();
+                    cage_add(market, &out[9..41], account, slot); // index it for TTL
                 }
                 // signed cancel: [tag][handle(4)][market(4)][order_id(4)][nonce(8)][sig(64)]
                 // — only the account that owns the resting order can remove it.
@@ -958,6 +1016,7 @@ impl Service for Jamswap {
                     if !consume_set(&mkey(b"commits", market), consumed) {
                         continue;
                     }
+                    cage_purge(market, consumed); // keep the age index in step with the commit set
                     commit_seq_floors(&floors);
                     // mint carry credits: one per genuinely partially-filled sealed order, so
                     // the builder can re-seal each remainder (TAG_CARRY_COMMIT) for its owner.
@@ -1135,3 +1194,4 @@ impl Service for Jamswap {
         None
     }
 }
+

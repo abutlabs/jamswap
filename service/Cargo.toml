@@ -10,6 +10,7 @@ jam-pvm-common = { version = "0.1.26", default-features = false, features = ["se
 polkavm-derive = "0.29"
 match-engine = { path = "../crates/match-engine" }
 vdec = { path = "../crates/vdec" }
+setops = { path = "../crates/setops" }
 blake2 = { version = "0.10", default-features = false }
 
 [profile.release]

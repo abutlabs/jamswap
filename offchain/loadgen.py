@@ -13,6 +13,9 @@ Profiles (PROFILE):
   trading       random crossing buy/sell pairs between random dev accounts around
                 the last price; SEALED_RATIO of orders go through the sealed
                 commit->reveal path (default 0.2)
+  sealed        BOTH sides sealed and crossing — the hardest path (a hidden buy must
+                meet a hidden sell). Mix of same-tick pairs and lone orders that rest
+                hidden and cross across later auctions. Drives the zero-loss soak.
   faucet-storm  register+deposit hammering with FRESH accounts (the incident
                 scenario; needs no genesis accounts)
   steady        deposits/withdraws only — settlement pipeline without matching
@@ -129,6 +132,30 @@ def tick_trading(handles):
         op("sell", lambda: place_public(KEYS[seller], handles[seller], 1, qty, px_sell))
     op("buy", lambda: place_public(KEYS[buyer], handles[buyer], 0, qty, px_buy))
 
+def tick_sealed(handles):
+    # BOTH sides sealed and crossing — the hardest path (the "hidden buy must meet a hidden
+    # sell" case that used to leak+drop). Mostly same-tick crossing pairs; sometimes a lone
+    # sealed order that must rest hidden and meet an opposite sealed order across LATER
+    # auctions, exercising the commit-gate / carry-forward / reveal-coincidence machinery.
+    lp = 0.0
+    try:
+        lp = float(req("/api/state?market=%d" % MARKET).get("price") or 0)
+    except Exception:
+        pass
+    mid = lp if lp > 0 else 1.0
+    qty = random.randint(1, 20)
+    a, b = random.sample(range(len(KEYS)), 2)
+    px_sell = round(mid * random.uniform(0.97, 1.0), 4)
+    px_buy = round(mid * random.uniform(1.0, 1.03), 4)      # crosses px_sell
+    r = random.random()
+    if r < 0.6:                                              # crossing pair, both sealed, same tick
+        op("sealed_sell", lambda: place_sealed(KEYS[a], handles[a], 1, qty, px_sell))
+        op("sealed_buy", lambda: place_sealed(KEYS[b], handles[b], 0, qty, px_buy))
+    elif r < 0.8:                                            # lone sealed sell — a later buy meets it
+        op("sealed_sell", lambda: place_sealed(KEYS[a], handles[a], 1, qty, px_sell))
+    else:                                                    # lone sealed buy
+        op("sealed_buy", lambda: place_sealed(KEYS[b], handles[b], 0, qty, px_buy))
+
 def tick_steady(handles):
     h = random.choice(handles)
     op("deposit", lambda: req("/api/deposit", {"account": h, "asset": QUOTE,
@@ -157,7 +184,7 @@ def run():
     print("loadgen: dev-account handles:", handles)
     if PROFILE == "trading" and any(h is None for h in handles):
         print("loadgen: some dev accounts unregistered — is GENESIS_BALANCE seeding on?")
-    tick = {"trading": tick_trading, "steady": tick_steady,
+    tick = {"trading": tick_trading, "sealed": tick_sealed, "steady": tick_steady,
             "faucet-storm": tick_faucet_storm}.get(PROFILE, tick_trading)
     interval = 60.0 / max(RATE, 0.01)
     print("loadgen: profile=%s rate=%.1f ops/min (every %.1fs) -> %s" %

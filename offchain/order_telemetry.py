@@ -36,11 +36,13 @@ import metrics
 
 ORDER_EVENTS_FILE = os.environ.get("ORDER_EVENTS_FILE", "/tmp/jamswap_order_events.jsonl")
 
-# outcomes that END an order's life (it will not transition again)
-TERMINAL = {"filled", "partial-carried", "partial-cancelled", "rested",
+# outcomes that END an order's life (it will not transition again). A CARRIED remainder
+# is NOT here: re-sealing keeps the order working under the same oid, so it resolves to
+# exactly one terminal later (filled / expired). Only genuine end states appear.
+TERMINAL = {"filled", "partial-cancelled", "rested",
             "cancelled", "expired", "rejected", "lost"}
 # terminal outcomes that count as the order having CLEARED (made durable progress)
-CLEARED = {"filled", "partial-carried"}
+CLEARED = {"filled"}
 
 metrics.describe("jamswap_order_placed_total",
                  "orders accepted at the door, by whether they were marketable at placement")
@@ -127,6 +129,19 @@ def requeued(market, account, oid):
         _log(rec, "requeued", retries=rec["retries"])
 
 
+def deferred(market, account, oid, reason):
+    """Non-terminal: a sealed order is waiting for its commit to land on-chain before it
+    can reveal. Recorded (phase + JSONL) for observability so a soak can see WHY an order
+    is idle, but it stays live — it will reveal, carry, or expire in a later round."""
+    key = (int(market), int(account), int(oid))
+    with _lock:
+        rec = _orders.get(key)
+        if rec and rec["phase"] not in TERMINAL:
+            rec["phase"] = "deferred"
+    if rec:
+        _log(rec, "deferred", reason=reason)
+
+
 def terminal(market, account, oid, outcome, filled=0):
     """The order reached a terminal state. `outcome` in TERMINAL; `filled` is the
     durably-settled quantity (atomic). Updates the SLO for marketable orders."""
@@ -167,7 +182,7 @@ def snapshot():
         for rec in _orders.values():
             phases[rec["phase"]] = phases.get(rec["phase"], 0) + 1
         open_n = len(_orders)
-    for ph in ("placed", "rounded"):
+    for ph in ("placed", "rounded", "deferred"):
         metrics.set_gauge("jamswap_order_open", {"phase": ph}, phases.get(ph, 0))
     total = c + mi
     return {"cleared": c, "missed": mi, "open": open_n, "phases": phases,

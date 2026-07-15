@@ -25,6 +25,7 @@ class SealedCarry(unittest.TestCase):
         server.pending.clear(); server.order_expiry.clear(); server.executions.clear()
         server._round_gate.clear()      # gate/in-flight state must not leak between tests
         server._inflight.clear()
+        server._carry_retry.clear()
         server.JAMKB_BACKPRESSURE = False
         server.REQUIRE_ORDER_SIG = False
         server.ENC_MODE = False
@@ -132,6 +133,54 @@ class SealedCarry(unittest.TestCase):
         self.assertFalse(1 in server._inflight)
         del oid
 
+    def test_carry_retry_when_chain_busy_instead_of_dropping(self):
+        # R4: if the carry-commit can't be posted (all guarantor queues full), the
+        # remainder is NOT dropped — it's queued for retry and re-seals once the chain
+        # drains. The receipt reads partial-carried with a reason, never a silent cancel.
+        oid = self._place_sealed_buy(250, 1)
+        server.api_round({"market": 1, "base": 1, "quote": 0})
+        busy = {"on": True}
+        def submit_busy(payload, check=None, detail=""):
+            if payload[0] == server.TAG_CARRY_COMMIT and busy["on"]:
+                raise server.ChainBusy("CE-133 queues full")
+            self.sent.append(payload)
+        server.submit = submit_busy
+        self._settle(vol=10)
+        self.assertIn(1, server._carry_retry, "remainder queued for retry, not dropped")
+        self.assertEqual(len(server._carry_retry[1]), 1)
+        self.assertFalse([o for o in server.pending.get(1, []) if o["oid"] == oid],
+                         "not in the mempool yet — waiting on the re-seal")
+        rec = server.api_executions({"account": 7})["executions"][0]
+        self.assertEqual(rec["disposition"], "partial-carried")
+        self.assertEqual(rec["reason"], "re-seal queued (chain busy)")
+        # chain drains -> next sweep re-seals and the remainder enters the mempool.
+        busy["on"] = False
+        server._resolve_rounds_once(now=time.time())
+        self.assertNotIn(1, server._carry_retry, "retry queue drained")
+        carried = [o for o in server.pending.get(1, []) if o["oid"] == oid]
+        self.assertEqual(len(carried), 1, "remainder re-seals on retry — never lost")
+        self.assertEqual(carried[0]["qty"], 240 * S)
+
+    def test_carry_retry_expiring_before_reseal_is_cancelled_with_reason(self):
+        # The one place a carried remainder ends without filling: its GTT elapses while
+        # the chain is still too busy to accept the re-seal. It must be SURFACED with a
+        # reason (terminal cancelled), never a silent vanish.
+        oid = self._place_sealed_buy(250, 1, ttl=3600)
+        server.api_round({"market": 1, "base": 1, "quote": 0})
+        server.submit = (lambda payload, check=None, detail="":
+                         (_ for _ in ()).throw(server.ChainBusy("busy"))
+                         if payload[0] == server.TAG_CARRY_COMMIT
+                         else self.sent.append(payload))
+        self._settle(vol=10)
+        self.assertIn(1, server._carry_retry)
+        server.order_expiry[(1, 7, oid)] = time.time() - 1     # GTT now in the past
+        server._resolve_rounds_once(now=time.time())
+        self.assertNotIn(1, server._carry_retry, "expired remainder removed from retry")
+        cancels = [r for r in server.api_executions({"account": 7})["executions"]
+                   if r["disposition"] == "cancelled"]
+        self.assertTrue(cancels, "expired-before-reseal surfaces a terminal receipt")
+        self.assertEqual(cancels[0]["reason"], "expired-before-reseal")
+
     def test_unsettled_round_requeues_without_receipts(self):
         # the round never accumulates: past ROUND_GATE_SECS the resolver re-queues
         # its orders (nothing lost) and hands out NO fill receipts (no phantoms).
@@ -145,6 +194,54 @@ class SealedCarry(unittest.TestCase):
         self.assertEqual(back[0]["qty"], 250 * S, "full quantity back — nothing filled")
         self.assertEqual(server.api_executions({"account": 7})["executions"], [],
                          "no receipts for a round that never settled")
+
+
+class SealedReadyFinality(unittest.TestCase):
+    """Phase 2: reveal only β-FINALIZED commits. A finalized commit can't re-org out, so
+    a revealed round can't be rolled back for a vanished commit. Strict improvement over
+    Phase-1 best-chain membership; falls back to membership on a non-finalizing chain."""
+
+    def setUp(self):
+        server._commit_seen.clear()
+        server.ENC_MODE = False
+
+    def _order(self, acct=7, oid=1):
+        o = {"account": acct, "oid": oid, "side": BUY, "price": 1 * S, "qty": 10 * S,
+             "type": "limit", "sealed": True}
+        o["commit"] = server._seal_material(1, o)
+        return o
+
+    def _entry(self, o):
+        return server.commitment(o["reveal"]) + struct.pack("<I", o["account"])
+
+    def test_no_finality_falls_back_to_membership(self):
+        o, off = self._order(), self._order(acct=8, oid=2)
+        ready = server._sealed_ready_predicate(1, {self._entry(o)}, {"available": False})
+        self.assertTrue(ready(o), "on-chain commit ready when finality unavailable")
+        self.assertFalse(ready(off), "off-chain commit never ready")
+
+    def test_onchain_but_not_final_defers(self):
+        o = self._order()
+        ready = server._sealed_ready_predicate(
+            1, {self._entry(o)}, {"available": True, "block_height": 100, "finalized_height": 99})
+        self.assertFalse(ready(o), "seen at head 100 but finalized only 99 -> defer")
+
+    def test_finalized_is_ready(self):
+        o = self._order(); e = {self._entry(o)}
+        server._sealed_ready_predicate(
+            1, e, {"available": True, "block_height": 100, "finalized_height": 98})   # pins seen=100
+        ready = server._sealed_ready_predicate(
+            1, e, {"available": True, "block_height": 101, "finalized_height": 100})  # β caught up
+        self.assertTrue(ready(o), "finalized_height reached the pinned height -> ready")
+
+    def test_commit_leaving_set_is_forgotten(self):
+        o = self._order()
+        server._sealed_ready_predicate(
+            1, {self._entry(o)}, {"available": True, "block_height": 100, "finalized_height": 100})
+        self.assertEqual(len(server._commit_seen[1]), 1)
+        server._sealed_ready_predicate(
+            1, set(), {"available": True, "block_height": 101, "finalized_height": 101})
+        self.assertEqual(len(server._commit_seen[1]), 0, "consumed/expired commit forgotten")
 
 
 if __name__ == "__main__":

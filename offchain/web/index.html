@@ -310,7 +310,7 @@
           </sc-if>
         </div>
         <sc-if value="{{ hasNoOrders }}" hint-placeholder-val="{{ true }}">
-          <div style="font-size:12px;color:{{ T.faint }};">No pending orders</div>
+          <div style="font-size:12px;color:{{ T.faint }};">No open orders</div>
         </sc-if>
         <sc-if value="{{ hasOrders }}" hint-placeholder-val="{{ false }}">
           <div style="display:flex;flex-direction:column;gap:4px;max-height:260px;overflow-y:auto;padding-right:2px;">
@@ -319,12 +319,17 @@
                 <span style="font-size:9px;font-weight:700;letter-spacing:.04em;padding:2px 5px;border-radius:999px;background:{{ po.srcBg }};color:{{ po.srcColor }};flex-shrink:0;white-space:nowrap;">{{ po.srcLabel }}</span>
                 <span style="font-size:11px;font-weight:700;color:{{ po.sideColor }};flex-shrink:0;">{{ po.side }}</span>
                 <span style="font-size:11px;font-family:'IBM Plex Mono',monospace;color:{{ T.mono }};flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ po.detail }}</span>
-                <button onClick="{{ po.onCancel }}" style="padding:2px 6px;background:transparent;border:1px solid {{ T.btnBorder }};color:{{ T.dim }};border-radius:5px;font-size:10px;cursor:pointer;flex-shrink:0;">✕</button>
+                <sc-if value="{{ po.canCancel }}" hint-placeholder-val="{{ true }}">
+                  <button onClick="{{ po.onCancel }}" style="padding:2px 6px;background:transparent;border:1px solid {{ T.btnBorder }};color:{{ T.dim }};border-radius:5px;font-size:10px;cursor:pointer;flex-shrink:0;">✕</button>
+                </sc-if>
+                <sc-if value="{{ po.isSettling }}" hint-placeholder-val="{{ false }}">
+                  <span title="matched — settling on-chain, can't be pulled" style="font-size:10px;color:#F59E0B;flex-shrink:0;">⧗</span>
+                </sc-if>
               </div>
             </sc-for>
           </div>
         </sc-if>
-        <div style="margin-top:8px;font-size:10px;color:{{ T.faint }};line-height:1.5;"><span style="color:#E6007A;">mempool</span> = next auction · <span style="color:#60A5FA;">resting</span> = on-chain · <a href="#" onClick="{{ onExplorerTab }}" style="color:{{ T.dim }};">Explorer →</a></div>
+        <div style="margin-top:8px;font-size:10px;color:{{ T.faint }};line-height:1.5;"><span style="color:#E6007A;">mempool</span> = next auction · <span style="color:#F59E0B;">settling</span> = matched, finalizing · <span style="color:#60A5FA;">resting</span> = on-chain · <a href="#" onClick="{{ onExplorerTab }}" style="color:{{ T.dim }};">Explorer →</a></div>
       </div>
     </div>
   </div>
@@ -788,29 +793,56 @@ class Component extends DCLogic {
 
     const balList=[0,1,2].map(id=>({id,symbol:this.ASSETS[id],amount:(bals[id]||0).toLocaleString(),chipColor:this.DOT_COLORS[id]}));
 
-    const orderList=pending.map(o=>({
+    // An order is ALWAYS visible in one of three live states so it never appears to vanish
+    // (a gap between states reads as "it failed" to a manual trader):
+    //   ◎ MEMPOOL  — queued off-chain, waiting for the next 6s auction (pink)
+    //   ⧗ SETTLING — matched, in an in-flight round, awaiting β-durable settlement (amber)
+    //   ◉ RESTING  — rested live on the on-chain book (blue)
+    const ORDER_STATE={
+      settling:{label:'⧗ SETTLING',bg:'rgba(245,158,11,.12)',color:'#F59E0B'},
+      resting :{label:'◉ RESTING', bg:'rgba(96,165,250,.1)', color:'#60A5FA'},
+      mempool :{label:'◎ MEMPOOL', bg:'rgba(230,0,122,.1)',  color:'#E6007A'},
+    };
+    const orderList=pending.map(o=>{
+      const stt=ORDER_STATE[o.status||o.source]||ORDER_STATE.mempool;
+      return {
       oid:o.oid,side:this._sideStr(o.side).toUpperCase(),
       sideColor:this._sideStr(o.side)==='buy'?T.buy:T.sell,
-      srcLabel:o.source==='resting'?'◉ RESTING':'◎ MEMPOOL',
-      srcBg:o.source==='resting'?'rgba(96,165,250,.1)':'rgba(230,0,122,.1)',
-      srcColor:o.source==='resting'?'#60A5FA':'#E6007A',
+      srcLabel:stt.label,srcBg:stt.bg,srcColor:stt.color,
+      // an order mid-settlement can't be pulled — only mempool/resting orders are cancellable
+      canCancel:(o.status||o.source)!=='settling',
+      isSettling:(o.status||o.source)==='settling',
       detail:o.type==='market'?String(o.qty):(o.qty+' @ '+(o.price||'?')),
       onCancel:()=>this.cancelOrder(o.oid,o.source||'pending',o.market_name||market.name),
-    }));
+    };});
 
     const execList=executions.slice(0,60).map(ex=>{
       const esd=this._sideStr(ex.side),dp=String(ex.disposition||'');
-      const isCanc=dp.indexOf('cancel')>=0,isPart=!isCanc&&(dp.indexOf('partial')>=0||dp==='resting'||ex.remainder>0);
+      // Four distinct outcomes so a trader always knows what became of their order:
+      //   filled    — fully traded (green)
+      //   carrying  — sealed remainder re-sealed, still working, NEVER dropped (amber)
+      //   resting   — public remainder rests on the book (amber)
+      //   cancelled — terminal drop; always shows WHY (red)
+      const isCanc=dp.indexOf('cancel')>=0;            // cancelled / partial-cancelled
+      const isCarry=dp.indexOf('carried')>=0;          // carried / partial-carried (still live)
+      const isRest=dp.indexOf('resting')>=0;           // resting / partial-resting
+      const isFilled=dp==='filled';
+      const reason=ex.reason?String(ex.reason):'';
+      let st,stColor,stBg;
+      if(isCanc){st=reason?('cancelled · '+reason):'cancelled';stColor=T.sell;stBg='rgba(220,38,38,.1)';}
+      else if(isCarry){st='carrying';stColor='#F59E0B';stBg='rgba(245,158,11,.1)';}
+      else if(isRest){st=(dp.indexOf('partial')>=0)?'partial · resting':'resting';stColor='#F59E0B';stBg='rgba(245,158,11,.1)';}
+      else if(isFilled){st='filled';stColor=T.buy;stBg='rgba(22,163,74,.1)';}
+      else{st='filled';stColor=T.buy;stBg='rgba(22,163,74,.1)';}
       // finality: a fill is β-final once the finalized head reaches its settle block.
-      // null => unknown (no finality feed, or a cancel with no balance delta to finalize).
-      const fnl=(finalHt!=null&&ex.settle_height!=null&&!isCanc)?(finalHt>=ex.settle_height):null;
+      // only meaningful when something actually filled (a bare cancel moves no balance).
+      const hasFill=(Number(ex.filled)||0)>0;
+      const fnl=(finalHt!=null&&ex.settle_height!=null&&hasFill)?(finalHt>=ex.settle_height):null;
       return {
         sideColor:esd==='buy'?T.buy:T.sell,side:esd.toUpperCase(),
         filled:ex.filled!=null?String(ex.filled):'?',price:ex.price!=null?String(ex.price):'?',
         mkt:(this.MARKETS.find(m=>m.id===ex.market)||market).name,
-        status:isCanc?'cancelled':(isPart?'partial':'filled'),
-        statusBg:isCanc?'rgba(220,38,38,.1)':(isPart?'rgba(245,158,11,.1)':'rgba(22,163,74,.1)'),
-        statusColor:isCanc?T.sell:(isPart?'#F59E0B':T.buy),
+        status:st,statusBg:stBg,statusColor:stColor,
         finalizing:fnl===false,
         finalLabel:fnl===null?'':(fnl?'✓ final':'⧗ finalizing'),
         finalBg:fnl===false?'rgba(245,158,11,.12)':(fnl?'rgba(74,222,128,.1)':'transparent'),

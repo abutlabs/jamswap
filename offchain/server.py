@@ -316,6 +316,34 @@ def api_cancel(b):
            check=lambda: nonce_of(handle) > nonce,
            detail=f"account {handle} cancel order {oid} market {market}")
     return {"ok": True}
+def _try_submit_register(pk_hex, now=None):
+    # one submit attempt for a pending registration; swallow backpressure (retry next sweep)
+    e = _reg_pending.get(pk_hex)
+    if not e:
+        return
+    now = now or time.time()
+    try:
+        submit(e["payload"], check=lambda: handle_of(bytes.fromhex(pk_hex)) is not None,
+               detail=f"pubkey {pk_hex[:12]}..")
+        e["attempts"] += 1
+    except ChainBusy:
+        pass                                   # queues full — back off, resolver retries later
+    e["last"] = now
+
+def _resolve_registrations_once(now):
+    # confirm-or-retry every pending registration; runs on the resolver thread.
+    for pk_hex in list(_reg_pending):
+        e = _reg_pending[pk_hex]
+        if handle_of(bytes.fromhex(pk_hex)) is not None:
+            _reg_pending.pop(pk_hex, None)                     # landed — done
+            continue
+        if now - e["t"] > REG_GIVEUP_SECS or e["attempts"] >= REG_MAX_ATTEMPTS:
+            _reg_pending.pop(pk_hex, None)                     # give up (client can re-request)
+            print(f"register {pk_hex[:12]}.. gave up after {e['attempts']} attempts")
+            continue
+        if now - e["last"] >= REG_RETRY_SECS:
+            _try_submit_register(pk_hex, now)
+
 def api_register(b):
     # bind an ed25519 pubkey to an account handle: canon(register, pubkey) signed by that key
     pubkey, sig = bytes.fromhex(b["pubkey"]), bytes.fromhex(b["sig"])
@@ -323,11 +351,17 @@ def api_register(b):
     if h is not None:
         # already on-chain: re-submitting builds a work-package byte-identical to the one
         # that registered this key, which GP rejects as duplicate_package — don't relay it
+        _reg_pending.pop(pubkey.hex(), None)
         return {"ok": True, "handle": h}
-    submit(bytes([TAG_REGISTER]) + pubkey + sig,
-           check=lambda: handle_of(pubkey) is not None,
-           detail=f"pubkey {pubkey.hex()[:12]}..")
-    return {"ok": True, "handle": None}                # None until accumulate lands
+    # enqueue for confirm-and-retry (deduped by pubkey), then fire the first attempt now.
+    # The resolver re-submits with backoff until the handle lands, so a fresh account
+    # reliably registers even under queue pressure without flooding the fleet.
+    pk_hex = pubkey.hex()
+    if pk_hex not in _reg_pending:
+        _reg_pending[pk_hex] = {"payload": bytes([TAG_REGISTER]) + pubkey + sig,
+                                "t": time.time(), "attempts": 0, "last": 0.0}
+        _try_submit_register(pk_hex)
+    return {"ok": True, "handle": None, "registering": True}   # None until accumulate lands
 def api_handle(q):
     return {"handle": handle_of(bytes.fromhex(q["pubkey"]))}
 def api_nonce(q):
@@ -722,6 +756,23 @@ def _parse_book(raw):
 _round_gate = {}                   # market -> {"check": None, "t": ...} cooldowns (zero-fill/busy/timeout)
 _inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
                                    #   {"check","t","sealed","public","resting","clearing"}
+
+# --- registration confirm-and-retry ------------------------------------------
+# A fresh account's registration is a STANDALONE work-item (not part of an auction
+# round), and submit() is fire-and-forget: on the multi-validator net a lone work-item
+# can fail to accumulate under ce133-queue pressure, and with no retry the account never
+# gets a handle — so the trader can't fund or trade (the "every manual test fails" bug;
+# invisible to tests because the six dev accounts are pre-registered in genesis).
+# This resolver re-submits an un-landed registration with backoff until the handle
+# appears on-chain, then stops. Keyed by pubkey so a flood of identical /api/register
+# calls collapses to ONE in-flight attempt (≤1 submit / REG_RETRY_SECS) — which both
+# lands reliably AND stops registration from wedging the cap-16 queue. Safe to retry:
+# register_key() is idempotent (an already-registered key keeps its handle) and a
+# duplicate register work-package is dropped by the node as a duplicate.
+_reg_pending = {}                  # pubkey_hex -> {"payload","t","attempts","last"}
+REG_RETRY_SECS   = float(os.environ.get("REG_RETRY_SECS", "8"))     # min spacing between resubmits
+REG_GIVEUP_SECS  = float(os.environ.get("REG_GIVEUP_SECS", "240"))  # abandon after this long unlanded
+REG_MAX_ATTEMPTS = int(os.environ.get("REG_MAX_ATTEMPTS", "20"))
 ROUND_GATE_SECS = float(os.environ.get("ROUND_GATE_SECS", "300"))   # settle patience before a round is abandoned + re-queued
 SETTLE_HOLD_SECS = float(os.environ.get("SETTLE_HOLD_SECS", "150"))
                           # durability: the cv predicate must HOLD this long before receipts. The
@@ -747,31 +798,87 @@ MAX_ROUND_ORDERS = int(os.environ.get("MAX_ROUND_ORDERS", "256"))
                                    # all-lasair net). Set it per-net in the compose (e.g. 48).
 ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
 
-def _finalize_round(m, fr):
-    """The round's cv predicate fired: its clearing is REAL on-chain. Only now
-    carry sealed remainders forward and hand out fill receipts."""
-    fills = fr["clearing"]["fills"]
-    now = time.time()
+# Remainders whose carry-commit couldn't be posted yet (all guarantor queues full).
+# The carry allowance the settled round minted PERSISTS on-chain, so we retry the
+# re-seal each resolver sweep until it lands or the order's good-till-time expires —
+# a revealed sealed order is NEVER silently dropped under load.  market -> [remainder]
+_carry_retry = {}
+
+def _carry_sealed_remainders(m, sealed_orders, fills, now):
+    """Re-seal the unfilled remainder of each revealed sealed order (fresh commitment)
+    and re-queue it, so a revealed sealed order keeps working under the same oid until it
+    fully fills or its good-till-time expires — it is never IOC-dropped. Stamps each
+    order's o["_outcome"]/o["_reason"] for the receipt feed; returns the list carried now.
+
+    Outcomes stamped:
+      * filled           — nothing to carry (fully filled)
+      * carried / partial-carried — remainder re-sealed (or queued for re-seal); NON-terminal
+      * cancelled / partial-cancelled (reason=expired) — GTT elapsed, remainder truly dropped
+    """
     carried = []
-    for o in fr["sealed"]:
-        rem = o["qty"] - fills.get(o["oid"], 0)
+    for o in sealed_orders:
+        filled = fills.get(o["oid"], 0)
+        rem = o["qty"] - filled
+        if rem <= 0:
+            o["_outcome"] = "filled"
+            continue
         exp = order_expiry.get((m, o["account"], o["oid"]))
-        if rem > 0 and not (exp and exp <= now):
-            r = {"account": o["account"], "oid": o["oid"], "side": o["side"], "price": o["price"],
-                 "qty": rem, "type": o.get("type", "limit"), "sealed": True, "address": o.get("address", "")}
-            try:
-                _post_carry_seal(m, r)     # allowance-gated: the settled round minted this credit
-            except ChainBusy:
-                # carry-commit refused (queues full): fall back to IOC semantics for
-                # this remainder — cancelled, not wedged half-carried (its commit
-                # would never reach the chain; the commit gate would defer forever)
-                print(f"round m{m}: carry-seal refused (chain busy) — remainder IOC-cancelled")
-                continue
+        if exp and exp <= now:
+            # good-till-time elapsed: the remainder can't be carried past its own expiry.
+            o["_outcome"] = "partial-cancelled" if filled > 0 else "cancelled"
+            o["_reason"] = "expired"
+            continue
+        r = {"account": o["account"], "oid": o["oid"], "side": o["side"], "price": o["price"],
+             "qty": rem, "type": o.get("type", "limit"), "sealed": True, "address": o.get("address", "")}
+        try:
+            _post_carry_seal(m, r)         # allowance-gated: the settled round minted this credit
             carried.append(r)
-            o["_carried"] = rem        # mark for the execution report (partial-carried, not cancelled)
+            if filled > 0:
+                o["_outcome"], o["_reason"] = "partial-carried", f"filled {disp(filled)}, rest re-sealed & still working"
+            else:
+                o["_outcome"], o["_reason"] = "carried", "didn't cross this round — still working (hidden)"
+        except ChainBusy:
+            # R4: don't drop — the credit persists on-chain, so queue the re-seal and
+            # retry it each sweep. The order stays live; its receipt is a carry note.
+            _carry_retry.setdefault(m, []).append(r)
+            o["_outcome"] = "partial-carried" if filled > 0 else "carried"
+            o["_reason"] = "re-seal queued (chain busy)"
     if carried:
         with _lock:
             pending.setdefault(m, []).extend(carried)
+    return carried
+
+def _drain_carry_retry(now):
+    """Retry re-seals that were queued when the chain was busy. On success the remainder
+    re-enters the mempool; if its good-till-time elapses first it is genuinely lost and
+    gets a terminal cancelled(expired) receipt — the one place a carried remainder ends
+    without filling, and it is surfaced, never silent."""
+    for m, items in list(_carry_retry.items()):
+        keep = []
+        for r in items:
+            exp = order_expiry.get((m, r["account"], r["oid"]))
+            if exp and exp <= now:
+                r["market"], r["_outcome"], r["_reason"] = m, "cancelled", "expired-before-reseal"
+                _record_exec(r, 0, mstate(b"lp", m), True, now)
+                print(f"round m{m}: carry re-seal expired before the chain drained — remainder cancelled")
+                continue
+            try:
+                _post_carry_seal(m, r)
+            except ChainBusy:
+                keep.append(r)             # still busy — retry next sweep
+                continue
+            with _lock:
+                pending.setdefault(m, []).append(r)
+        if keep:
+            _carry_retry[m] = keep
+        else:
+            _carry_retry.pop(m, None)
+
+def _finalize_round(m, fr):
+    """The round's cv predicate fired: its clearing is REAL on-chain. Only now
+    carry sealed remainders forward and hand out fill receipts."""
+    now = time.time()
+    carried = _carry_sealed_remainders(m, fr["sealed"], fr["clearing"]["fills"], now)
     try: record_executions(m, fr["resting"], fr["sealed"], fr["public"], fr["clearing"])
     except Exception as e: print("exec record failed", m, e)
     print(f"round m{m}: settled on-chain — receipted {len(fr['sealed']) + len(fr['public'])} order(s), carried {len(carried)}")
@@ -782,6 +889,8 @@ def _resolve_rounds_once(now=None):
     on-chain; its orders batch into the next auction). Runs on the resolver
     thread every 2 s; tests call it directly."""
     now = now or time.time()
+    _resolve_registrations_once(now)   # confirm-or-retry fresh-account registrations
+    _drain_carry_retry(now)            # retry any re-seals the chain was too busy to accept
     for m, fr in list(_inflight.items()):
         try: done = fr["check"]()
         except Exception: continue                    # reader hiccup: retry next sweep
@@ -861,6 +970,45 @@ def _stats_poller():
         except Exception as e:
             print("stats poller error:", e)
 
+# Per-market record of the head height at which each on-chain commit entry was first
+# observed — the basis for the Phase-2 finality gate below.  market -> {entry: height}
+_commit_seen = {}
+
+def _sealed_ready_predicate(m, commit_entries, fin):
+    """Return a predicate `o -> bool`: may this sealed order be REVEALED this round?
+
+    Phase 1 — its owner-signed commit must be on the best chain (`commit_entries`), so
+    the reveal round's consume_set won't miss it.
+
+    Phase 2 — on a FINALIZING chain, the commit must also be β-FINALIZED. A finalized
+    commit can never re-org out, so the reveal round can't be rolled back for a vanished
+    commit (the race the old deferral loop fought). We approximate 'finalized'
+    conservatively without a finalized-state read: pin the head height at which each
+    commit is first seen on-chain, and treat it as final once `finalized_height` reaches
+    that height. This only ever DELAYS a reveal relative to Phase 1 — it never reveals a
+    commit that isn't on-chain — so it is a strict safety improvement. On a NON-finalizing
+    chain (no finalized height, e.g. the mixed net) it falls back to best-chain membership,
+    so sealed trading still works there.
+    """
+    seen = _commit_seen.setdefault(m, {})
+    bh = fin.get("block_height")
+    for e in commit_entries:                 # first sighting of a commit: pin the head height
+        if e not in seen and bh is not None:
+            seen[e] = bh
+    for e in list(seen):                     # forget commits that left the set (consumed/expired)
+        if e not in commit_entries:
+            del seen[e]
+    fh = fin.get("finalized_height") if fin.get("available") else None
+    def ready(o):
+        e = commitment(o["reveal"]) + struct.pack("<I", o["account"])
+        if e not in commit_entries:
+            return False                     # not on-chain yet — defer
+        if fh is None:
+            return True                      # non-finalizing chain: best-chain membership is all we have
+        h = seen.get(e)
+        return h is not None and fh >= h     # β-finalized: durable, safe to reveal
+    return ready
+
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
     if m in _inflight:
@@ -875,6 +1023,26 @@ def api_round(b):
     raw = storage(b"book" + struct.pack("<I", m))        # the market's on-chain resting book
     pruned = expired_pairs(m, raw)                        # good-till-time entries past expiry
     shrank = bool(pruned)                                 # some resting order expired this round
+    # COMMIT-READINESS GATE (built before the lock — it does a network read of the
+    # on-chain commit set). A reveal only settles if its owner-signed commit has ALREADY
+    # accumulated: the service's consume_set (lib.rs) matches every consumed hash‖account
+    # against the ON-CHAIN commit set and rejects the WHOLE round on one miss. On a
+    # contested chain a TAG_COMMIT takes slots (10-60 s) to accumulate while this auction
+    # fires 6 s after placement, so revealing immediately raced the commit and the round
+    # was silently rolled back. We therefore feed this readiness predicate INTO the
+    # planner (not after it): a not-yet-committed sealed order is held OUT of the batch
+    # entirely — it can neither reveal nor make another order appear to cross against
+    # liquidity that won't be submitted. That keeps the crossing decision and the batch
+    # membership consistent, so a revealed order always has its counterparty in the same
+    # round (fixes the "revealed alone → leaked + dropped" bug). ENC_MODE (encrypt-until-
+    # batch) isn't gated yet — the committee path is still in simulation.
+    if ENC_MODE:
+        sealed_ready = lambda o: True
+    else:
+        onchain = storage(b"commits" + struct.pack("<I", m))
+        commit_entries = {onchain[i:i + SET_ENTRY_LEN]
+                          for i in range(0, max(0, len(onchain) - SET_ENTRY_LEN + 1), SET_ENTRY_LEN)}
+        sealed_ready = _sealed_ready_predicate(m, commit_entries, _read_finality())
     with _lock:                        # snapshot + re-queue atomically so a concurrent
         pend_all = pending.get(m, [])  # api_order during submit isn't dropped
         # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
@@ -888,37 +1056,23 @@ def api_round(b):
         # Decide which orders clear now. Sealed orders that DON'T cross current liquidity
         # rest HIDDEN (carried forward) rather than being immediate-or-cancel — so a sealed
         # sell placed now can meet a sealed buy placed in a later auction. A sealed order is
-        # revealed only in the round it actually crosses (see round.py + tests).
+        # revealed only in the round it actually crosses AND its commit is on-chain
+        # (sealed_ready), so the planner and the batch agree (see round.py + tests).
         resting_orders = [o for o in _parse_book(raw) if (o["account"], o["oid"]) not in set(pruned)]
-        plan = plan_round(pend, resting_orders, now)
-        pending[m] = plan.carry + overflow   # hidden non-crossing sealed + over-cap tail wait their turn
+        plan = plan_round(pend, resting_orders, now, sealed_ready=sealed_ready)
+        # hidden non-crossing sealed + not-yet-committed (deferred) + over-cap tail all wait
+        pending[m] = plan.carry + plan.deferred + overflow
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
             order_expiry.pop((m, o["account"], o["oid"]), None)
             order_telemetry.terminal(m, o["account"], o["oid"], "expired")
+    if plan.deferred:                  # observable, non-terminal: waiting for the commit
+        for o in plan.deferred:        # distinguish "not on-chain yet" from "on-chain, awaiting β"
+            onch = (not ENC_MODE) and (
+                (commitment(o["reveal"]) + struct.pack("<I", o["account"])) in commit_entries)
+            order_telemetry.deferred(m, o["account"], o["oid"],
+                                     "awaiting-finality" if onch else "commit-not-onchain")
+        print(f"round m{m}: deferred {len(plan.deferred)} sealed reveal(s) — commit not final yet")
     sealed, public = plan.reveal, plan.public
-    # MIXED-CHAIN COMMIT GATE: a reveal only settles if its owner-signed commit has
-    # ALREADY accumulated — the service's consume_set (lib.rs) matches every consumed
-    # hash‖account against the ON-CHAIN commit set and rejects the WHOLE round on one
-    # miss. On a contested chain a TAG_COMMIT takes slots (10-60 s) to accumulate while
-    # this auction loop fires 6 s after placement, so revealing immediately raced the
-    # commit and the round was silently rolled back (balances never moved even though
-    # the builder-side clearing had already receipted the fill). Hold back any sealed
-    # order whose commit isn't visible on-chain yet: it stays hidden in the mempool
-    # and reveals in a later auction. (ENC_MODE has the same race on b"encset"; gate
-    # it when the committee path leaves simulation.)
-    if sealed and not ENC_MODE:
-        onchain = storage(b"commits" + struct.pack("<I", m))
-        entries = {onchain[i:i + SET_ENTRY_LEN]
-                   for i in range(0, max(0, len(onchain) - SET_ENTRY_LEN + 1), SET_ENTRY_LEN)}
-        ready, waiting = [], []
-        for o in sealed:
-            e = commitment(o["reveal"]) + struct.pack("<I", o["account"])
-            (ready if e in entries else waiting).append(o)
-        if waiting:
-            with _lock:
-                pending.setdefault(m, []).extend(waiting)
-            print(f"round m{m}: deferred {len(waiting)} sealed reveal(s) — commit not on-chain yet")
-        sealed = ready
     # SEQ DISCIPLINE (service lib.rs check_orders): every signed order's seq must
     # STRICTLY beat its account's on-chain floor, and the service raises the floor to
     # each order's seq IN ROUND ORDER — so one order at/below the floor rejects the
@@ -1003,8 +1157,14 @@ def api_round(b):
                             "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
     if sealed or public or shrank:     # zero-fill round (book rewrite only): cooldown
         _round_gate[m] = {"check": None, "t": time.time()}
+    # Safety net: with gate-then-plan a revealed sealed order always crosses (volume>0,
+    # so it took the in-flight path above), but if any revealed sealed order lands here
+    # with a zero fill, carry its remainder rather than IOC-dropping it — a revealed
+    # sealed order is NEVER silently cancelled just because it didn't clear this tick.
+    if sealed:
+        _carry_sealed_remainders(m, sealed, clearing["fills"], now)
     # Zero-fill receipts stay immediate: nothing crossed, so these only record
-    # rested/cancel dispositions (no balance movement to contradict).
+    # rested/carry/cancel dispositions (no balance movement to contradict).
     try: record_executions(m, resting_orders, sealed, public, clearing)
     except Exception as e: print("exec record failed", m, e)
     return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
@@ -1041,17 +1201,43 @@ def api_state(q):
                            "sealed_secs": round(order_lifetime_secs(True)),
                            "max_secs": round(MAX_RESTING_SECS), "max_open": MAX_OPEN_ORDERS}}
 def api_mine(q):
-    # a trader's own queued orders, across all markets — sealed terms DECRYPTED for them
+    # a trader's own LIVE orders across all markets, in EVERY lifecycle state — sealed terms
+    # DECRYPTED for the owner. An order must never disappear from the trader's view between
+    # states, or a manual trader reads the gap as "it failed". Three states, each tagged so
+    # the UI can show a distinct chip:
+    #   mempool  — queued off-chain, waiting for the next auction (◎)
+    #   settling — inside an in-flight round, awaiting β-durable settlement (⧗)
+    #   resting  — rested on-chain, live on the order book (◉)
     acct = int(q["account"])
     now = time.time()
     out = []
-    for mid, orders in pending.items():
+    def tag(e, mid, status):
+        e["market"] = mid
+        e["status"] = status
+        e["source"] = status
+        exp = order_expiry.get((mid, acct, e["oid"]))   # every order has a bounded expiry
+        e["expires_in"] = round(max(0.0, exp - now)) if exp else None
+        return e
+    seen = set()                                        # (market, oid) already surfaced
+    for mid, orders in pending.items():                 # 1) waiting in the mempool
         for o in orders:
             if o["account"] == acct:
-                e = mempool_entry(o, owner=True); e["market"] = mid
-                exp = order_expiry.get((mid, acct, o["oid"]))   # every order now has a bounded expiry
-                e["expires_in"] = round(max(0.0, exp - now)) if exp else None
-                out.append(e)
+                out.append(tag(mempool_entry(o, owner=True), mid, "settling"
+                               if o.get("_outcome", "").endswith("carried") else "mempool"))
+                seen.add((mid, o["oid"]))
+    for mid, fr in _inflight.items():                   # 2) in a round, settling on-chain
+        for o in fr["sealed"] + fr["public"]:
+            if o["account"] == acct and (mid, o["oid"]) not in seen:
+                out.append(tag(mempool_entry(o, owner=True), mid, "settling"))
+                seen.add((mid, o["oid"]))
+    for m, base, quote in DEFAULT_MARKETS:              # 3) resting live on the on-chain book
+        for r in book_of(m):
+            if r["account"] == acct and (m, r["id"]) not in seen:
+                out.append(tag({"oid": r["id"], "account": acct, "side": r["side"],
+                                "sealed": False, "type": "limit",
+                                "who": f"acct {acct}", "price": r["price"], "qty": r["qty"]},
+                               m, "resting"))
+                seen.add((m, r["id"]))
     return {"orders": out}
 def api_cancel_pending(b):
     # remove an un-processed (not yet cleared) order from the mempool, owner-checked
@@ -1217,32 +1403,42 @@ def load_execs():
                 executions[int(k)] = dq
     except Exception:
         pass
+# Receipt dispositions that END an order's lifecycle. A carried remainder is NON-terminal:
+# the order keeps working under the same oid until it fully fills or its good-till-time
+# expires, so "carried"/"partial-carried" are progress notes, not an end state — the single
+# terminal comes when the carried remainder finally clears or expires. This is what lets a
+# sealed order cross many auctions and still resolve to EXACTLY ONE terminal outcome (the
+# zero-loss invariant). "resting"/"partial-resting" (public remainder on the book) are
+# likewise non-terminal.
+_TERMINAL_DISP = {"filled", "partial-cancelled", "cancelled", "rejected"}
+
 def _record_exec(o, filled, price, sealed, now):
-    # append one order's outcome to its owner's receipt feed. For a sealed order the unfilled
-    # remainder either CARRIES forward re-sealed (o["_carried"]) or, if expired, is cancelled;
-    # a public order's remainder rests in the book.
+    # append one order's outcome to its owner's receipt feed. A sealed order's disposition is
+    # decided upstream (_carry_sealed_remainders) and stamped on o["_outcome"] with a human
+    # o["_reason"]; a public order derives its disposition from the fill here.
     qty, rem = o["qty"], o["qty"] - filled
-    if filled >= qty:
-        disp_ = "filled"
-    elif sealed:
-        if o.get("_carried"):
-            disp_ = "partial-carried"                                # rests hidden, keeps working
+    disp_ = o.get("_outcome")
+    reason = o.get("_reason")
+    if disp_ is None:
+        if filled >= qty:
+            disp_ = "filled"
+        elif sealed:
+            # a revealed sealed order with no upstream decision: IOC. Should not occur once
+            # _carry_sealed_remainders runs (gate-then-plan makes revealed⟹counterparty),
+            # but fail SAFE and always give a reason rather than a bare "cancelled".
+            disp_ = "partial-cancelled" if filled > 0 else "cancelled"
+            reason = reason or "unfilled"
         else:
-            disp_ = "partial-cancelled" if filled > 0 else "cancelled"   # expired remainder dropped
-    else:
-        disp_ = "partial-resting" if filled > 0 else "resting"       # remainder rests in book
+            disp_ = "partial-resting" if filled > 0 else "resting"       # remainder rests in book
     dq = executions.setdefault(o["account"], deque(maxlen=EXEC_HISTORY))
     _fin = _read_finality()
     _sh = _fin.get("block_height") if _fin.get("available") else None
     dq.append({"ts": now, "market": o["market"], "side": o["side"],
                "price": disp(price), "qty": disp(qty), "filled": disp(filled),
-               "remainder": disp(rem), "disposition": disp_, "oid": o["oid"],
+               "remainder": disp(rem), "disposition": disp_, "reason": reason, "oid": o["oid"],
                # head height at settle time; the fill is β-final once finalized_height reaches it
                "settle_height": _sh})
-    # Per-order SLO: a durable disposition ends the order's life. "partial-resting"
-    # and "resting" are NOT terminal — the remainder keeps working until it fills or
-    # expires, so they must not close the lifecycle record here.
-    if disp_ in ("filled", "partial-carried", "partial-cancelled", "cancelled"):
+    if disp_ in _TERMINAL_DISP:
         order_telemetry.terminal(o["market"], o["account"], o["oid"], disp_, filled=filled)
 def record_executions(m, resting, reveal, public, clearing=None):
     # write a per-order receipt for the trader-submitted orders (reveal=sealed, public=rests) and

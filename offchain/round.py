@@ -52,20 +52,25 @@ BUY, SELL = 0, 1
 class RoundPlan:
     """The builder's decision for one auction round.
 
-    - `reveal`  — sealed orders that cross now; revealed + cleared this round.
-    - `public`  — plaintext orders; always cleared this round (one-shot into the book).
-    - `carry`   — sealed orders that don't cross; stay hidden, retried next round.
-    - `expired` — sealed orders past their good-till-time that never crossed; dropped.
+    - `reveal`   — sealed orders that cross now; revealed + cleared this round.
+    - `public`   — plaintext orders; always cleared this round (one-shot into the book).
+    - `carry`    — sealed orders that don't cross; stay hidden, retried next round.
+    - `expired`  — sealed orders past their good-till-time that never crossed; dropped.
+    - `deferred` — sealed orders whose commit isn't on-chain (finalized) yet; held OUT of
+                   this batch entirely so they neither reveal nor make another order appear
+                   to cross against liquidity that won't be submitted. Retried next round.
     """
 
-    __slots__ = ("reveal", "public", "carry", "expired")
+    __slots__ = ("reveal", "public", "carry", "expired", "deferred")
 
-    def __init__(self, reveal, public, carry, expired):
+    def __init__(self, reveal, public, carry, expired, deferred=None):
         self.reveal, self.public, self.carry, self.expired = reveal, public, carry, expired
+        self.deferred = deferred if deferred is not None else []
 
     def __repr__(self):
         return (f"RoundPlan(reveal={len(self.reveal)}, public={len(self.public)}, "
-                f"carry={len(self.carry)}, expired={len(self.expired)})")
+                f"carry={len(self.carry)}, expired={len(self.expired)}, "
+                f"deferred={len(self.deferred)})")
 
 
 def _best_opposing(orders):
@@ -86,7 +91,7 @@ def crosses(order, min_sell, max_buy):
     return max_buy is not None and order["price"] <= max_buy
 
 
-def plan_round(pending, resting, now=0.0):
+def plan_round(pending, resting, now=0.0, sealed_ready=None):
     """Plan one auction round.
 
     `pending` — this round's queued orders (dicts with at least `side`, `price`, and
@@ -95,18 +100,39 @@ def plan_round(pending, resting, now=0.0):
     `resting` — the market's on-chain resting book (plaintext public orders), as dicts
     with `side`/`price`.
     `now` — current unix time, for good-till-time expiry of carried sealed orders.
+    `sealed_ready` — predicate `o -> bool`: is this sealed order's commit already
+    on-chain (finalized) so it can actually be revealed and settled THIS round? A
+    sealed order that isn't ready is held out of the crossing view entirely
+    (`deferred`), so the planner and the on-chain reveal-gate share ONE view of
+    liquidity. Default (`None`): treat every sealed order as ready (unit tests /
+    encrypt-until-batch simulation).
+
+    ## Why the readiness gate lives HERE (the "revealed alone" bug it fixes)
+
+    Crossing must be judged against exactly the liquidity that will be in the submitted
+    batch. If the planner judged crossing against a sealed order whose commit hasn't
+    landed, it could reveal an order that then clears *alone* (its counterparty removed
+    by the on-chain gate) — leaking that order's terms AND dropping it as immediate-or-
+    cancel. Gating readiness before `_best_opposing` makes `revealed ⟹ a real
+    counterparty is in the batch`, so a revealed order trades.
 
     Returns a `RoundPlan`. Pure: does not mutate its inputs.
     """
+    if sealed_ready is None:
+        sealed_ready = lambda o: True
     public = [o for o in pending if not o.get("sealed")]
     sealed = [o for o in pending if o.get("sealed")]
-    # crossing is judged against ALL current liquidity (resting + this round's public
-    # + sealed), because a sealed order can cross another sealed order in the same batch.
-    everything = list(resting) + public + sealed
+    ready = [o for o in sealed if sealed_ready(o)]
+    not_ready = [o for o in sealed if not sealed_ready(o)]
+    # crossing is judged against the liquidity that will actually be submitted this
+    # round: resting book + this round's public orders + COMMIT-READY sealed orders.
+    # A sealed order can cross another sealed order in the same batch — but only if both
+    # commits are on-chain, so both will be in the submitted set.
+    everything = list(resting) + public + ready
     min_sell, max_buy = _best_opposing(everything)
 
-    reveal, carry, expired = [], [], []
-    for o in sealed:
+    reveal, carry, expired, deferred = [], [], [], []
+    for o in ready:
         if crosses(o, min_sell, max_buy):
             reveal.append(o)                       # crosses now -> reveal + clear
         else:
@@ -115,4 +141,11 @@ def plan_round(pending, resting, now=0.0):
                 expired.append(o)                  # never crossed within its lifetime
             else:
                 carry.append(o)                    # rest hidden, retry next round
-    return RoundPlan(reveal=reveal, public=public, carry=carry, expired=expired)
+    for o in not_ready:
+        exp = o.get("expiry")
+        if exp is not None and exp <= now:
+            expired.append(o)                      # GTT elapsed while waiting for its commit
+        else:
+            deferred.append(o)                     # commit not on-chain yet; wait, don't reveal
+    return RoundPlan(reveal=reveal, public=public, carry=carry,
+                     expired=expired, deferred=deferred)

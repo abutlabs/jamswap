@@ -1,0 +1,8 @@
+[package]
+name = "setops"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Pure, deterministic byte-set operations for the jamswap service's on-chain commit sets: first-match removal and TTL reaping of an expiry-indexed set. no_std, storage-free, unit-tested — so the service's commit garbage-collection logic can be verified on the host."
+
+[dependencies]

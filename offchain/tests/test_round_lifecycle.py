@@ -149,6 +149,58 @@ class PublicOrdersAreOneShot(unittest.TestCase):
         self.assertEqual(len(plan.reveal), 0)
 
 
+class CommitReadinessGate(unittest.TestCase):
+    """R1 (gate-then-plan): a sealed order may reveal only if its commit is already
+    on-chain. A not-yet-committed order is held OUT of the crossing view entirely, so
+    the planner never reveals an order whose counterparty won't be in the batch — the
+    'revealed alone → leaked + dropped' bug (the Fergie/Alice case)."""
+
+    def test_not_ready_sealed_is_deferred_not_revealed(self):
+        # A crossing buy whose commit hasn't landed must NOT reveal — it defers.
+        b = buy(1)
+        plan = plan_round([b, sell(1)], [], now=0.0,
+                          sealed_ready=lambda o: o["side"] == SELL)  # only the sell is committed
+        self.assertEqual([o["oid"] for o in plan.deferred], [b["oid"]])
+        self.assertNotIn(b["oid"], [o["oid"] for o in plan.reveal])
+
+    def test_ready_order_does_not_reveal_alone_against_uncommitted_counterparty(self):
+        # THE FERGIE BUG. Fergie BUY 50@1.00 (commit ready) crosses Alice SELL 25@0.95
+        # (commit still accumulating). Alice is held out of the batch, so Fergie must NOT
+        # be revealed against liquidity that won't be submitted — Fergie stays hidden.
+        fergie = buy(100, qty=50, account=6)   # price 100 == $1.00 in integer units
+        alice = sell(95, qty=25, account=1)    # price 95  == $0.95
+        ready = {(1, alice["oid"])}            # only Alice's? no — Alice's commit is NOT ready
+        plan = plan_round([fergie, alice], [], now=0.0,
+                          sealed_ready=lambda o: o["account"] == 99)  # neither committed
+        self.assertEqual(len(plan.reveal), 0, "no committed liquidity -> reveal nothing")
+        self.assertEqual(sorted(o["oid"] for o in plan.deferred),
+                         sorted([fergie["oid"], alice["oid"]]))
+
+    def test_both_ready_crossing_sealed_reveal_together(self):
+        # Once BOTH commits are on-chain, the same pair reveals and clears together.
+        fergie = buy(100, qty=50, account=6)
+        alice = sell(95, qty=25, account=1)
+        plan = plan_round([fergie, alice], [], now=0.0, sealed_ready=lambda o: True)
+        self.assertEqual(len(plan.reveal), 2, "both committed + crossing -> reveal together")
+        self.assertEqual(len(plan.deferred), 0)
+
+    def test_ready_crosses_only_committed_liquidity(self):
+        # A ready buy crosses a ready resting/public order even if an uncommitted sealed
+        # sell also exists — readiness only filters SEALED orders, not the public book.
+        resting = [{"side": SELL, "price": 1, "qty": 10}]
+        rb = buy(1)
+        plan = plan_round([rb], resting=resting, now=0.0, sealed_ready=lambda o: True)
+        self.assertEqual([o["oid"] for o in plan.reveal], [rb["oid"]])
+
+    def test_not_ready_and_expired_is_expired_not_deferred(self):
+        # An uncommitted sealed order past its GTT expires (it can never reveal in time),
+        # rather than deferring forever.
+        s = sell(1, expiry=100.0)
+        plan = plan_round([s], [], now=200.0, sealed_ready=lambda o: False)
+        self.assertEqual([o["oid"] for o in plan.expired], [s["oid"]])
+        self.assertEqual(len(plan.deferred), 0)
+
+
 class Purity(unittest.TestCase):
     def test_plan_round_does_not_mutate_inputs(self):
         pending = [buy(1), sell(9)]
