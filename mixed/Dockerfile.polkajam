@@ -18,7 +18,7 @@ FROM ${MESH_IMAGE} AS mesh
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates jq python3 bash && rm -rf /var/lib/apt/lists/*
-ARG PJ_RELEASE=nightly-2026-07-04
+ARG PJ_RELEASE=nightly-2026-07-14
 RUN arch=$(uname -m | sed s/arm64/aarch64/) \
  && url=$(curl -fsSL "https://api.github.com/repos/paritytech/polkajam-releases/releases/tags/${PJ_RELEASE}" \
       | jq -r ".assets[] | select(.name | test(\"linux-${arch}\")) | .browser_download_url") \
