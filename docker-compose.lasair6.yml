@@ -2,9 +2,9 @@
 # consensus. This is the RELIABILITY configuration: unlike the mixed lasair+
 # PolkaJam net (docker-compose.mixed.yml), every validator runs the same client,
 # so they share ONE fork choice (GP best-chain: ticketed-ancestor score, then
-# height, then first-seen) AND lasair-native β-finalization (CE-192 GRANDPA
-# commits over the state root; a 2/3+1 super-majority finalizes, and Block_tree
-# pins β so no head re-orgs below it).
+# height, then first-seen) AND GRANDPA β-finalization (jam-np PR #6 draft wire
+# protocol by default; a 2/3+1 super-majority finalizes, and Block_tree pins β
+# so no head re-orgs below it).
 #
 # Why this exists: on the mixed net a settlement only lands if a lasair node
 # authors within U=5 slots AND its block stays canonical — but lasair and
@@ -26,7 +26,7 @@
 # (LAYOUT all-lasair) and writes /shared/genesis_hex + peers_<i>.txt.
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.9.1}
   restart: unless-stopped
   volumes:
     - "shared:/shared"
@@ -48,10 +48,11 @@ x-mesh-env: &mesh-env
   # the chain never left genesis and nothing settled. Chain-paced authoring free-runs from
   # genesis slot 0 (author head+1 every INTERVAL), so a fresh all-lasair net advances at once.
   WALL: "0"
-  # Finality gadget: "ce192" = the proven lasair-native single-round gadget (default);
-  # "grandpa" = the jam-np PR #6 draft-spec multi-round gadget (Phase 5b — local GAP
-  # decisions documented in lasair/docs/GRANDPA_GAPS.md).
-  LASAIR_FINALITY: "${LASAIR_FINALITY:-ce192}"
+  # Finality gadget: "grandpa" (default) = the jam-np PR #6 draft-spec multi-round
+  # gadget — chaos-hardened 2026-07-16 (restart rejoin, kill-2 stall w/o rollback,
+  # quorum-return resume; see lasair/docs/GRANDPA_GAPS.md for the spec-gap register).
+  # "ce192" = the earlier lasair-native single-round gadget, kept as fallback.
+  LASAIR_FINALITY: "${LASAIR_FINALITY:-grandpa}"
 
 services:
   # mint the all-lasair shared genesis (runs once, then exits 0). Reuses the mixed
@@ -107,7 +108,7 @@ services:
   # (each node's builder ALPN port = its PORT+1). Whichever authors on the winning
   # branch reports the package.
   builder:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.9.1}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -126,7 +127,7 @@ services:
 
   # CE-129 storage-read bridge: any validator serves reads.
   reader:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.8.0}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.9.1}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
