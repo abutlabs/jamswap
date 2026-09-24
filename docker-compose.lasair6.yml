@@ -26,7 +26,7 @@
 # (LAYOUT all-lasair) and writes /shared/genesis_hex + peers_<i>.txt.
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.9.1}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
   restart: unless-stopped
   volumes:
     - "shared:/shared"
@@ -57,7 +57,15 @@ x-mesh-env: &mesh-env
 services:
   # mint the all-lasair shared genesis (runs once, then exits 0). Reuses the mixed
   # image only because it carries gen-spec.py + the lasair binary; no PolkaJam runs.
+  # Built here too, from the SAME lasair image the validators run (its lasair binary
+  # writes the service into genesis), so a fresh clone needs nothing prebuilt.
   spec-init:
+    build:
+      context: .
+      dockerfile: mixed/Dockerfile.polkajam
+      args:
+        MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
+        PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-09-22}
     image: jamswap-pj-mixed:local
     restart: "no"
     environment:
@@ -108,7 +116,7 @@ services:
   # (each node's builder ALPN port = its PORT+1). Whichever authors on the winning
   # branch reports the package.
   builder:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.9.1}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -127,7 +135,7 @@ services:
 
   # CE-129 storage-read bridge: any validator serves reads.
   reader:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:1.9.1}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]

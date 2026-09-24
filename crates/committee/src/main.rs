@@ -215,6 +215,7 @@ fn scenario(_gov_byte: u8) {
         c.extend_from_slice(&account.to_le_bytes());
         c.extend_from_slice(&seq.to_le_bytes());
         c.extend_from_slice(&*kp.sk.sign(&msg, None));
+        c.extend_from_slice(kp.pk.as_ref()); // the signer's key: refine verifies under it
         c
     };
     println!("commit_buy {}", hex(&mk_commit(&ct_buy, 1, &buyer_kp, 1)));

@@ -57,8 +57,8 @@ ends with an **auth trailer** (`bindings ‖ H(input book)`) that `accumulate` �
 read state — checks: pubkey == the account's registered key, `seq` strictly above the
 account's monotonic floor (replay-proof), market-order price within ±10% of the on-chain
 last price, and the input-book hash == the on-chain book (no fabricated resting orders).
-Any failure rejects the round fail-closed. Cost: ~1.31M gas/order (measured) → a signed
-batch is gas-bound at ~3,800 orders; the ZK matcher folds all signatures into one proof.
+Any failure rejects the round fail-closed. Cost: ~5.29M gas/order (measured, GP 0.8.0) → a
+signed batch is gas-bound at ~945 orders; the ZK matcher folds all signatures into one proof.
 
 **Encrypt-until-batch (option 2, sealed orders with no reveal round).** Orders are
 encrypted (ECIES) to an **off-protocol committee** key committed on-chain via `ENC_SETUP`
@@ -73,8 +73,8 @@ must hash-match the on-chain committee (else a swapped committee could steer dec
 and (2) every ciphertext id must already be in the on-chain encrypted-order set
 (consume-or-reject, same defence as `REVEAL`). This removes commit–reveal's reveal round
 and non-reveal griefing; trust is honest-committee for *liveness* only (the DDH proof
-forces honest plaintext). Verifiable-decryption cost is ~n·5.6M gas/order (measured;
-zk-jam-service `spikes/vdec-gas/`), bounding a per-order-verified batch to ~880/n orders.
+forces honest plaintext). Verifiable-decryption cost is ~n·18.7M gas/order (measured, GP 0.8.0;
+zk-jam-service `spikes/vdec-gas/`), bounding a per-order-verified batch to ~267/n orders.
 Crypto lives in `crates/vdec`; the committee sidecar is `crates/committee`; proven e2e by
 `offchain/test_enc_round.py` (honest settles; tampered / wrong-committee / injected all
 rejected).

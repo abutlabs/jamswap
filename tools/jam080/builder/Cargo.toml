@@ -1,0 +1,17 @@
+[package]
+name = "jam080-build"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Build a JAM service/authorizer crate into a GP 0.8.0 .jam blob (polkavm-linker 0.36 JamV1)"
+publish = false
+
+# Standalone: not part of any workspace.
+[workspace]
+
+[dependencies]
+polkavm-linker = "=0.36.0"
+jam-program-blob-common = { version = "=0.1.28", default-features = false }
+codec = { package = "jam-codec", version = "0.1.1", default-features = false, features = ["derive"] }
+serde_json = "1"
+blake2b_simd = "1"

@@ -1,0 +1,28 @@
+[package]
+name = "jam-pvm-common"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = true
+description = "Common logic for JAM PVM crates including services and authorizers"
+
+[lints]
+workspace = true
+
+[dependencies]
+jam-types = { workspace = true }
+polkavm-derive = { workspace = true }
+bounded-collections = { workspace = true }
+codec = { workspace = true }
+
+[target.'cfg(target_env = "polkavm")'.dependencies]
+picoalloc = { workspace = true, features = ["global_allocator_rust"] }
+
+[features]
+default = ["std"]
+std = ["jam-types/std"]
+authorizer = []
+service = []
+logging = []

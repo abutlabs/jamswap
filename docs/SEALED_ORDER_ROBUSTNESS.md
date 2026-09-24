@@ -30,7 +30,7 @@ it proceeds — and they don't share one view of the world:
    │  owner signs a COMMIT = Blake2s256(order‖nonce)      [17B order ‖ 32B nonce]
    ▼
  TAG_COMMIT  ──accumulate──►  append  commitment‖account (36B)  to  b"commits"‖market
-   │            (owner-sig verified in ACCUMULATE, seq-floor replay guard)  lib.rs:807-826
+   │            (owner-sig verified in REFINE since GP 0.8.0; accumulate binds key + seq floor)  lib.rs:807-826
    │
    │   … 10–60 s later on a contested chain the commit ACCUMULATES …
    ▼

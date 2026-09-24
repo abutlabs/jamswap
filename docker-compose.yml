@@ -17,14 +17,12 @@
 # same State_db over CE-129. See lasair/bin/{lasair_client,jamnp_builder,lasair_reader}.ml.
 #
 # All three chain-side services are the ONE `lasair` image (bundles lasair +
-# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=1.6.2, or point at any
+# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=2.0.0, or point at any
 # image (e.g. a local source build) with LASAIR_IMAGE=lasair:local — see the Makefile.
 #
-# Default = 1.9.1, the last GP 0.7.2 client: service/jamswap-service.jam is built with
-# jam-pvm-build 0.1.28 (a GP 0.7.2 SDK), which cannot run on lasair 2.x (GP 0.8.0:
-# renumbered host calls, no sbrk). lasair's `:latest` moves to 2.x with client-v2.0.0;
-# this pin keeps `./dex up` working until the service is rebuilt for 0.8.0 (lasair
-# docs/GP_0_8_0_PLAN.md Phase 7).
+# Default = 2.0.0, the first GP 0.8.0 client. service/jamswap-service.jam is a GP 0.8.0
+# build (tools/jam080), so it needs lasair 2.x; the GP 0.7.2 line (lasair 1.x) ran the
+# 0.7.2 build this repo carried before 2026-09-24.
 
 x-lasair-genesis: &genesis
   # first 4 bytes of blake2b256("lasair-mixed-network-genesis-v1\0") — the client's
@@ -33,7 +31,7 @@ x-lasair-genesis: &genesis
 
 services:
   chain:                              # one lasair process = all 6 validators + service host
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-1.9.1}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.0.0}}
     entrypoint: ["/usr/local/bin/lasair"]
     command:
       - "--own"
@@ -53,7 +51,7 @@ services:
     restart: unless-stopped
 
   builder:                            # CE-133 submit bridge (local HTTP /submit -> QUIC)
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-1.9.1}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.0.0}}
     entrypoint: ["/usr/local/bin/jamnp-builder"]
     environment:
       <<: *genesis
@@ -65,7 +63,7 @@ services:
     restart: unless-stopped
 
   reader:                             # CE-129 storage-read bridge (local HTTP /read -> QUIC)
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-1.9.1}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.0.0}}
     entrypoint: ["/usr/local/bin/lasair-reader"]
     environment:
       <<: *genesis

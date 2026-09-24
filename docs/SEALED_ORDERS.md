@@ -113,8 +113,8 @@ steal or alter).
 - **Rests hidden until it crosses:** like rung 3, a committee-sealed order with no
   counterparty stays hidden (only its ciphertext on-chain) and is retried each auction;
   it is decrypted on-chain only in the round it crosses (see "How sealed orders rest").
-- **Cost:** ~5.6M gas per order per committee member (measured). That bounds a
-  per-order-verified batch to ~880/n orders — which is exactly why rung 1 exists.
+- **Cost:** ~18.7M gas per order per committee member (measured, GP 0.8.0). That bounds
+  a per-order-verified batch to ~267/n orders — which is exactly why rung 1 exists.
 
 **How it runs in Jamswap today:** `docker compose up` builds the committee sidecar
 ([`crates/committee`](../crates/committee/)), commits its keys on-chain at startup, and
@@ -240,8 +240,8 @@ CLOSE                                                              no vote, no c
            [ciphertexts | n proofs/order | signed public orders | resting book]
          builder ──▶ whichever 3 guarantors JAM assigned to the core this slot
 
-t=6→12s  3 guarantors run REFINE:                                 ┐ the n×5.6M gas
-           verify all decryption proofs → combine shares →        │ (≈880/n orders/batch)
+t=6→12s  3 guarantors run REFINE:                                 ┐ the n×18.7M gas
+           verify all decryption proofs → combine shares →        │ (≈267/n orders/batch)
            orders recovered (no secret ever exists on-chain)      ┘ lives here
            verify public-order signatures → MATCHING ENGINE →
            uniform price + fills → sign the work report ──▶ ON-CHAIN

@@ -300,11 +300,13 @@ def api_deposit(b):
     return {"ok": True}
 def api_withdraw(b):
     # signed + replay-proof: the client signs canon(withdraw, handle, asset, amount, nonce)
-    # with its account key; the SERVICE verifies (trustless). We just relay the bytes.
+    # with its account key; the SERVICE verifies (trustless). We relay the bytes plus the
+    # account's registered key (signer_key).
     handle, asset, nonce = int(b["account"]), int(b["asset"]), int(b["nonce"])
     amount = int(b["amount_atomic"])   # client scales + signs the atomic amount
     sig = bytes.fromhex(b["sig"])
-    submit(bytes([TAG_WITHDRAW]) + struct.pack("<IIQQ", handle, asset, amount, nonce) + sig,
+    submit(bytes([TAG_WITHDRAW]) + struct.pack("<IIQQ", handle, asset, amount, nonce) + sig
+           + signer_key(handle),
            check=lambda: nonce_of(handle) > nonce,     # the service bumps the nonce on settle
            detail=f"account {handle} -{disp(amount)} asset {asset}")
     return {"ok": True, "balance": disp(bal(asset, handle))}
@@ -312,7 +314,8 @@ def api_cancel(b):
     # signed cancel of a RESTING (on-chain) order: canon(cancel, handle, market, oid, nonce)
     handle, market, oid, nonce = int(b["account"]), int(b["market"]), int(b["order_id"]), int(b["nonce"])
     sig = bytes.fromhex(b["sig"])
-    submit(bytes([TAG_CANCEL]) + struct.pack("<IIIQ", handle, market, oid, nonce) + sig,
+    submit(bytes([TAG_CANCEL]) + struct.pack("<IIIQ", handle, market, oid, nonce) + sig
+           + signer_key(handle),
            check=lambda: nonce_of(handle) > nonce,
            detail=f"account {handle} cancel order {oid} market {market}")
     return {"ok": True}
@@ -470,6 +473,15 @@ def api_list(b):
     return {"ok": True}
 def pubkey_of_handle(handle):          # b"pk"+handle(4) -> the registered 32-byte key
     v = storage(b"pk" + struct.pack("<I", handle)); return v if len(v) >= 32 else None
+def signer_key(handle):
+    # An account-signed op (withdraw, cancel, sealed commit) carries its signer's key: the
+    # service verifies the signature in refine under this key, and accumulate checks that it
+    # is the account's registered key. (Under GP 0.8.0 one in-PVM ed25519 verify is ~5.3M gas,
+    # more than a work-report's accumulate budget can spare per item.)
+    pk = pubkey_of_handle(handle)
+    if pk is None:
+        raise ValueError(f"account {handle} is not registered")
+    return pk[:32]
 def verify_order_sig(pubkey, msg, sig):
     if not HAVE_NACL:
         return True
@@ -557,7 +569,7 @@ def api_seal_prepare(b):
 def _submit_signed_commit(m, draft, commit_seq, commit_sig):
     # the owner-signed on-chain commitment for a prepared sealed order
     acct = draft["account"]
-    tail = struct.pack("<Q", commit_seq) + commit_sig
+    tail = struct.pack("<Q", commit_seq) + commit_sig + signer_key(acct)
     if ENC_MODE:
         ct = bytes.fromhex(draft["ciphertext"])
         submit(bytes([TAG_ENC_COMMIT]) + struct.pack("<I", m) + ct + struct.pack("<I", acct) + tail)
@@ -788,7 +800,7 @@ SETTLE_HOLD_SECS = float(os.environ.get("SETTLE_HOLD_SECS", "150"))
                           #     SETTLE_HOLD_SECS=18 (3 slots) confirms fast — set it in the compose.
                           # jamswap_settle_reverted_total measures whether the chosen hold is safe.
 MAX_ROUND_ORDERS = int(os.environ.get("MAX_ROUND_ORDERS", "256"))
-                                   # per-round batch cap. Refine gas ~1.31M/signed order and wire
+                                   # per-round batch cap. Refine gas ~5.29M/signed order and wire
                                    # ~130 B/order bound it from above, but there is also a THROUGHPUT
                                    # argument for keeping it SMALL: one round settles per market at a
                                    # time (the in-flight gate), so a giant round that fails to settle
@@ -1046,7 +1058,7 @@ def api_round(b):
     with _lock:                        # snapshot + re-queue atomically so a concurrent
         pend_all = pending.get(m, [])  # api_order during submit isn't dropped
         # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
-        # (~1.31M gas each), so an unbounded batch eventually exceeds any refine
+        # (~5.29M gas each), so an unbounded batch eventually exceeds any refine
         # budget and the round becomes a poison pill that can never settle — while
         # re-queued failures keep GROWING it (observed live: 116-order batches,
         # volume pinned at 0). Oldest orders go first; the overflow waits its turn.

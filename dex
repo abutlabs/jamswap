@@ -26,15 +26,21 @@ cmd=${1:-help}
 case "$cmd" in
   rebuild)
     # rebuild the JAM service PVM blob (the on-chain matching/settlement code) from
-    # source. Needs the jam-pvm-build toolchain on the host (cargo install jam-pvm-build).
-    command -v jam-pvm-build >/dev/null || { echo "jam-pvm-build not on PATH — 'cargo install jam-pvm-build'"; exit 1; }
+    # source with the GP 0.8.0 builder in tools/jam080 (no 0.8.0 SDK is published;
+    # see tools/jam080/README.md). Needs cargo + the nightly-2025-05-10 toolchain.
+    rustup toolchain list 2>/dev/null | grep -q '^nightly-2025-05-10' \
+      || { echo "needs: rustup toolchain install nightly-2025-05-10 --component rust-src"; exit 1; }
+    cargo build --release -q --manifest-path tools/jam080/builder/Cargo.toml
     echo "building service/jamswap-service.jam …"
-    ( cd service && jam-pvm-build )
+    tools/jam080/builder/target/release/jam080-build service --out service
     echo "✓ rebuilt service/jamswap-service.jam ($(wc -c < service/jamswap-service.jam) bytes)"
     echo "  (the DEX code — offchain/ — is bind-mounted, so it needs no rebuild; just ./dex up)"
     ;;
 
   up)
+    # (re)build the genesis minter against the current lasair image: cached when unchanged,
+    # and a stale minter would write genesis with an older lasair's encoding
+    "${COMPOSE[@]}" build -q spec-init
     "${COMPOSE[@]}" up -d
     "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true   # manual trading by default
     echo "net starting — warming up (Safrole tickets + finality bootstrap, ~5 min)…"

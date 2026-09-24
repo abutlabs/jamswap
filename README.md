@@ -38,9 +38,8 @@ The rest of the verbs:
 ./dex rebuild   # only if you changed the on-chain service (service/src/lib.rs)
 ```
 
-Everything runs from the published image (`ghcr.io/abutlabs/lasair`, currently
-arm64 — Apple Silicon native; amd64 riders: `LASAIR_IMAGE=ghcr.io/abutlabs/lasair:1.8.0
-LASAIR_FINALITY=ce192 ./dex up` until the next multi-arch build). All networking is
+Everything runs from the published image (`ghcr.io/abutlabs/lasair:2.0.0`, GP 0.8.0,
+amd64 + arm64). All networking is
 spec **JAMNP-S over QUIC** — orders in as CE-133 work-packages, state out over CE-129,
 finality votes on the draft GRANDPA streams (CE 149–153). No client RPC anywhere.
 

@@ -19,7 +19,14 @@ carries the asterisk noted here.
   commitment to a signable key, not a public hash of the address). **Withdraw**,
   **cancel** (of a resting order), and the **treasury sweep** are verified *in the
   service* (`ed25519-compact`, `verify_strict`-equivalent, `<Bytes>`-framing aware) —
-  a forged or wrong-key operation is rejected. Verified e2e on the 6-validator testnet
+  a forged or wrong-key operation is rejected. Since GP 0.8.0 every signature is checked
+  in **refine**, and accumulate checks only state. One in-PVM verify costs ~5.3M gas,
+  while a work-report's whole accumulate budget is 10M, split across its items. The
+  builder appends the signer's key; refine verifies under it and forwards the key;
+  accumulate requires it to be the account's registered key (or, for governance ops,
+  refine verifies under the baked `GOV_PUBKEY`). The refine output is the service's
+  own result, attested by guarantors and re-run by auditors, so it can't be forged.
+  Verified e2e on the 6-validator testnet
   and unit-tested in `match-engine/src/auth.rs` (accept-valid / reject-tampered /
   reject-wrong-key / `<Bytes>`-wrapped). ed25519 verify traps on the PVM without a
   larger stack — `min_stack_size!(1 MiB)` fixes it (as the sibling zk-jam-service does
@@ -49,15 +56,16 @@ carries the asterisk noted here.
 - Verified e2e on a live lasair-node: a forged order (signed by the wrong key for the
   claimed account) and a replayed seq are both rejected; honest signed rounds clear,
   rest, and settle (`sim/demo.py`, and the builder path end-to-end).
-- Cost: ~1.31M gas per order (measured) → a fully-signed batch is refine-gas-bound at
-  ~3,800 orders/core; the ZK matcher (one proof covers all signatures) is the scaling path.
+- Cost: ~5.29M gas per order (measured, GP 0.8.0) → a fully-signed batch is
+  refine-gas-bound at ~945 orders/core; the ZK matcher (one proof covers all signatures) is the scaling path.
 
 ## Fixed (2026-07-03): sealed-order placement is OWNER-SIGNED and account-bound
 
 - **`TAG_COMMIT`/`TAG_ENC_COMMIT` now carry the owner's ed25519 signature** over
-  `canon(commit, market, account, commit_id, seq)` — verified in `accumulate` against the
-  account's registered key (zero refine gas), with the same monotonic per-account seq
-  floor as orders. Nobody can seal an order onto someone else's account.
+  `canon(commit, market, account, commit_id, seq)`. It was verified in `accumulate` against
+  the account's registered key until GP 0.8.0 made that too expensive. It is now verified
+  in `refine`, and accumulate binds the signer's key to the account's registered key.
+  The same monotonic per-account seq floor as orders applies. Nobody can seal an order onto someone else's account.
 - **Commit/enc set entries are `hash(32) ‖ account(4)`**, and round consumption must match
   BOTH — refine reports the revealed/decrypted order's account alongside its hash, so a
   sealed order can only ever settle for the account that signed its commitment.
@@ -128,7 +136,7 @@ carries the asterisk noted here.
   on-chain committee (committee-hash match) and every ciphertext must be committed
   (consume-or-reject). Trust is honest-committee for **liveness** only — the DDH proof
   forces honest plaintext, so the committee cannot forge or alter an order, only withhold
-  decryption (censorship). Cost ~n·5.6M gas/order (measured). Crypto in `crates/vdec`,
+  decryption (censorship). Cost ~n·18.7M gas/order (measured, GP 0.8.0). Crypto in `crates/vdec`,
   committee in `crates/committee`, proven e2e by `offchain/test_enc_round.py`. The residual
   gap vs a true dark pool (option 1) is that a decrypted order is public at clearing, same
   as commit–reveal — persistent hidden *resting* orders still require the ZK/MPC matcher.

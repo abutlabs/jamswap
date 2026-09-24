@@ -210,7 +210,7 @@ the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
 > **Running your own JAM node?** Jamswap is a fully self-contained JAM **service** —
 > nothing is baked into the client. Any conformant node that speaks JAMNP-S (CE-133
 > work-package submission, CE-129 storage reads) can host it and run the same flow.
-> Build the blob yourself with `cd service && jam-pvm-build -m service`. lasair is
+> Build the blob yourself with `./dex rebuild` (GP 0.8.0, via `tools/jam080`). lasair is
 > just the node we ship it on.
 
 ---

@@ -28,22 +28,22 @@ polkavm_derive::min_stack_size!(4 * 1024 * 1024);
 // Public rounds now go exclusively through TAG_SMATCH, whose orders are signature-verified
 // in refine — leaving the unsigned path in place would be a downgrade attack.
 const TAG_DEPOSIT: u8 = 1; // [tag][account][asset_id][amount] — fund a balance (Phase-2 faucet)
-const TAG_COMMIT: u8 = 2; // [tag][market][account][commitment(32)] — seal a hidden order
+const TAG_COMMIT: u8 = 2; // owner-signed seal of a hidden order — see authenticate()
 const TAG_REVEAL: u8 = 3; // unified sealed round — see reveal_output() for the wire layout
-const TAG_CANCEL: u8 = 4; // [tag][market][account][order_id] — cancel a resting order
-const TAG_WITHDRAW: u8 = 5; // [tag][account][asset][amount][nonce][sig(64)] — signed debit
+const TAG_CANCEL: u8 = 4; // owner-signed cancel of a resting order — see authenticate()
+const TAG_WITHDRAW: u8 = 5; // owner-signed debit — see authenticate()
 const TAG_LIST: u8 = 6; // [tag][market][base][quote] — list a market (canonical assets)
-const TAG_REGISTER: u8 = 7; // [tag][pubkey(32)][sig(64)] — bind an ed25519 key to an account handle
-const TAG_TREASURY: u8 = 8; // [tag][asset(4)][amount(8)][dest(4)][nonce(8)][sig(64)] — governance fee sweep
+const TAG_REGISTER: u8 = 7; // self-signed: bind an ed25519 key to an account handle
+const TAG_TREASURY: u8 = 8; // gov-signed fee sweep — see authenticate()
 // --- encrypt-until-batch (option 2): sealed orders decrypted by an off-protocol committee ---
-const TAG_ENC_SETUP: u8 = 9; // gov-signed: [tag][n:u8][committee_pks(n*32)][nonce(8)][sig(64)] — commit the committee keys on-chain
-const TAG_ENC_COMMIT: u8 = 10; // [tag][market(4)][C1(32)][body(ORDER_LEN)] — post an encrypted order (stored by id = H(ciphertext))
+const TAG_ENC_SETUP: u8 = 9; // gov-signed: commit the committee keys on-chain — see authenticate()
+const TAG_ENC_COMMIT: u8 = 10; // owner-signed encrypted order (stored by id = H(ciphertext)) — see authenticate()
 const TAG_ENC_ROUND: u8 = 11; // sealed-encrypted round — see enc_round_output() for the wire layout
 // --- trustless public orders: per-order ed25519 verified IN REFINE (no builder trust) ---
 const TAG_SMATCH: u8 = 12; // signed public round — see parse_public_section() / smatch_output()
-// --- trustless sealed placement: commits are OWNER-SIGNED (verified in accumulate, zero
-// refine gas) and the commit/enc sets bind each entry to its account, so a sealed order can
-// only ever settle for the account that signed its commitment. Carry-forward remainder
+// --- trustless sealed placement: commits are OWNER-SIGNED (verified in refine, like every
+// signature — see authenticate()) and the commit/enc sets bind each entry to its account, so
+// a sealed order can only ever settle for the account that signed its commitment. Carry-forward remainder
 // commits are builder-posted but ALLOWANCE-GATED: a round that partially fills an account's
 // sealed order mints exactly one carry credit for that account (see docs/SECURITY.md).
 const TAG_CARRY_COMMIT: u8 = 13; // [tag][market][account][commitment(32)] — allowance-gated re-seal
@@ -212,6 +212,94 @@ fn sig64(b: &[u8], off: usize) -> [u8; 64] {
     let mut s = [0u8; 64];
     s.copy_from_slice(&b[off..off + 64]);
     s
+}
+
+// ---- signed ops: verified in REFINE, bound to state in ACCUMULATE ---------
+// Every ed25519 signature is checked in refine. Under GP 0.8.0 one in-PVM verify costs
+// ~5.3M gas, while a work-report's WHOLE accumulate budget (G_A) is 10M, shared by all of its
+// items; refine has 5e9. So refine verifies the signature and emits the op with the signature
+// replaced by the key that signed it. accumulate then checks only state: that key is the
+// account's registered key (or the op is gov-signed), and the nonce / seq floor. The output
+// cannot be forged: it is this service's own refine result, attested by the guarantors and
+// re-run by auditors.
+//
+// Payload (builder → refine)                              Output (refine → accumulate)
+//   WITHDRAW  [tag][handle][asset][amount][nonce] sig pk     [..nonce] pk
+//   CANCEL    [tag][handle][market][oid][nonce]   sig pk     [..nonce] pk
+//   COMMIT    [tag][market][account][cid(32)][seq] sig pk    [..seq] pk
+//   ENC_COMMIT [tag][market][C1][body][account][seq] sig pk  [..seq] pk
+//   REGISTER  [tag][pk] sig   (self-signed)                  [tag][pk]
+//   TREASURY  [tag][asset][amount][dest][nonce] sig (GOV)    [..nonce]
+//   ENC_SETUP [tag][n][pks(n*32)][nonce] sig        (GOV)    [..nonce]
+// For account-signed ops the builder appends the account's registered key (pk); a wrong key
+// fails the signature here or the registry check in accumulate.
+const WITHDRAW_BODY: usize = 1 + 4 + 4 + 8 + 8;
+const CANCEL_BODY: usize = 1 + 4 + 4 + 4 + 8;
+const COMMIT_BODY: usize = 1 + 4 + 4 + 32 + 8;
+const ENC_CT_END: usize = 5 + vdec::POINT_LEN + wire::ORDER_LEN; // end of [tag][market][C1][body]
+const ENC_COMMIT_BODY: usize = ENC_CT_END + 4 + 8;
+const TREASURY_BODY: usize = 1 + 4 + 8 + 4 + 8;
+
+// [body][sig][pk] → [body][pk] when sig verifies under pk over msg(body).
+fn account_signed(data: &[u8], body: usize, msg: impl Fn(&[u8]) -> Vec<u8>) -> Option<Vec<u8>> {
+    if data.len() != body + 64 + 32 {
+        return None;
+    }
+    let mut pk = [0u8; 32];
+    pk.copy_from_slice(&data[body + 64..]);
+    if !verify_signed(&pk, &msg(&data[..body]), &sig64(data, body)) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(body + 32);
+    out.extend_from_slice(&data[..body]);
+    out.extend_from_slice(&pk);
+    Some(out)
+}
+
+// [body][sig] → [body] when sig verifies under GOV_PUBKEY over msg(body).
+fn gov_signed(data: &[u8], body: usize, msg: impl Fn(&[u8]) -> Vec<u8>) -> Option<Vec<u8>> {
+    if data.len() != body + 64 || !verify_signed(&GOV_PUBKEY, &msg(&data[..body]), &sig64(data, body)) {
+        return None;
+    }
+    Some(data[..body].to_vec())
+}
+
+// The refine side of every signed op (see the table above). None = drop the op.
+// Message fields are the little-endian integers exactly as the payload carries them.
+fn authenticate(data: &[u8]) -> Option<Vec<u8>> {
+    match data[0] {
+        TAG_WITHDRAW => account_signed(data, WITHDRAW_BODY, |b| {
+            canon(b"withdraw", &[&b[1..5], &b[5..9], &b[9..17], &b[17..25]])
+        }),
+        TAG_CANCEL => account_signed(data, CANCEL_BODY, |b| {
+            canon(b"cancel", &[&b[1..5], &b[5..9], &b[9..13], &b[13..21]])
+        }),
+        TAG_COMMIT => account_signed(data, COMMIT_BODY, |b| {
+            let mut cid = [0u8; 32];
+            cid.copy_from_slice(&b[9..41]);
+            commit_msg(ru32(b, 1), ru32(b, 5), &cid, le_u64(&b[41..49]))
+        }),
+        TAG_ENC_COMMIT => account_signed(data, ENC_COMMIT_BODY, |b| {
+            let id = commitment(&b[5..ENC_CT_END]);
+            commit_msg(ru32(b, 1), ru32(b, ENC_CT_END), &id, le_u64(&b[ENC_CT_END + 4..ENC_CT_END + 12]))
+        }),
+        TAG_REGISTER if data.len() == 1 + 32 + 64 => {
+            let mut pk = [0u8; 32];
+            pk.copy_from_slice(&data[1..33]);
+            if !verify_signed(&pk, &canon(b"register", &[&pk]), &sig64(data, 33)) {
+                return None;
+            }
+            Some(data[..33].to_vec())
+        }
+        TAG_TREASURY => gov_signed(data, TREASURY_BODY, |b| {
+            canon(b"treasury", &[&b[1..5], &b[5..13], &b[13..17], &b[17..25]])
+        }),
+        TAG_ENC_SETUP if data.len() >= 2 => {
+            let pks_end = 2 + data[1] as usize * 32;
+            gov_signed(data, pks_end + 8, |b| canon(b"committee", &[&b[1..2], &b[2..pks_end], &b[pks_end..]]))
+        }
+        _ => None,
+    }
 }
 // the canonical (base, quote) a market was listed with, if any.
 fn market_assets(market: u32) -> Option<(u32, u32)> {
@@ -748,10 +836,11 @@ impl Service for Jamswap {
                     None => Vec::new().into(), // bad signature / malformed — round dropped
                 }
             }
-            // echoes for accumulate (auth + state changes happen there, where storage lives)
-            TAG_DEPOSIT | TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_LIST | TAG_REGISTER
-            | TAG_TREASURY | TAG_ENC_SETUP | TAG_ENC_COMMIT | TAG_CARRY_COMMIT
-            | TAG_CARRY_ENC_COMMIT => data.into(),
+            // signed ops: the signature is verified HERE; accumulate binds the key to state
+            TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_REGISTER | TAG_TREASURY | TAG_ENC_SETUP
+            | TAG_ENC_COMMIT => authenticate(&data).map(Into::into).unwrap_or_else(|| Vec::new().into()),
+            // unsigned ops: echoed for accumulate (state changes happen there, where storage lives)
+            TAG_DEPOSIT | TAG_LIST | TAG_CARRY_COMMIT | TAG_CARRY_ENC_COMMIT => data.into(),
             // Sealed-encrypted round (encrypt-until-batch): the committee has decrypted, so
             // refine verifies each partial against the builder-supplied committee keys,
             // recovers each order, and clears — no reveal round, no owner liveness. accumulate
@@ -831,21 +920,18 @@ impl Service for Jamswap {
                     set_bal(asset, account, get_bal(asset, account).saturating_add(amount));
                     set_cust(asset, get_cust(asset).saturating_add(amount));
                 }
-                // signed withdraw: [tag][handle(4)][asset(4)][amount(8)][nonce(8)][sig(64)]
-                // — verify the account key + a matching nonce (replay-proof), THEN debit if funded.
-                TAG_WITHDRAW if out.len() >= 1 + 4 + 4 + 8 + 8 + 64 => {
+                // withdraw, signature verified in refine: [tag][handle(4)][asset(4)][amount(8)]
+                // [nonce(8)][signer pk(32)] — the signer must be the account's registered key
+                // and the nonce must match (replay-proof), THEN debit if funded.
+                TAG_WITHDRAW if out.len() == WITHDRAW_BODY + 32 => {
                     let handle = ru32(&out, 1);
                     let asset = ru32(&out, 5);
                     let amount = le_u64(&out[9..17]);
                     let nonce = le_u64(&out[17..25]);
-                    let sig = sig64(&out, 25);
-                    let Some(pk) = pubkey_of(handle) else { continue };
-                    let msg = canon(
-                        b"withdraw",
-                        &[&handle.to_le_bytes(), &asset.to_le_bytes(), &amount.to_le_bytes(), &nonce.to_le_bytes()],
-                    );
-                    if nonce != get_nonce(handle) || !verify_signed(&pk, &msg, &sig) {
-                        continue; // wrong key, tampered, or replayed
+                    if pubkey_of(handle).as_ref().map(|k| &k[..]) != Some(&out[WITHDRAW_BODY..])
+                        || nonce != get_nonce(handle)
+                    {
+                        continue; // not the account's key, or replayed
                     }
                     set_nonce(handle, nonce + 1); // consume the nonce whenever auth passes
                     let b = get_bal(asset, handle);
@@ -854,22 +940,21 @@ impl Service for Jamswap {
                         set_cust(asset, get_cust(asset).saturating_sub(amount));
                     }
                 }
-                // OWNER-SIGNED sealed commit: [tag][market(4)][account(4)][commitment(32)]
-                // [seq(8)][sig(64)] — only the account's registered key can seal an order onto
-                // it (sig over canon(commit, market, account, commitment, seq); same monotonic
-                // seq floor as orders, so a captured commit signature can't be replayed).
-                TAG_COMMIT if out.len() >= 1 + 4 + 4 + 32 + 8 + 64 => {
+                // OWNER-SIGNED sealed commit, signature verified in refine: [tag][market(4)]
+                // [account(4)][commitment(32)][seq(8)][signer pk(32)] — only the account's
+                // registered key can seal an order onto it (sig over canon(commit, market,
+                // account, commitment, seq)); same monotonic seq floor as orders, so a captured
+                // commit signature can't be replayed.
+                TAG_COMMIT if out.len() == COMMIT_BODY + 32 => {
                     let market = ru32(&out, 1);
                     let account = ru32(&out, 5);
                     let mut cid = [0u8; 32];
                     cid.copy_from_slice(&out[9..41]);
                     let seq = le_u64(&out[41..49]);
-                    let sig = sig64(&out, 49);
-                    let Some(pk) = pubkey_of(account) else { continue };
-                    if seq <= get_seq_floor(account)
-                        || !verify_signed(&pk, &commit_msg(market, account, &cid, seq), &sig)
+                    if pubkey_of(account).as_ref().map(|k| &k[..]) != Some(&out[COMMIT_BODY..])
+                        || seq <= get_seq_floor(account)
                     {
-                        continue; // forged, replayed, or not the account owner
+                        continue; // not the account owner, or replayed
                     }
                     set_seq_floor(account, seq);
                     gc_commits(market, slot); // reap this market's expired commits first
@@ -900,20 +985,17 @@ impl Service for Jamswap {
                     set_storage(&key, &commits).ok();
                     cage_add(market, &out[9..41], account, slot); // index it for TTL
                 }
-                // signed cancel: [tag][handle(4)][market(4)][order_id(4)][nonce(8)][sig(64)]
-                // — only the account that owns the resting order can remove it.
-                TAG_CANCEL if out.len() >= 1 + 4 + 4 + 4 + 8 + 64 => {
+                // cancel, signature verified in refine: [tag][handle(4)][market(4)][order_id(4)]
+                // [nonce(8)][signer pk(32)] — only the account that owns the resting order can
+                // remove it.
+                TAG_CANCEL if out.len() == CANCEL_BODY + 32 => {
                     let handle = ru32(&out, 1);
                     let market = ru32(&out, 5);
                     let oid = ru32(&out, 9);
                     let nonce = le_u64(&out[13..21]);
-                    let sig = sig64(&out, 21);
-                    let Some(pk) = pubkey_of(handle) else { continue };
-                    let msg = canon(
-                        b"cancel",
-                        &[&handle.to_le_bytes(), &market.to_le_bytes(), &oid.to_le_bytes(), &nonce.to_le_bytes()],
-                    );
-                    if nonce != get_nonce(handle) || !verify_signed(&pk, &msg, &sig) {
+                    if pubkey_of(handle).as_ref().map(|k| &k[..]) != Some(&out[CANCEL_BODY..])
+                        || nonce != get_nonce(handle)
+                    {
                         continue;
                     }
                     set_nonce(handle, nonce + 1);
@@ -923,30 +1005,23 @@ impl Service for Jamswap {
                         orders.into_iter().filter(|o| !(o.account == handle && o.id == oid)).collect();
                     set_storage(&book_key, &wire::encode_orders(&kept)).ok();
                 }
-                // signed register: [tag][pubkey(32)][sig(64)] — bind an ed25519 key to a handle
-                TAG_REGISTER if out.len() >= 1 + 32 + 64 => {
+                // register, self-signature verified in refine: [tag][pubkey(32)] — bind the key
+                // to a handle
+                TAG_REGISTER if out.len() == 1 + 32 => {
                     let mut pk = [0u8; 32];
                     pk.copy_from_slice(&out[1..33]);
-                    let sig = sig64(&out, 33);
-                    let msg = canon(b"register", &[&pk]);
-                    if verify_signed(&pk, &msg, &sig) {
-                        register_key(&pk);
-                    }
+                    register_key(&pk);
                 }
-                // governance treasury sweep: [tag][asset(4)][amount(8)][dest(4)][nonce(8)][sig(64)]
-                // — only the baked GOV_PUBKEY can move accrued fees out of FEE_ACCOUNT.
-                TAG_TREASURY if out.len() >= 1 + 4 + 8 + 4 + 8 + 64 => {
+                // governance treasury sweep, GOV_PUBKEY signature verified in refine: [tag]
+                // [asset(4)][amount(8)][dest(4)][nonce(8)] — only the baked governance key can
+                // move accrued fees out of FEE_ACCOUNT.
+                TAG_TREASURY if out.len() == TREASURY_BODY => {
                     let asset = ru32(&out, 1);
                     let amount = le_u64(&out[5..13]);
                     let dest = ru32(&out, 13);
                     let nonce = le_u64(&out[17..25]);
-                    let sig = sig64(&out, 25);
                     let gov_nonce = get_storage(b"govnonce").map(|v| le_u64(&v)).unwrap_or(0);
-                    let msg = canon(
-                        b"treasury",
-                        &[&asset.to_le_bytes(), &amount.to_le_bytes(), &dest.to_le_bytes(), &nonce.to_le_bytes()],
-                    );
-                    if nonce != gov_nonce || !verify_signed(&GOV_PUBKEY, &msg, &sig) {
+                    if nonce != gov_nonce {
                         continue;
                     }
                     set_storage(b"govnonce", &(nonce + 1).to_le_bytes()).ok();
@@ -1059,18 +1134,17 @@ impl Service for Jamswap {
                 // gov-signed committee setup: [tag][n:u8][pks n*32][nonce(8)][sig(64)]
                 // — commits the encrypt-until-batch committee keys on-chain. Only GOV_PUBKEY
                 // can set/rotate them (same authority as the treasury), nonce-protected.
-                TAG_ENC_SETUP if out.len() >= 1 + 1 + 8 + 64 => {
+                // [tag][n][pks(n*32)][nonce(8)], GOV_PUBKEY signature verified in refine
+                TAG_ENC_SETUP if out.len() >= 1 + 1 + 8 => {
                     let n = out[1] as usize;
                     let pks_end = 2 + n * 32;
-                    if out.len() != pks_end + 8 + 64 {
-                        continue; // exact-length: n keys + nonce + sig
+                    if out.len() != pks_end + 8 {
+                        continue; // exact-length: n keys + nonce
                     }
                     let pks = &out[2..pks_end];
                     let nonce = le_u64(&out[pks_end..pks_end + 8]);
-                    let sig = sig64(&out, pks_end + 8);
                     let com_nonce = get_storage(b"comnonce").map(|v| le_u64(&v)).unwrap_or(0);
-                    let msg = canon(b"committee", &[&[n as u8], pks, &nonce.to_le_bytes()]);
-                    if nonce != com_nonce || !verify_signed(&GOV_PUBKEY, &msg, &sig) {
+                    if nonce != com_nonce {
                         continue;
                     }
                     set_storage(b"comnonce", &(nonce + 1).to_le_bytes()).ok();
@@ -1080,24 +1154,19 @@ impl Service for Jamswap {
                     blob.extend_from_slice(pks);
                     set_storage(b"committee", &blob).ok();
                 }
-                // OWNER-SIGNED encrypted-order commit:
-                // [tag][market(4)][C1(32)][body(ORDER_LEN)][account(4)][seq(8)][sig(64)]
+                // OWNER-SIGNED encrypted-order commit, signature verified in refine:
+                // [tag][market(4)][C1(32)][body(ORDER_LEN)][account(4)][seq(8)][signer pk(32)]
                 // — record id = H(C1‖body) ‖ account in the market's encset; the sig (over the
                 // same canon(commit, market, account, id, seq) as commit–reveal) proves the
                 // account owner posted this ciphertext. The ciphertext reveals nothing until
                 // the committee decrypts it in a round — and it can only settle for `account`.
-                TAG_ENC_COMMIT
-                    if out.len() >= 1 + 4 + vdec::POINT_LEN + wire::ORDER_LEN + 4 + 8 + 64 =>
-                {
+                TAG_ENC_COMMIT if out.len() == ENC_COMMIT_BODY + 32 => {
                     let market = ru32(&out, 1);
-                    let ct_end = 5 + vdec::POINT_LEN + wire::ORDER_LEN;
-                    let id = commitment(&out[5..ct_end]);
-                    let account = ru32(&out, ct_end);
-                    let seq = le_u64(&out[ct_end + 4..ct_end + 12]);
-                    let sig = sig64(&out, ct_end + 12);
-                    let Some(pk) = pubkey_of(account) else { continue };
-                    if seq <= get_seq_floor(account)
-                        || !verify_signed(&pk, &commit_msg(market, account, &id, seq), &sig)
+                    let id = commitment(&out[5..ENC_CT_END]);
+                    let account = ru32(&out, ENC_CT_END);
+                    let seq = le_u64(&out[ENC_CT_END + 4..ENC_CT_END + 12]);
+                    if pubkey_of(account).as_ref().map(|k| &k[..]) != Some(&out[ENC_COMMIT_BODY..])
+                        || seq <= get_seq_floor(account)
                     {
                         continue;
                     }

@@ -1,0 +1,15 @@
+# One cargo workspace for the on-chain service and everything it links (crates/ and the
+# GP 0.8.0 SDK in tools/jam080). Cargo hashes a path dependency into symbol names by its
+# place in the workspace, but by its ABSOLUTE path when it sits outside the workspace, and
+# that reaches the code layout. With this root, `./dex rebuild` reproduces the committed
+# service/jamswap-service.jam byte for byte from any clone.
+[workspace]
+resolver = "2"
+members = ["service"]
+# host-side packages built on their own (the committee sidecar, the simulator, the builder)
+exclude = ["crates/committee", "sim/engine-sim", "tools/jam080/builder"]
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = 'z'

@@ -6,14 +6,12 @@ license = "Apache-2.0"
 description = "Jamswap JAM service: FBA matching in refine, settlement in accumulate"
 
 [dependencies]
-jam-pvm-common = { version = "0.1.26", default-features = false, features = ["service"] }
-polkavm-derive = "0.29"
+# GP 0.8.0 SDK: crates.io jam-pvm-common stops at 0.1.28 (GP 0.7.2); see tools/jam080/README.md
+jam-pvm-common = { path = "../tools/jam080/jam-pvm-common", default-features = false, features = ["service"] }
+polkavm-derive = "0.36"
 match-engine = { path = "../crates/match-engine" }
 vdec = { path = "../crates/vdec" }
 setops = { path = "../crates/setops" }
 blake2 = { version = "0.10", default-features = false }
 
-[profile.release]
-panic = "abort"
-lto = true
-opt-level = 'z'
+# release profile: the workspace root (../Cargo.toml)

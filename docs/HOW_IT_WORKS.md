@@ -123,9 +123,9 @@ when* — not whether it cleared honestly.
 Two resources, two meters: **compute** is bought per-slot (refine gas), **state** is
 bought per-byte (**JAMKB** — JAM's proposed token pricing validator RAM at 1 JAMKB = 1 KB).
 
-- **Throughput (measured in lasair's PVM):** a public-order batch is gas-bound at
-  **~3,800 orders per 6-second batch per core**; committee-sealed orders at **~880/n**
-  (n = committee size); the ZK dark-pool clears **~27,500–68,900** orders with one flat
+- **Throughput (measured in lasair's PVM, GP 0.8.0 gas):** a public-order batch is
+  gas-bound at **~945 orders per 6-second batch per core**; committee-sealed orders at
+  **~267/n** (n = committee size); the ZK dark-pool clears **~27,500–68,900** orders with one flat
   proof. The full tables, what binds each privacy rung, and how big orders accumulate
   fills across batches: [`docs/THROUGHPUT.md`](docs/THROUGHPUT.md).
 - **JAMKB:** Jamswap aims to be a grounded example in how JAMKB will be utilized in a 

@@ -128,6 +128,21 @@ def run_auction():
     return post("/api/round", {"market": MARKET, "base": DOT, "quote": USDC})
 
 
+def wait_for(pred, what, timeout=300):
+    # Over JAMNP-S/QUIC a submission returns once a guarantor has it; the state change lands
+    # when the work-report accumulates (and a settlement after its finality hold), several
+    # slots later. So every on-chain effect is awaited, not read back immediately.
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if pred():
+            return time.time() - t0
+        time.sleep(2)
+    raise AssertionError(f"timed out after {timeout}s waiting for {what}")
+
+
+REST_WINDOW = 45   # ~7 auctions (AUCTION_SECS = 6): long enough for a lone order to clear if it would
+
+
 def pending_count(account):
     return len(get(f"/api/mine?account={account}").get("orders", []))
 
@@ -149,7 +164,7 @@ def main():
     # fund the two sides (faucet; no signing needed)
     deposit(SELLER, DOT, QTY)      # seller needs base to sell
     deposit(BUYER, USDC, QTY * PRICE)   # buyer needs quote to buy
-    assert balance(SELLER, DOT) >= QTY and balance(BUYER, USDC) >= QTY * PRICE, "funding failed"
+    wait_for(lambda: balance(SELLER, DOT) >= QTY and balance(BUYER, USDC) >= QTY * PRICE, "funding")
     seller_usdc_before = balance(SELLER, USDC)
     buyer_dot_before = balance(BUYER, DOT)
 
@@ -157,6 +172,7 @@ def main():
     place(SELLER, "sell", sealed=True)
     assert pending_count(SELLER) == 1, "sealed sell should be queued"
     run_auction()
+    time.sleep(REST_WINDOW)          # the server auctions every 6 s on its own
     assert balance(SELLER, USDC) == seller_usdc_before, "R1: no settlement expected (nothing crossed)"
     assert pending_count(SELLER) == 1, \
         "R1 REGRESSION: the sealed sell must REST hidden, not be immediate-or-cancel"
@@ -165,15 +181,19 @@ def main():
     # ── Round 2: a sealed BUY that crosses -> both settle ──
     place(BUYER, "buy", sealed=True)
     run_auction()
+    took = wait_for(lambda: balance(BUYER, DOT) > buyer_dot_before
+                    and pending_count(SELLER) == 0 and pending_count(BUYER) == 0,
+                    "the crossing sealed round to settle")
     seller_usdc_after = balance(SELLER, USDC)
     buyer_dot_after = balance(BUYER, DOT)
-    FEE = 0.03  # flat per-filled-order fee in the base asset (FEE_FLAT=300 atomic in the service)
-    assert abs((buyer_dot_after - buyer_dot_before) - (QTY - FEE)) < 1e-6, \
-        f"R2: buyer must receive {QTY} DOT − {FEE} fee, got {buyer_dot_after - buyer_dot_before}"
+    # sealed reveals trade fee-free: the flat per-order fee rides the PUBLIC order bindings
+    # only (service apply_settlement, a deliberate simplification — docs/TOKENS.md)
+    assert abs((buyer_dot_after - buyer_dot_before) - QTY) < 1e-6, \
+        f"R2: buyer must receive {QTY} DOT (sealed: no fee), got {buyer_dot_after - buyer_dot_before}"
     assert seller_usdc_after > seller_usdc_before, \
         f"R2: seller must receive USDC proceeds, got {seller_usdc_after - seller_usdc_before}"
     assert pending_count(SELLER) == 0 and pending_count(BUYER) == 0, "both orders should have cleared"
-    print(f"round 2: sealed BUY crosses the resting SELL -> SETTLED "
+    print(f"round 2: sealed BUY crosses the resting SELL -> SETTLED in {took:.0f}s "
           f"(buyer +{QTY} DOT, seller +{seller_usdc_after - seller_usdc_before} USDC) ✓")
     print("\nALL ASSERTIONS PASSED — sealed orders rest hidden across auctions and cross "
           "a later counterparty (the reported bug is fixed, verified e2e on lasair).")

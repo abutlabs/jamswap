@@ -1,33 +1,40 @@
 # Throughput & costs (measured, per 6-second batch)
 
 How many orders fit in one Jamswap batch, what each order type costs, and what
-actually binds each privacy rung. All numbers measured in Lasair's PVM
-(`spikes/crypto-gas/`, `spikes/fba-zk/`, `spikes/vdec-gas/`), per work package on
-**one core** at the full-spec refine budget (5×10⁹ gas). The matching itself is never
-the limit (7,476 gas cleared 3 orders) — what binds is per-order *validation*:
+actually binds each privacy rung. All numbers are **GP 0.8.0 gas**, per work package
+on **one core** at the full-spec refine budget (5×10⁹ gas). They were measured in
+lasair's PVM from zk-jam-service's gas spikes (`spikes/crypto-gas`, `vdec-gas`,
+`groth16-gas`, `fba-zk`) rebuilt for 0.8.0 by `tools/jam080/measure-gas.sh`. The
+polkavm reference interpreter reproduces each figure exactly (lasair
+`scripts/pvm-refine-differential.sh`). GP 0.8.0 prices gas per basic block with a
+pipeline model, not 1 gas per instruction, so these are about 4× the GP 0.7.2
+figures this page used to quote.
 
-The 880 is how many committee-share verifications fit in one batch's gas budget.
+The matching itself is never the limit (3 orders cleared in 7,476 gas under GP 0.7.2,
+not re-measured). What binds is per-order *validation*.
+
+The 267 below is how many committee-share verifications fit in one batch's gas budget.
 ```
 5,000,000,000 gas   (one core's refine budget per 6s work package, full spec)
-÷     ~5,680,000 gas (measured cost to verify ONE committee member's decryption share)
-≈           880      share-verifications per batch
+÷    18,722,000 gas (measured cost to verify ONE committee member's decryption share)
+≈           267      share-verifications per batch
 ```
-Then the /n: each sealed order needs all n members' shares verified (that's what
-removes trust in the committee — every share is proven honest, per order). So one
-order consumes n of your 880 verification "slots":
+Then divide by n. Each sealed order needs all n members' shares verified, which is
+what removes trust in the committee: every share is proven honest, per order. So one
+order uses n of the 267 verification slots:
 
 ```
-- n = 1 → 880 orders/batch
-- n = 5 → 880 ÷ 5 = 176 orders/batch
-- n = 10 → 88 orders/batch
+- n = 1 → ~260 orders/batch   (19.2 M gas per order, measured)
+- n = 5 → ~53 orders/batch    (94.1 M gas per order, measured)
+- n = 10 → ~26 orders/batch
 ```
 
 | Order type | Refine cost per order | Binding limit | ~Orders per batch | Scales with |
 |---|---|---|---|---|
-| **Public** (signed; ed25519 verified in `refine`) | 1.31 M gas | refine gas | **~3,800** | **cores** — more markets on more cores, linear |
-| **Sealed — commit–reveal** (rung 3) | 2.7k gas reveal check (+1.31 M if sig-verified) | refine gas | **~3,800** | cores |
-| **Sealed — encrypt-until-batch** (rung 2, default) | ~n × 5.6 M gas (n = committee size) | refine gas | **~880/n** (n=5 → ~176) | **cores × (880 ÷ n)** — inversely with committee size: every member proves per order, so a bigger committee buys trust/liveness at the direct cost of throughput; the scaling answer is rung 1 |
-| **Sealed — ZK dark-pool** (rung 1, spiked) | ~0 — one 60.1 M-gas proof settles the batch, flat | input size (W_B ≈ 13.15 MiB) | **~27,500–68,900** | cores × prover capacity; on-chain cost flat in order count |
+| **Public** (signed; ed25519 verified in `refine`) | 5.29 M gas | refine gas | **~945** | **cores**: more markets on more cores, linear |
+| **Sealed — commit–reveal** (rung 3) | 10.1k gas reveal check (+5.29 M if sig-verified) | refine gas | **~945** | cores |
+| **Sealed — encrypt-until-batch** (rung 2, default) | ~n × 18.7 M gas (n = committee size) | refine gas | **~267/n** (n=5 → ~53) | **cores × (267 ÷ n)**. Inverse in committee size: every member proves per order, so a bigger committee buys trust and liveness at the direct cost of throughput. The scaling answer is rung 1 |
+| **Sealed — ZK dark-pool** (rung 1, spiked) | ~0: one 260 M-gas proof settles the batch, flat | input size (W_B ≈ 13.15 MiB) | **~27,500–68,900** | cores × prover capacity; on-chain cost flat in order count |
 
 Two independent resources, two meters: **compute** is bought per-slot (coretime/gas —
 the table above), **state** is bought per-byte (JAMKB — see

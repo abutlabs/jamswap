@@ -125,7 +125,7 @@ def main():
         cmsg = canon(b"commit", struct.pack("<I", market), struct.pack("<I", acct), cid,
                      struct.pack("<Q", seq))
         return (bytes([2]) + struct.pack("<II", market, acct) + cid
-                + struct.pack("<Q", seq) + sk.sign(cmsg).signature)
+                + struct.pack("<Q", seq) + sk.sign(cmsg).signature + bytes(sk.verify_key))
     for (o, n), sk in zip(a_orders, (ALICE, BOB)):
         acct = struct.unpack_from("<I", o)[0]
         SEQ[acct] = SEQ.get(acct, 0) + 1
@@ -185,7 +185,8 @@ def main():
     nonce = int.from_bytes(storage(b"nc" + struct.pack("<I", handle)) or b"\0", "little")
     msg = canon(b"cancel", struct.pack("<I", handle), struct.pack("<I", M_A),
                 struct.pack("<I", 10), struct.pack("<Q", nonce))
-    submit(bytes([4]) + struct.pack("<IIIQ", handle, M_A, 10, nonce) + ALICE.sign(msg).signature)
+    submit(bytes([4]) + struct.pack("<IIIQ", handle, M_A, 10, nonce) + ALICE.sign(msg).signature
+           + bytes(ALICE.verify_key))
     line(f"Alice (handle {handle}) SIGNS a cancel of order 10 -> {show_book(M_A)} resting orders")
     # a cancel signed by the WRONG key is rejected
     n2 = int.from_bytes(storage(b"nc" + struct.pack("<I", handle)) or b"\0", "little")
@@ -193,7 +194,8 @@ def main():
     bad = key("not-alice")
     bmsg = canon(b"cancel", struct.pack("<I", handle), struct.pack("<I", M_A),
                  struct.pack("<I", 11), struct.pack("<Q", n2))
-    submit(bytes([4]) + struct.pack("<IIIQ", handle, M_A, 11, n2) + bad.sign(bmsg).signature)
+    submit(bytes([4]) + struct.pack("<IIIQ", handle, M_A, 11, n2) + bad.sign(bmsg).signature
+           + bytes(bad.verify_key))
     line(f"a cancel signed by the WRONG key -> order 11 still rests: {show_book(M_A)} (rejected ✓)")
 
     h("MEV-resistance — an UNCOMMITTED sealed order is rejected")

@@ -1,0 +1,6 @@
+# build context = the repo root; ship sources, not build output
+.git
+**/target
+**/__pycache__
+**/*.pyc
+**/node_modules

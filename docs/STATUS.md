@@ -7,10 +7,22 @@ proven results see [`M1_DEMO.md`](M1_DEMO.md).
 Kickoff was 2026-06-30; the core matching engine landed first, then settlement,
 resting orders, sealing, and the trading layer on top.
 
+## Open: GP 0.8.0 migration (2026-09-24)
+
+jamswap runs on lasair 2.0.0 (GP 0.8.0). The service is built with `tools/jam080`
+(no public 0.8.0 SDK exists), and every signature is now verified in refine: one ed25519
+verify costs ~5.3M gas under 0.8.0, more than a work-report's accumulate budget can spare
+per item. On the all-lasair net, sealed orders pass the zero-loss check, and the signed
+register / withdraw / cancel / commit paths pass `offchain/test_sealed_resting_e2e.py` and
+`offchain/test_signed_ops_e2e.py`. **Known issue:** in a 20-minute soak, PUBLIC rounds of
+~15–37 orders never settled ("never settled — re-queued N order(s)"), and clearing SLO was
+0.49 against 0.9999. Small rounds settle. Under investigation.
+
 ## Done
 
 - ✅ **Owner-signed sealed commits (2026-07-03)** — `TAG_COMMIT`/`TAG_ENC_COMMIT` carry the
-  owner's signature (verified in accumulate, zero refine gas); commit/enc set entries are
+  owner's signature (verified in refine since GP 0.8.0; accumulate binds the signer's key
+  to the account); commit/enc set entries are
   `hash‖account` and consumption matches both, so a sealed order settles only for its
   committer. Carry-forward re-seals are **allowance-gated** (one credit per genuine partial
   fill). Verified e2e: forged commits, unsigned commits, and no-allowance carries all
@@ -53,7 +65,7 @@ resting orders, sealing, and the trading layer on top.
   `accumulate` checks defeat a malicious builder (committee-hash match +
   consume-or-reject ciphertext ids). Crypto in [`crates/vdec`](../crates/vdec/),
   sidecar in [`crates/committee`](../crates/committee/), proven e2e by
-  [`offchain/test_enc_round.py`](../offchain/test_enc_round.py). ~n·5.6M gas/order.
+  [`offchain/test_enc_round.py`](../offchain/test_enc_round.py). ~n·18.7M gas/order (GP 0.8.0).
   See [`SEALED_ORDERS.md`](SEALED_ORDERS.md).
 - 🔬 **Sealed orders — ZK dark-pool (rung 1)** — proven in a spike
   (`zk-jam-service/spikes/fba-zk/`): a Groth16 proof of a correct, optimal,

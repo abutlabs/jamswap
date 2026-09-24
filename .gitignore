@@ -1,6 +1,10 @@
 /target
 **/target
 Cargo.lock
+# pinned dependency graphs: the workspace that builds the committed service blob, and
+# the GP 0.8.0 builder binary
+!/Cargo.lock
+!tools/jam080/builder/Cargo.lock
 *.jam
 # the deployable service blob — committed so `docker compose up` runs from a fresh clone
 !service/jamswap-service.jam

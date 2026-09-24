@@ -5,6 +5,17 @@ MEV-resistant sealed-order trading on JAM. Every claim below is grounded in the 
 (GP v0.7.2), zk-jam-service, or jamswap source, cited as `file:line`. Lasair paths are
 relative to the lasair repo root.
 
+> **GP 0.8.0 update (2026-09-24).** This page was written against lasair's GP 0.7.2
+> code, and its `file:line` citations point at that code (tag `gp-0.7.2-final`). Under
+> GP 0.8.0 (lasair 2.x), gas is charged per basic block by a pipeline model instead of
+> 1 per instruction. Every measured crypto cost below therefore rose about 4×. The
+> 0.8.0 figures are given inline, and the full table is in [`THROUGHPUT.md`](THROUGHPUT.md).
+> They come from `tools/jam080/measure-gas.sh`, and the polkavm interpreter reproduces
+> each one exactly. Host-call ids are renumbered (`grow_heap` = 1, no `sbrk`), lasair
+> now implements historical_lookup and the inner-PVM calls, and services are built
+> with [`tools/jam080`](../tools/jam080/). The architectural conclusions stand, and
+> the gas-bound batch sizes shrink about 4×.
+
 **TL;DR for the architecture ranking:** the threshold-committee branch (option 2) **is
 reachable** on lasair — but not as a host call. A threshold-decrypt host call would be
 nondeterministic, and lasair's audit/dispute model would slash the guarantors who signed
@@ -12,7 +23,8 @@ the report. The live seam is *decrypt-outside, inject-as-public-data*: a committ
 decrypts off-protocol and the work-package builder attaches the plaintext (or the
 decryption shares) as package-committed payload/extrinsic bytes, so refine stays a pure
 function. The ZK dark-pool branch (option 1) is verify-side cheap: Groth16/BN254 verify
-is measured at ~56M gas ≈ 1.1% of the full refine budget. The batch bound is **input
+is measured at ~247M gas under GP 0.8.0, ≈ 4.9% of the full refine budget (~56M, 1.1%,
+under 0.7.2). The batch bound is **input
 size**, not gas: ~25k–69k sealed orders per work-package at 500–200 B/order.
 
 ---
@@ -39,13 +51,14 @@ size**, not gas: ~25k–69k sealed orders per work-package at 500–200 B/order.
   or the refine/accumulate loops. `ed25519_ffi` even has `batch_verify`
   (`lib/ed25519_ffi/ed25519_ffi.ml:28`) but it is unreachable from service code.
 
-So yes: the in-PVM ed25519 cost (measured 1,312,932 gas/verify, Q2) +
+So yes: the in-PVM ed25519 cost (measured 5,286,949 gas/verify under GP 0.8.0;
+1,312,932 under 0.7.2; Q2) +
 `min_stack_size!` is unavoidable on lasair today. There is no host call that
 avoids it.
 
 ## Q2 — Gas model and measured costs
 
-- **1 gas per instruction, flat** (`lib/pvm_decode.ml:627`, charging loop
+- **(GP 0.7.2) 1 gas per instruction, flat** (`lib/pvm_decode.ml:627`, charging loop
   `lib/pvm.ml:827-833`); **10 gas per host call** (e.g. `lib/pvm_host.ml:420`), log
   charging 10 as of GP 0.7.2 (`:1110-1112`), transfer 10 + forwarded allowance
   (`:1177-1182`). This is the Gray Paper schedule, not lasair-specific.
@@ -55,7 +68,13 @@ avoids it.
   (`conformance/refine.ml:159-165` — raised specifically for in-blob SNARK verifiers).
   Node RPC default refine budget is 5e9, overridable via `LASAIR_REFINE_GAS`
   (`node_rpc/node_rpc.ml:71-74`).
-- **Measured numbers (committed):**
+- **GP 0.8.0 (lasair 2.x), re-measured 2026-09-24** with the same spikes rebuilt by
+  `tools/jam080/measure-gas.sh`; polkavm reproduces each figure exactly:
+  ed25519-compact verify **5,286,949**; Blake2s256 (64 B) **10,098**; vdec share
+  **18.7M per committee member** (19.2M at n=1); Groth16 verify **246,884,255** (whole
+  refine); zk-FBA clearing proof **260,389,322**. The list below is the GP 0.7.2
+  original.
+- **Measured numbers (committed, GP 0.7.2):**
   - Groth16/BN254 verify (untrusted proof, subgroup-checked): **56,149,565 gas**
     (zk-jam-service `spikes/groth16-gas/README.md:12`) = 1.12% of full G_R, ~89
     verifies per full refine.
@@ -169,23 +188,27 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
   per-order ed25519 verify in refine is full in-PVM interpretation at 1 gas/instruction.
   At the **measured 1,312,932 gas/verify** (zk-jam-service `spikes/crypto-gas/`), a
   full-spec refine budget of 5e9 gas admits **~3,800 verifies**; tiny (1e9) ~760.
+  Under GP 0.8.0 (5,286,949 gas/verify): **~945** full, ~189 tiny.
   That is well below the input ceiling (~25k–69k orders, Q9), so **signature
   checking becomes the binding constraint** for a signed-order batch — the
   strongest argument for the ZK-matcher architecture: fold signature validity into
-  one off-chain proof (Groth16 verify = 56.1M gas ≈ 43 ed25519 verifies) and check
+  one off-chain proof (Groth16 verify = 246.9M gas ≈ 47 ed25519 verifies under GP 0.8.0;
+  56.1M ≈ 43 under 0.7.2) and check
   nothing per-order on-chain.
 
 ## Q8 — Proof systems verified in a lasair refine
 
 - **Groth16/BN254: measured, twice** — arkworks 0.5 `no_std` (not substrate-bn):
   56.1M gas (spike, trivial circuit) and 59.9M gas (production Semaphore-lite voting
-  circuit, 4 public inputs, verified e2e on a lasair-node). ≈1.1–1.2% of full G_R;
+  circuit, 4 public inputs, verified e2e on a lasair-node), both GP 0.7.2. ≈1.1–1.2% of
+  full G_R. Under GP 0.8.0 the trivial-circuit spike is 246.9M (≈4.9%); the voting
+  circuit was not re-measured;
   needs `min_stack_size!(4 MiB)`; `.jam` blob 78 KB vs 4 MB code limit.
 - **PLONK / STARK / halo2 / Nova: never attempted** on lasair (searched both repos —
   prose mentions only). Extrapolated estimates (unvalidated, flat-gas assumption):
   KZG-PLONK ~40–120M (fine), halo2/IPA 0.3–1.1B (feasible full, tight tiny),
   STARK ~0.5–0.6B (fits full, ~50% of tiny). Nova wrapped in Groth16 collapses to the
-  measured ~56M. **Groth16 remains the right choice**; a PLONK gas spike is cheap to
+  measured ~56M (~247M under 0.8.0). **Groth16 remains the right choice**; a PLONK gas spike is cheap to
   run if a universal setup becomes a requirement.
 
 ## Q9 — Batch bounds for a zk-rollup matcher
@@ -203,15 +226,16 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
 | Accumulate per block G_T | 20M tiny / 3.5e9 full | `lib/spec.ml:55,74` |
 
 - **The batch bound depends on how orders are validated:**
-  - *Signed orders verified per-order in refine:* **gas-bound at ~3,800 orders**
-    (5e9 full ÷ 1.31M gas/ed25519 verify — measured, `spikes/crypto-gas/`), long
-    before the input ceiling.
+  - *Signed orders verified per-order in refine:* **gas-bound at ~945 orders** under
+    GP 0.8.0 (5e9 full ÷ 5.29M gas/ed25519 verify; ~3,800 at 0.7.2's 1.31M; measured,
+    `spikes/crypto-gas/`), long before the input ceiling.
   - *Matching proven off-chain (ZK-matcher):* gas is order-count-independent (one
-    ~56M-gas Groth16 verify), so the batch is **input-bound** at ~13.15 MiB of
+    Groth16 verify: ~247M gas under 0.8.0, ~56M under 0.7.2), so the batch is **input-bound** at ~13.15 MiB of
     bundle → **≈27,500 orders @ 500 B / ≈68,900 @ 200 B** via extrinsic blobs (or
     ~25k/63k via imported segments — each import charges a 4488 B footprint,
     `lib/work_packages.ml:39,312`).
-  - Break-even ≈ 43 orders: above that, one SNARK beats per-order signature checks.
+  - Break-even ≈ 47 orders under GP 0.8.0 (43 under 0.7.2): above that, one SNARK beats
+    per-order signature checks.
 - Output forces the zk-rollup shape regardless: refine must emit a constant-size
   commitment (new book root + fill summary), because per-order output dies at the
   48 KiB report cap; accumulate must be O(1) per batch inside 10M gas.
@@ -263,13 +287,14 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
    each member's partial decryption carrying a Chaum-Pedersen DDH proof; refine verifies
    every proof against the committed committee keys and recovers the order **without any
    secret**. Measured e2e on a lasair-node: **~n × 5.6M gas/order** (n=1 5.34M … n=5
-   27.5M); honest rounds decrypt, tampered proofs rejected. Cost bounds a per-order-
-   verified batch to **~880/n orders** (refine-gas-bound), so above ~10–20 orders a single
+   27.5M) under GP 0.7.2, and **~n × 18.7M** (n=1 19.2M … n=5 94.1M) under 0.8.0; honest
+   rounds decrypt, tampered proofs rejected. Cost bounds a per-order-
+   verified batch to **~880/n orders** (~267/n under 0.8.0; refine-gas-bound), so above ~10–20 orders a single
    batch ZK proof wins — the convergence with option 1. t-of-n is a drop-in (same proof,
    same refine cost).
 3. **Option 1 (ZK dark-pool matcher) is verify-side cheap — PROVEN**: one Groth16
-   proof settles a whole batch in refine at **60.1M gas (1.20% of full G_R),
-   FLAT in order count** (zk-jam-service `spikes/fba-zk/`). The circuit proves
+   proof settles a whole batch in refine at **60.1M gas (1.20% of full G_R; 260.4M,
+   5.2%, under GP 0.8.0), FLAT in order count** (zk-jam-service `spikes/fba-zk/`). The circuit proves
    settlement validity in ZK (every filled order marketable at p*, fills within
    qty, base conservation, bound to a commitment of the hidden orders); a lied
    settlement is rejected. Orders never appear on-chain. **p*-optimality now
@@ -277,7 +302,7 @@ future key compromise ⇒ prefer forward-secure/threshold schemes over encrypt-t
    p* achieves the max matchable volume; a suboptimal/under-filled clearing is
    unsatisfiable; verify gas unchanged since public inputs are unchanged). This
    is also option 2's scaling answer (fold decryption+matching into one proof →
-   the per-order ~n·5.6M vanishes). Remaining work is circuit maturity (larger N)
+   the per-order ~n·5.6M, ~n·18.7M under 0.8.0, vanishes). Remaining work is circuit maturity (larger N)
    + binding orders_commitment to the on-chain sealed set, not the chain.
 4. Batch capacity is generous: tens of thousands of sealed orders per work-package,
    input-bound, provided refine outputs a constant-size commitment and accumulate is O(1).

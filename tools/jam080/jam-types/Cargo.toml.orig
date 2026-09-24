@@ -1,0 +1,30 @@
+[package]
+name = "jam-types"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = true
+description = "JAM protocol datatypes for interoperation between node internals, services and authorizers"
+
+[lints]
+workspace = true
+
+[dependencies]
+bytes = { workspace = true, optional = true }
+codec = { workspace = true }
+bounded-collections = { workspace = true }
+macro_rules_attribute = "0.2"
+atomic-traits = "0.4"
+serde = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[features]
+default = ["std"]
+bytes = ["dep:bytes", "codec/bytes"]
+std = ["bytes/std", "codec/std", "bounded-collections/std"]
+serde = ["dep:serde", "dep:base64", "bounded-collections/serde"]

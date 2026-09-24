@@ -46,7 +46,7 @@ wrong, fix the *oracle* and say so; if the system is wrong, fix the *system*.
      also a legitimate fix)? State the mechanism in one sentence you could defend.
    - **Fix the right project.** Service change ⇒ edit `service/src` or
      `crates/match-engine`, run `cargo test` in the affected crate, rebuild with
-     `cd service && jam-pvm-build -m service`, and **tear down + recreate the net**
+     `./dex rebuild`, and **tear down + recreate the net**
      (new blob ⇒ new genesis). lasair change ⇒ edit + `dune build`/tests + rebuild the
      image. Oracle change ⇒ edit `dex_fuzz.py` and justify why the new expectation is
      the *correct* one.
