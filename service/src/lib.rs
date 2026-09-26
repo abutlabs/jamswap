@@ -12,7 +12,7 @@ use jam_pvm_common::{declare_service, Service};
 use blake2::{Blake2s256, Digest};
 use match_engine::auth::{canon, commit_msg, order_msg, verify_signed};
 use match_engine::floors::{self, FloorStore};
-use match_engine::{carry, round_id};
+use match_engine::{carry, deposit, round_id};
 use match_engine::{clear, resting, wire, Kv, Order, Side};
 
 declare_service!(Jamswap);
@@ -29,7 +29,7 @@ polkavm_derive::min_stack_size!(4 * 1024 * 1024);
 // TAG 0 (unsigned TAG_MATCH) is RETIRED: it let the builder submit orders nobody signed.
 // Public rounds now go exclusively through TAG_SMATCH, whose orders are signature-verified
 // in refine — leaving the unsigned path in place would be a downgrade attack.
-const TAG_DEPOSIT: u8 = 1; // [tag][account][asset_id][amount] — fund a balance (Phase-2 faucet)
+const TAG_DEPOSIT: u8 = 1; // [tag][account][asset_id][amount][nonce] — fund a balance, once per nonce (Phase-2 faucet)
 const TAG_COMMIT: u8 = 2; // owner-signed seal of a hidden order — see authenticate()
 const TAG_REVEAL: u8 = 3; // unified sealed round — see reveal_output() for the wire layout
 const TAG_CANCEL: u8 = 4; // owner-signed cancel of a resting order — see authenticate()
@@ -203,8 +203,9 @@ impl FloorStore for Store {
         set_storage(key, &v.to_le_bytes()).ok();
     }
 }
-// ... and the byte-valued state rules: landed-round markers (match_engine::round_id) and carry
-// credits (match_engine::carry), each host-tested in its module.
+// ... and the byte-valued state rules: landed-round markers (match_engine::round_id), carry
+// credits (match_engine::carry) and deposit idempotency (match_engine::deposit), each
+// host-tested in its module.
 impl Kv for Store {
     fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         get_storage(key)
@@ -842,7 +843,7 @@ impl Service for Jamswap {
             TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_REGISTER | TAG_TREASURY | TAG_ENC_SETUP
             | TAG_ENC_COMMIT => authenticate(&data).map(Into::into).unwrap_or_else(|| Vec::new().into()),
             // unsigned ops: echoed for accumulate (state changes happen there, where storage
-            // lives; a carry's credit is checked there too)
+            // lives; a DEPOSIT's idempotency nonce and a carry's credit are checked there too)
             TAG_DEPOSIT | TAG_LIST | TAG_CARRY_COMMIT | TAG_CARRY_ENC_COMMIT => data.into(),
             // Sealed-encrypted round (encrypt-until-batch): the committee has decrypted, so
             // refine verifies each partial against the builder-supplied committee keys,
@@ -915,13 +916,19 @@ impl Service for Jamswap {
                 continue;
             }
             match out[0] {
-                // [tag][account][asset_id][amount]
-                TAG_DEPOSIT if out.len() >= 1 + 4 + 4 + 8 => {
-                    let account = ru32(&out, 1);
-                    let asset = ru32(&out, 5);
-                    let amount = le_u64(&out[9..17]);
-                    set_bal(asset, account, get_bal(asset, account).saturating_add(amount));
-                    set_cust(asset, get_cust(asset).saturating_add(amount));
+                // faucet deposit: [tag][account(4)][asset_id(4)][amount(8)][nonce(8)] — credited
+                // once per (account, nonce): a duplicated work item (builder fail-over, a
+                // client's re-submit) or a replayed nonce is refused, writing nothing
+                // (match_engine::deposit, host-tested; jamswap#7).
+                TAG_DEPOSIT => {
+                    let Some(d) = deposit::decode(&out) else {
+                        continue; // not exactly 25 bytes (the old nonce-less layout included)
+                    };
+                    if !deposit::admit(&mut Store, d.account, d.nonce) {
+                        continue;
+                    }
+                    set_bal(d.asset, d.account, get_bal(d.asset, d.account).saturating_add(d.amount));
+                    set_cust(d.asset, get_cust(d.asset).saturating_add(d.amount));
                 }
                 // withdraw, signature verified in refine: [tag][handle(4)][asset(4)][amount(8)]
                 // [nonce(8)][signer pk(32)] — the signer must be the account's registered key

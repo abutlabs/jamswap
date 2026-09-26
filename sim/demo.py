@@ -46,8 +46,10 @@ def canon(action, *parts):                              # must match canon() in 
     return b"jamswap:v1:" + action + b"".join(parts)
 def order(acct, oid, side, price, qty):                 # 17 bytes; price/qty scaled to atomic
     return struct.pack("<IIBII", acct, oid, side, price * SCALE, qty * SCALE)
-def deposit(acct, asset, amount):                       # [1][acct][asset][amount] (atomic)
-    return bytes([1]) + struct.pack("<II", acct, asset) + struct.pack("<Q", amount * SCALE)
+DEPOSIT_NONCE = [0]  # the service credits each (account, nonce) once; unique here, never 0
+def deposit(acct, asset, amount):                       # [1][acct][asset][amount][nonce] (atomic)
+    DEPOSIT_NONCE[0] += 1
+    return bytes([1]) + struct.pack("<II", acct, asset) + struct.pack("<QQ", amount * SCALE, DEPOSIT_NONCE[0])
 def match_hdr(tag, market, base, quote):
     return bytes([tag]) + struct.pack("<III", market, base, quote)
 

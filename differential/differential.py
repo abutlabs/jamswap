@@ -85,7 +85,9 @@ def run_scenario(client):
     out["handle"] = handle.hex()
     acct = struct.unpack("<I", handle[:4])[0] if len(handle) >= 4 else 1
     client.item(bytes([6]) + struct.pack("<III", MARKET, BASE, QUOTE))         # LIST
-    client.item(bytes([1]) + struct.pack("<II", acct, QUOTE) + p64(1000 * S))  # DEPOSIT
+    # DEPOSIT [account][asset][amount][nonce]: a fixed idempotency nonce, so both lanes write
+    # the same state and a re-run on a reused chain is refused rather than credited twice
+    client.item(bytes([1]) + struct.pack("<II", acct, QUOTE) + p64(1000 * S) + p64(1))
     out["balance"] = client.poll(b"b" + p32(QUOTE) + p32(acct)).hex()
     print(f"[{client.name}] registered as account {acct} + funded", file=sys.stderr)
     client.item(smatch([signed_order(sk, acct, 10, 0, 80, 5, 1)]))             # SIGNED order

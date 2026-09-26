@@ -254,11 +254,32 @@ def _marketable(m, side, price):
         return False
     return False
 
+# A DEPOSIT carries an idempotency nonce: the service credits each (account, nonce) once, so a
+# duplicated work item (builder fail-over, a re-submit) can't credit twice (jamswap#7; the rule
+# is match_engine::deposit). A nonce must be unique per account and never 0; it need only be
+# roughly increasing (the service tolerates deposits landing out of order). Wall-clock
+# nanoseconds, strictly increasing per process, so a restart never reuses one.
+_deposit_nonce_lock = threading.Lock()
+_deposit_nonce_last = [0]
+def deposit_nonce():
+    with _deposit_nonce_lock:
+        n = max(time.time_ns(), _deposit_nonce_last[0] + 1)
+        _deposit_nonce_last[0] = n
+        return n
+def deposit_payload(acct, asset, amount, nonce=None):
+    # [tag][account][asset][amount][nonce] — crates/match-engine/src/deposit.rs is the layout
+    n = deposit_nonce() if nonce is None else nonce
+    return bytes([TAG_DEPOSIT]) + struct.pack("<IIQQ", acct, asset, amount, n)
+
 # ---- API handlers ---------------------------------------------------------
 def api_deposit(b):
     acct, asset, amount = int(b["account"]), int(b["asset"]), to_atomic(b["amount"])
+    # a caller that may retry this request passes its own nonce, so a retry credits once
+    nonce = int(b["nonce"]) if b.get("nonce") is not None else None
+    if nonce is not None and not 0 < nonce < 2**64:
+        raise ValueError("deposit nonce must be in 1..2^64-1")
     before = bal(asset, acct)
-    submit(bytes([1]) + struct.pack("<IIQ", acct, asset, amount),
+    submit(deposit_payload(acct, asset, amount, nonce),
            check=lambda: bal(asset, acct) >= before + amount,
            detail=f"account {acct} +{disp(amount)} asset {asset}")
     return {"ok": True}
@@ -449,7 +470,7 @@ def api_reserve_topup(b):
     if amount > room:
         raise ValueError(f"top-up capped at {disp(room)} JAMKB (target {disp(target)}); "
                          f"a service holds only what it occupies, not a hoard")
-    submit(bytes([TAG_DEPOSIT]) + struct.pack("<IIQ", FEE_ACCOUNT, JAMKB, amount))
+    submit(deposit_payload(FEE_ACCOUNT, JAMKB, amount))
     return {"ok": True, "reserve_jamkb": disp(bal(JAMKB, FEE_ACCOUNT)), "target_jamkb": disp(target)}
 def api_treasury_status(q):
     return treasury_status()
@@ -1773,7 +1794,7 @@ def ensure_reserve():
         held = bal(JAMKB, FEE_ACCOUNT)
         if held >= target:
             print(f"treasury JAMKB reserve funded: {disp(held)} JAMKB (target {disp(target)})"); return
-        submit(bytes([TAG_DEPOSIT]) + struct.pack("<IIQ", FEE_ACCOUNT, JAMKB, target - held))
+        submit(deposit_payload(FEE_ACCOUNT, JAMKB, target - held))
         print(f"seeded treasury JAMKB reserve -> {disp(bal(JAMKB, FEE_ACCOUNT))} JAMKB (target {disp(target)})")
     except Exception as e:
         print("reserve seeding skipped:", e)

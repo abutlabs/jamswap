@@ -36,7 +36,7 @@ books, sharing one global balance ledger.
 | Tag | Name | Payload | refine | accumulate |
 |---|---|---|---|---|
 | 0 | — | **RETIRED** (was unsigned `MATCH` — deleted so there is no unsigned downgrade path) | — | — |
-| 1 | `DEPOSIT` | account ‖ asset_id ‖ amount(u64) | echo | credit `(asset_id, account)` (Phase-2 faucet; real custody = Phase 3) |
+| 1 | `DEPOSIT` | account ‖ asset_id ‖ amount(u64) ‖ nonce(u64) — exactly 25 B | echo | credit `(asset_id, account)` **once per (account, nonce)**: a nonce at/below the account's floor or already in its window of the last 16 (`b"dn"`) is refused, so a duplicated work item can't credit twice, while deposits landing out of order are each credited (Phase-2 faucet; real custody = Phase 3) |
 | 2 | `COMMIT` | market ‖ account ‖ commitment(32) ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature + the account's **commit** seq floor (`b"sc"`, separate from the order floor), then append `commitment‖account` to the market's set |
 | 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) ‖ *public section* | admit only orders whose `H(order‖nonce)` ∈ commits, verify the public section, then clear | auth-trailer checks (below) **and** consume-or-reject the commitments, then settle |
 | 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
@@ -111,6 +111,7 @@ scales on ingest and de-scales on read, so the UI speaks plain decimals end-to-e
 | `book` ‖ market(4) | orders blob | that market's resting order book |
 | `commits` ‖ market(4) | 36 B × n | that market's pending commitments, `commitment(32) ‖ account(4)` (each consumed by the round that reveals it, or expired by the `cage` age index) |
 | `cw` ‖ market(4) ‖ account(4) | u32 | the account's carry credits in that market (`crates/match-engine/src/carry.rs`) |
+| `dn` ‖ account(4) | floor(u64) ‖ ≤16 × nonce(u64) | the account's deposit floor + window of recent nonces (`crates/match-engine/src/deposit.rs`) |
 | `lp` ‖ market(4), `cv` ‖ market(4) | u64 | that market's last price, cumulative volume |
 | `cust` ‖ asset_id(4) | u64 | custodied total of an asset (deposits +, withdrawals −) |
 | `mkt` ‖ market(4) | base(4) ‖ quote(4) | a listed market's canonical assets |
@@ -294,7 +295,10 @@ Two layers, both proven e2e:
 - Deposits/withdrawals are a **mock custody** model (a faucet credit / a funded
   debit) with the accounting invariant **Σ(balances of an asset) == `cust`[asset]**
   holding by construction (deposit/withdraw touch balance + custody equally; trades
-  conserve). **Real self-custody** — backing deposits with actual on-chain asset
+  conserve). A deposit is credited once per (account, nonce), so a duplicated work
+  item can't mint twice; the builder picks the nonce (wall-clock ns, strictly
+  increasing), and `POST /api/deposit` takes an optional `nonce` so a client that
+  retries its request gets the same deposit. **Real self-custody** — backing deposits with actual on-chain asset
   transfers via `on_transfer`, against the JAM token standard — is the Phase-3
   upgrade, blocked on JAM asset-service maturity (the plan starts on a mock).
 

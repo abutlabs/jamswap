@@ -99,12 +99,23 @@ carries the asterisk noted here.
   the same book, and a copy of a round with a different prune list (which clears
   differently) shared its id too.
 
-## Fixed (2026-09-26): a duplicated carry-commit can't eat another remainder's credit
+## Fixed (2026-09-26): a duplicated work item can't mint a deposit or eat a carry credit
 
 Builders deliver work items at least once: lasair's routes each payload to one guarantor
 and fails over around the ring on an error, other clients' builders promise nothing, and
-the DEX server re-posts a payload whose submit had an unknown outcome.
+the DEX server re-posts a payload whose submit had an unknown outcome. Two unsigned ops were
+not idempotent under that.
 
+- **Deposits (jamswap#7).** `DEPOSIT` credited on every accumulate; a 5 DOT deposit was seen
+  credited 3× under a 6-way fan-out. It now carries a per-account idempotency nonce
+  (`account ‖ asset ‖ amount ‖ nonce`, exactly 25 B; the old 17-byte form is refused), and
+  accumulate credits it only if the nonce is above the account's floor and not in its window
+  of the last 16 credited nonces (`b"dn"‖account`); the smallest evicted nonce becomes the
+  floor. A copy is refused however late it lands. A bare monotonic floor (like the order and
+  commit seq floors) was rejected: two deposits sent back to back reach different guarantors
+  and can accumulate in either order, and it would drop the older one. The rule
+  (`crates/match-engine/src/deposit.rs`) can drop a deposit (one reordered behind 16 newer
+  ones on the same account, or one reusing a nonce), never credit one twice.
 - **Carry credits (jamswap#5).** Credits are per (market, account), and a carry-commit was
   appended without checking the set. When one account had two partial fills in a round, a
   copy of remainder 1's re-seal spent remainder 2's credit; remainder 2 then waited as
@@ -130,10 +141,11 @@ the DEX server re-posts a payload whose submit had an unknown outcome.
   *current* balance; it doesn't reserve funds across multiple pending orders, and the
   settlement clamp at 0 still means an over-matched order could lose value on-chain.
   **Production:** reserve/escrow funds at submission so every matched order is covered.
-- **Work-item replay (non-signed paths).** A `DEPOSIT`/`MATCH` work-item re-submitted is
-  applied again. Deposits are a permissionless faucet (additive, no theft); the signed
-  paths are nonce-protected. **Production:** chain-level inclusion uniqueness, or extend
-  nonces to the match path.
+- **Work-item replay (non-signed paths).** Rounds are replay-proof through their order
+  seq floors and consumed commitments, and deposits through their nonce (above). The
+  deposit faucet is still permissionless: anyone can mint with a fresh nonce, which is
+  what a Phase-2 faucet is. **Production:** real custody (Phase 3), where a deposit is an
+  on-chain transfer and can't be minted at all.
 - **Commit–reveal griefing + builder trust.** A committer who never reveals wastes
   their slot (non-reveal griefing) — threshold/time-lock encryption removes the
   reveal round and this vector. The off-chain **builder** assembles work-packages

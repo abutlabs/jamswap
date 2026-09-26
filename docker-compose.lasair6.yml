@@ -115,7 +115,9 @@ services:
   # CE-133 submit bridge: each work-item goes to ONE validator's builder endpoint
   # (blake2b(payload) mod 6; each node's builder ALPN port = its PORT+1), failing over
   # around the ring on a CE-133 error. Fanning every item to all six made up to six
-  # copies accumulate (the deposit double-credit). LASAIR_BUILDER_FANOUT=all restores it.
+  # copies accumulate (a deposit was credited 3×; the service now credits each deposit
+  # nonce once and refuses a copied carry-commit, jamswap#7/#5).
+  # LASAIR_BUILDER_FANOUT=all restores the fan-out.
   builder:
     image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
