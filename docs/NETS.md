@@ -88,10 +88,12 @@ Two honest paths (from `lasair/docs/FINALITY_PLAN.md`, Phase 3b):
    It defines CE 130 (justification request), CE 149 (vote), CE 150 (commit), CE 151
    (state), CE 152 (catch-up), CE 153 (warp sync), full multi-round GRANDPA types
    (Set Id, Round Number, Target = header hash ‖ posterior state root), and the signing
-   domain `"jam_grandpa_vote"` — **the exact string observed in PolkaJam's binary**, so
-   pj's "private" finality protocol is in fact this draft. Implementing a *published
-   draft spec* is clean-room-safe (it's a public document, not their binary); the risk is
-   only that an unmerged draft can still change (CE numbers were renumbered 2025-11).
+   domain `"jam_grandpa_vote"`. PolkaJam publicly offers `--finality-mode grandpa`;
+   whether its wire protocol is this draft is an open question that only its public
+   behaviour can settle (does a PolkaJam node accept and answer the draft's streams?),
+   and that is what the cross-client finality gates test. Implementing a *published
+   draft spec* is clean-room-safe (it's a public document); the risk is only that an
+   unmerged draft can still change (CE numbers were renumbered 2025-11).
 
 2. **Agree on the *result*, not the votes** (what lasair built, and what's shippable today).
    Each client runs its own gadget internally, and they reconcile via the **one spec field
