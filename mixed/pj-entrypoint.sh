@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Entrypoint for the mixed-network PolkaJam image. Dispatches on ROLE:
-#   ROLE=init       generate the shared genesis spec (runs gen-spec.py, then exits)
+#   ROLE=init       generate the shared genesis spec (runs nets/genesis.py, then exits)
 #   ROLE=validator  run PolkaJam as validator INDEX on the shared spec
 #
 # PolkaJam is used BLACK-BOX; its binary is fetched from the public release at
@@ -11,7 +11,7 @@ ROLE="${ROLE:?set ROLE=init|validator}"
 SHARED="${SHARED:-/shared}"
 
 if [ "$ROLE" = "init" ]; then
-  exec python3 /gen-spec.py
+  exec python3 /nets/genesis.py
 fi
 
 # ---- validator ----
@@ -34,6 +34,9 @@ args=(--chain "$SHARED/spec.json" run --temp --peer-id "$PID"
       --listen-ip 0.0.0.0 --port "$PORT" --finality-mode "${FINALITY_MODE:-dummy}"
       --rpc --rpc-listen-ip 0.0.0.0 --rpc-port "$RPC")
 [ "$ISBOOT" = "0" ] && args+=(--bootnode "$BOOT")
+# a net with a node running natively on the host addresses every validator at the
+# host's IP (nets/netgen.py): tell PolkaJam that is its external address too
+[ -n "${EXTERNAL_IP:-}" ] && args+=(--external-ip "$EXTERNAL_IP")
 
 echo "polkajam validator $INDEX: peer_id=$PID port=$PORT rpc=$RPC bootnode=$([ "$ISBOOT" = 1 ] && echo SELF || echo "$BOOT")"
 exec polkajam "${args[@]}"

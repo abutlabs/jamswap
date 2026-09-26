@@ -98,7 +98,8 @@ services:
       # ANY later lm-authored block assures every report pending in the state it
       # extends (assure-any-pending) — so the availability dance completes at the
       # combined lasair authoring rate (~1/2 on the equal split), not one node's 1/6.
-      GUARANTOR_OWN: "3,4,5"
+      GUARANTOR_OWN: "${LASAIR_GUARANTOR_OWN-3,4,5}"   # LASAIR_DEV_ALL_KEYS switch (docs/NETS.md)
+      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-1}"
       IDENTITY: "103"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"
@@ -113,7 +114,8 @@ services:
     environment:
       SPEC: /shared/spec.json
       OWN: "4"
-      GUARANTOR_OWN: "3,4,5"
+      GUARANTOR_OWN: "${LASAIR_GUARANTOR_OWN-3,4,5}"   # LASAIR_DEV_ALL_KEYS switch (docs/NETS.md)
+      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-1}"
       IDENTITY: "104"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"
@@ -128,7 +130,8 @@ services:
     environment:
       SPEC: /shared/spec.json
       OWN: "5"
-      GUARANTOR_OWN: "3,4,5"
+      GUARANTOR_OWN: "${LASAIR_GUARANTOR_OWN-3,4,5}"   # LASAIR_DEV_ALL_KEYS switch (docs/NETS.md)
+      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-1}"
       IDENTITY: "105"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"

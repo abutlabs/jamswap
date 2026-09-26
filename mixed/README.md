@@ -14,9 +14,13 @@ for the walkthrough. This directory holds the plumbing.
 
 | File | Role |
 |---|---|
-| `gen-spec.py` | The **shared-genesis generator** (runs as `spec-init`). Decides which client owns each validator index, derives each validator's genesis entry with the **owning client's real keys** (PolkaJam `gen-keys` for its indices; lasair `mixed_keys` for lasair's — bandersnatch from the sealing seed, `peer_id = N(k)` from the QUIC identity), assigns each node a static IP, and runs `polkajam gen-spec`. Writes `spec.json` + `nodes.json` + `pj_<i>.seed` + `ready` to the shared volume. |
-| `pj-entrypoint.sh` | PolkaJam image entrypoint. `ROLE=init` → run `gen-spec.py`; `ROLE=validator` → run PolkaJam as validator `INDEX` on the shared spec (`--peer-id <its genesis peer_id> --key-seed-file --finality-mode dummy --bootnode …`). |
-| `Dockerfile.polkajam` | The PolkaJam image: fetches the black-box binary from the public release **at build time** (never committed/pushed) and copies lasair's `mixed_keys` from the published `lasair` image so the init step can derive lasair keys. |
+| `Dockerfile.polkajam` | The PolkaJam image: fetches the black-box binary from the public release **at build time** (never committed/pushed; sha256-pinned per release and arch). Target `polkajam` is PolkaJam + the genesis minter; the default target `with-lasair` adds the lasair binary from the published `lasair` image (key cross-check + `--inject-service-spec`). |
+| `pj-entrypoint.sh` | PolkaJam image entrypoint. `ROLE=init` → run `nets/genesis.py`; `ROLE=validator` → run PolkaJam as validator `INDEX` on the shared spec (`--peer-id <its genesis peer_id> --key-seed-file pj_<i>.seed --finality-mode $FINALITY_MODE --bootnode …`, plus `--external-ip $EXTERNAL_IP` when set). |
+| `verify.sh` | Health check for a running `docker-compose.mixed.yml` (`make verify-mixed`). |
+
+The shared-genesis generator moved to [`../nets/genesis.py`](../nets/genesis.py) (it was
+`gen-spec.py`); every net, including this one, mints its genesis there. See
+[`docs/NETS.md`](../docs/NETS.md) for the per-index client layouts it serves.
 
 The lasair validators run the published multi-arch `ghcr.io/abutlabs/lasair` image
 directly (its entrypoint reads `SPEC`/`OWN`/`IDENTITY`/`PEERS` from the compose env).
@@ -25,13 +29,17 @@ directly (its entrypoint reads `SPEC`/`OWN`/`IDENTITY`/`PEERS` from the compose 
 
 PolkaJam's `gen-spec` requires **numeric** validator addresses, so every node gets a
 fixed IP on the `mixnet` compose network (index `i` → `172.28.0.(10+i)`); the same IPs
-are baked into the shared genesis by `gen-spec.py`, and lasair dials peers by them.
+are baked into the shared genesis by `nets/genesis.py`, and lasair dials peers by them.
 
-## Key ownership stays split
+## Keys
 
-No client ever holds another's validator secret. Each validator's genesis entry
-carries only the **owning** client's public keys; PolkaJam signs its slots, lasair
-signs its own. Both re-execute the whole chain and agree on state.
+Every validator is the standard JAM dev account of its index (JIP-5; `nets/devkeys.py`),
+and each client holds its own: PolkaJam loads dev seed `i`. lasair is the exception
+until lasair#62: with `LASAIR_DEV_ALL_KEYS=1` (the default here) a lasair node signs
+guarantees as any lasair index (`GUARANTOR_OWN=3,4,5`), and lasair ≤ 2.x also derives
+every dev secret and assures for any validator, PolkaJam's included.
+`LASAIR_DEV_ALL_KEYS=0 ./dex up NET=mixed` narrows the guarantees to the node's own index
+(see `docs/NETS.md`, "Keys per client").
 
 ## Compliance
 

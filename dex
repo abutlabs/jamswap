@@ -3,7 +3,7 @@
 #
 # The DEX runs on the ALL-LASAIR finality net (six lasair validators, β-finality) —
 # the ONLY net where sealed orders settle durably (see docs/NETS.md for why, and for
-# what every other docker-compose.*.yml is). You almost never need anything else.
+# what every other net is). You almost never need anything else.
 #
 #   ./dex rebuild     # rebuild the on-chain service blob from source (service/*.jam)
 #   ./dex up          # start the net (no auto-load), wait for finality, print the URL
@@ -13,14 +13,87 @@
 #   ./dex logs [svc]  # follow logs (default: dex)
 #   ./dex down        # tear down + wipe the chain (fresh genesis next up)
 #
+# Other test nets (docs/NETS.md; `./dex nets` lists them): add NET=<name> to any verb.
+#
+#   ./dex up NET=pj6           # e.g. 6x PolkaJam GRANDPA; pj-javajam, pj-pbnjam, mixed, ...
+#   ./dex heads NET=pj6 [SECS] # one head + finality across every node (default 300 s)
+#   ./dex down NET=pj6
+#   ./dex nets                 # the profiles;  ./dex gen  regenerates nets/compose/*.yml
+#
+# Keys: LASAIR_DEV_ALL_KEYS=1 (default on nets with lasair, until lasair#62) lets each
+# lasair node sign guarantees as every lasair index; =0 narrows it to its own index.
+# JAVAJAM_RUNNER=native|docker (default native on macOS, whose Docker can't run it).
+#
 set -euo pipefail
 cd "$(dirname "$0")"
 
-COMPOSE=(docker compose -p lasair6 -f docker-compose.lasair6.yml)
-URL=http://localhost:8081
+# NET=<name> may come from the environment or anywhere in the arguments
+NET="${NET:-lasair6}"
+rest=()
+for a in "$@"; do case "$a" in NET=*) NET="${a#NET=}";; *) rest+=("$a");; esac; done
+set -- ${rest[@]+"${rest[@]}"}
+
+net_env=$(python3 nets/netgen.py env "$NET") || exit 1
+eval "$net_env"
+COMPOSE=(docker compose -p "$NET_PROJECT" -f "$NET_FILE")
+URL=$NET_DEX_URL                     # the net's DEX UI, if it has one
+STATE="${JAMSWAP_CACHE:-$HOME/.cache/jamswap}/nets/$NET_PROJECT"   # native nodes, host IP
+
+# ---- key sharing (docs/NETS.md "Keys per client") ----------------------------------
+LASAIR_DEV_ALL_KEYS="${LASAIR_DEV_ALL_KEYS:-$NET_DEV_ALL_KEYS_DEFAULT}"
+if [ -z "$NET_LASAIR_SET" ]; then
+  LASAIR_DEV_ALL_KEYS=0                        # no lasair node: nothing to share
+elif [ "$LASAIR_DEV_ALL_KEYS" = 0 ]; then
+  export LASAIR_GUARANTOR_OWN=""               # each lasair node guarantees as itself only
+fi
+export LASAIR_DEV_ALL_KEYS
+
+# ---- JavaJAM: native process (macOS) or container (Linux) --------------------------
+JAVAJAM_RUNNER="${JAVAJAM_RUNNER:-$([ "$(uname -s)" = Darwin ] && echo native || echo docker)}"
+JJ_NATIVE=0
+if [ -n "$NET_JAVAJAM" ]; then
+  if [ "$JAVAJAM_RUNNER" = native ]; then
+    JJ_NATIVE=1
+    # every validator is addressed at the host's IP (the native node can reach no
+    # container IP); pinned per net so a re-up keeps the genesis it was minted with
+    if [ -z "${HOST_IP:-}" ] && [ -s "$STATE/host_ip" ]; then HOST_IP=$(cat "$STATE/host_ip"); fi
+    if [ -z "${HOST_IP:-}" ]; then
+      if [ "$(uname -s)" = Darwin ]; then
+        HOST_IP=$(ipconfig getifaddr "$(route -n get default | awk '/interface:/{print $2}')" || true)
+      else
+        HOST_IP=$(ip route get 1.1.1.1 | awk '{for(i=1;i<NF;i++) if($i=="src"){print $(i+1); exit}}')
+      fi
+    fi
+    [ -n "${HOST_IP:-}" ] || { echo "no host IP found for the native JavaJAM net: set HOST_IP"; exit 1; }
+    export HOST_IP
+  else
+    export COMPOSE_PROFILES=javajam-docker
+    arch=$([ "$(uname -m)" = arm64 ] || [ "$(uname -m)" = aarch64 ] && echo arm64 || echo amd64)
+    for kv in $JAVAJAM_IMAGES; do [ "${kv%%=*}" = "$arch" ] && : "${JAVAJAM_IMAGE:=${kv#*=}}"; done
+    export JAVAJAM_IMAGE
+  fi
+fi
 
 _finality() { curl -s --max-time 5 "$URL/api/finality" 2>/dev/null; }
 _available() { _finality | python3 -c "import sys,json;print(json.load(sys.stdin).get('available',False))" 2>/dev/null || echo False; }
+
+# start the JavaJAM validators natively once spec-init has minted the genesis
+_jj_native_up() {
+  for _ in $(seq 1 120); do
+    st=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "${NET_PROJECT}-spec-init-1" 2>/dev/null || true)
+    [ "$st" = "exited 0" ] && break
+    case "$st" in exited*) echo "spec-init failed ($st)"; "${COMPOSE[@]}" logs spec-init; exit 1;; esac
+    sleep 1
+  done
+  mkdir -p "$STATE"
+  echo "$HOST_IP" > "$STATE/host_ip"
+  "${COMPOSE[@]}" cp spec-init:/shared/spec.json "$STATE/spec.json" >/dev/null
+  nets/javajam-native.sh fetch
+  for n in $NET_JAVAJAM; do
+    IFS=: read -r i port rpc <<<"$n"
+    nets/javajam-native.sh start "$STATE" "$STATE/spec.json" "$i" "$port" "$rpc" "$NET_FINALITY" "$HOST_IP"
+  done
+}
 
 cmd=${1:-help}
 case "$cmd" in
@@ -38,19 +111,36 @@ case "$cmd" in
     ;;
 
   up)
+    if [ "$NET_GENERATED" = 1 ]; then
+      python3 nets/netgen.py check || { echo "run ./dex gen"; exit 1; }
+      "${COMPOSE[@]}" build -q
+      "${COMPOSE[@]}" up -d
+      [ "$JJ_NATIVE" = 1 ] && _jj_native_up
+      echo "✓ $NET up: validators (index order) = $NET_CLIENTS"
+      if [ "$JJ_NATIVE" = 1 ]; then echo "  JavaJAM: native processes; every validator addressed at host $HOST_IP"
+      elif [ -n "$NET_JAVAJAM" ]; then echo "  JavaJAM: containers ($JAVAJAM_IMAGE)"; fi
+      echo "  keys: LASAIR_DEV_ALL_KEYS=$LASAIR_DEV_ALL_KEYS$([ -z "$NET_LASAIR_SET" ] && echo " (no lasair node: every key held only by its own node)")"
+      [ -n "$URL" ] && echo "  DEX → $URL"
+      echo "  one head + finality: ./dex heads NET=$NET"
+      exit 0
+    fi
     # (re)build the genesis minter against the current lasair image: cached when unchanged,
     # and a stale minter would write genesis with an older lasair's encoding
     "${COMPOSE[@]}" build -q spec-init
     "${COMPOSE[@]}" up -d
     "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true   # manual trading by default
-    echo "net starting — warming up (Safrole tickets + finality bootstrap, ~5 min)…"
-    for i in $(seq 1 60); do
-      [ "$(_available)" = "True" ] && { echo "✓ finality live"; break; }
-      sleep 10
-      printf '.'
-    done
-    echo
-    echo "✓ DEX ready → $URL   (loadgen is OFF; './dex load' to drive it, './dex status' to watch)"
+    if [ "$NET" = lasair6 ]; then
+      echo "net starting — warming up (Safrole tickets + finality bootstrap, ~5 min)…"
+      for i in $(seq 1 60); do
+        [ "$(_available)" = "True" ] && { echo "✓ finality live"; break; }
+        sleep 10
+        printf '.'
+      done
+      echo
+      echo "✓ DEX ready → $URL   (loadgen is OFF; './dex load' to drive it, './dex status' to watch)"
+    else
+      echo "✓ $NET up → $URL   (no finality on this net; './dex heads NET=$NET' to watch)"
+    fi
     ;;
 
   load)   "${COMPOSE[@]}" start loadgen; echo "✓ loadgen ON (PROFILE from compose; sealed crossing pairs)";;
@@ -58,17 +148,30 @@ case "$cmd" in
 
   down)
     "${COMPOSE[@]}" down -v --remove-orphans
+    if [ -n "$NET_JAVAJAM" ] && [ -d "$STATE" ]; then
+      nets/javajam-native.sh stop "$STATE"
+      rm -rf "$STATE"
+    fi
     echo "✓ net down, chain wiped (next ./dex up mints a fresh genesis)"
     ;;
 
-  logs)   "${COMPOSE[@]}" logs -f "${2:-dex}";;
+  logs)
+    svc=${2:-dex}
+    if [ -f "$STATE/$svc/stdout.log" ]; then tail -f "$STATE/$svc/stdout.log"; else "${COMPOSE[@]}" logs -f "$svc"; fi
+    ;;
+
+  heads)  exec python3 nets/onehead.py "$NET" --secs "${2:-300}";;
 
   status)
+    if [ "$NET" != lasair6 ]; then exec python3 nets/onehead.py "$NET" --secs 0; fi
     echo "finality: $(_finality)"
     curl -s --max-time 5 "$URL/api/state?market=1" \
       | python3 -c "import sys,json;d=json.load(sys.stdin);print('market  :',{k:d.get(k) for k in ('price','volume','pending','sealed_onchain','in_auction')})" 2>/dev/null \
       || echo "market  : (dex not up yet)"
     ;;
+
+  nets)   python3 nets/netgen.py list;;
+  gen)    python3 nets/netgen.py write && python3 nets/netgen.py check && echo "✓ nets/compose/*.yml regenerated";;
 
   help|*)
     awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"

@@ -32,7 +32,7 @@
 # runs the independent client and imports/derives the same state — it just authors
 # negligibly. lm4/lm5/pj1/pj2 are gated behind an unused profile so they never
 # start (they would equivocate on the indices lm3 now authors). Every validator is
-# keyed to a standard dev account (see mixed/gen-spec.py), so lm3 legitimately holds
+# keyed to a standard dev account (see nets/genesis.py), so lm3 legitimately holds
 # all six secrets and forges VALID assurances for pj0 too.
 #
 # Result: register / deposit / withdraw accumulate on-chain (mixed/verify or

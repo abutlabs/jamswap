@@ -169,7 +169,7 @@ place regardless of split:
 
 ### Key symmetry
 
-`mixed/gen-spec.py` keys the PolkaJam validators to **standard dev accounts** (seed =
+`mixed/gen-spec.py` (now `nets/genesis.py`) keys the PolkaJam validators to **standard dev accounts** (seed =
 `u32-LE(i) × 8`, raw 32 bytes) instead of random `gen-keys`. **Verified**: PolkaJam
 derives **byte-identical** bandersnatch and ed25519/peer_id keys from that seed as
 `lasair --dev-account i`, for every index. This is what lets the lasair guarantor forge
@@ -552,7 +552,7 @@ docker run --rm --entrypoint sh jamswap-pj-mixed:local -c '
 | `docker-compose.mixed.yml:168` | builder → guarantor host (lm3 CE-133 endpoint) |
 | `docker-compose.mixed.yml` (lm3 env) | `GUARANTOR_OWN` on the equal-split guarantor |
 | `docker-compose.mixed-dex.yml` | lasair-dominant overlay (the working config) |
-| `mixed/gen-spec.py` (`dev_seed_file`) | pj validators keyed to standard dev accounts |
+| `nets/genesis.py` (`pj_<i>.seed`, `nets/devkeys.py`) | every validator keyed to its standard dev account |
 | `offchain/verify.py` | the e2e register/duplicate/deposit/withdraw test |
 
 ---

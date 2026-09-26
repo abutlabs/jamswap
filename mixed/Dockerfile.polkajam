@@ -1,38 +1,58 @@
-# Mixed-network PolkaJam image: a PolkaJam validator node AND the shared-spec
-# generator (ROLE=init|validator; see mixed/pj-entrypoint.sh).
+# The PolkaJam image of the jamswap test nets: a PolkaJam validator node AND the
+# shared-genesis minter (ROLE=init|validator; see mixed/pj-entrypoint.sh and
+# nets/genesis.py).
 #
 # COMPLIANCE: PolkaJam is BLACK-BOX. Its binary is fetched from the PUBLIC
 # paritytech/polkajam-releases at BUILD time and is NEVER committed or pushed to
 # our registry — this image is BUILT LOCALLY by `docker compose` on the user's
-# machine, exactly like differential/Dockerfile.polkajam. The lasair `mixed_keys`
-# tool is copied from the published lasair image so the init step can derive
-# lasair validators' genesis entries. See lasair docs/DISCLOSURES.md.
+# machine, exactly like differential/Dockerfile.polkajam. See lasair docs/DISCLOSURES.md.
+#
+# Two targets:
+#   polkajam     PolkaJam + the genesis minter, nothing else: the nets with no lasair
+#                node (nets/compose/pj6.yml, ...) build this one, so no lasair image
+#                is pulled.
+#   with-lasair  (the default, last stage) adds the lasair binary from MESH_IMAGE, which
+#                the minter uses to cross-check the dev keys and to write the jamswap
+#                service into genesis (lasair6, mixed, pj-majority, and generated nets
+#                with a lasair node).
+#
+# Pinned by tag and digest: PJ_RELEASE picks the release, and the tarball's sha256 must
+# equal the pin in PJ_PINS for that release and arch (GitHub's release-asset digests,
+# recorded 2026-09-26). A release with no pin (PJ_RELEASE overridden to a newer
+# nightly) is checked against the digest the release API reports, with a warning.
 #
 # Multi-arch: fetches the linux-<arch> release matching the build platform
-# (aarch64 / x86_64), so it runs natively on both Apple Silicon and Intel Linux —
-# provided Parity publishes that arch for the pinned release.
+# (aarch64 / x86_64), so it runs natively on both Apple Silicon and Intel Linux.
 
 ARG MESH_IMAGE=ghcr.io/abutlabs/lasair:latest
 FROM ${MESH_IMAGE} AS mesh
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS polkajam
 RUN apt-get update && apt-get install -y --no-install-recommends \
       curl ca-certificates jq python3 bash && rm -rf /var/lib/apt/lists/*
 ARG PJ_RELEASE=nightly-2026-09-22
-RUN arch=$(uname -m | sed s/arm64/aarch64/) \
- && url=$(curl -fsSL "https://api.github.com/repos/paritytech/polkajam-releases/releases/tags/${PJ_RELEASE}" \
-      | jq -r ".assets[] | select(.name | test(\"linux-${arch}\")) | .browser_download_url") \
- && echo "fetching ${url}" \
- && curl -fsSL "$url" | tar xz -C /usr/local/bin --strip-components=1 \
+ARG PJ_PINS="nightly-2026-09-22:aarch64:36bc5524f6a7b816776649c818b72d05d779ae3ac5d8ffbf7b577656ca47f171 nightly-2026-09-22:x86_64:f6cd2d91516be266aa6a46a5e37efcfc142fa346c6bc7b92a03188730daa779b"
+RUN set -eu; arch=$(uname -m | sed s/arm64/aarch64/) \
+ && asset=$(curl -fsSL "https://api.github.com/repos/paritytech/polkajam-releases/releases/tags/${PJ_RELEASE}" \
+      | jq -c ".assets[] | select(.name | test(\"linux-${arch}\"))") \
+ && url=$(echo "$asset" | jq -r .browser_download_url) \
+ && want=$(for p in ${PJ_PINS}; do case "$p" in "${PJ_RELEASE}:${arch}:"*) echo "${p##*:}";; esac; done) \
+ && if [ -z "$want" ]; then want=$(echo "$asset" | jq -r '.digest // ""' | sed 's/^sha256://'); \
+      echo "WARNING: no pin for ${PJ_RELEASE}/${arch}; checking the release API digest ${want}"; fi \
+ && [ -n "$want" ] \
+ && echo "fetching ${url}" && curl -fsSL -o /tmp/pj.tgz "$url" \
+ && echo "${want}  /tmp/pj.tgz" | sha256sum -c - \
+ && tar xzf /tmp/pj.tgz -C /usr/local/bin --strip-components=1 && rm /tmp/pj.tgz \
  && /usr/local/bin/polkajam --version
-# lasair client (+ its FFI libs) so ROLE=init can derive lasair validator keys:
-# `lasair --dev-account i` prints the STANDARD JAM dev account a >=1.5.1 validator
-# actually seals/identifies with (mixed_keys' raw seed derivation is NOT that).
+COPY nets/devkeys.py nets/genesis.py /nets/
+COPY mixed/pj-entrypoint.sh /pj-entrypoint.sh
+RUN chmod +x /pj-entrypoint.sh
+ENTRYPOINT ["/pj-entrypoint.sh"]
+
+FROM polkajam AS with-lasair
+# lasair client (+ its FFI libs): `lasair --dev-account i` cross-checks the dev-key
+# table, `lasair --inject-service-spec` seeds the jamswap service into genesis.
 COPY --from=mesh /usr/local/bin/lasair /usr/local/bin/lasair
 COPY --from=mesh /usr/local/lib/libbandersnatch_ffi.so /usr/local/lib/libed25519_ffi.so \
      /usr/local/lib/liberasure_ffi.so /usr/local/lib/libquic_ffi.so /usr/local/lib/
 RUN ldconfig
-COPY mixed/gen-spec.py /gen-spec.py
-COPY mixed/pj-entrypoint.sh /pj-entrypoint.sh
-RUN chmod +x /pj-entrypoint.sh
-ENTRYPOINT ["/pj-entrypoint.sh"]

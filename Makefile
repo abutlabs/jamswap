@@ -8,6 +8,7 @@
 #   make mixed-dex-local# source build -> functional-DEX mixed net
 #   make verify         # e2e smoke test against the RUNNING DEX stack (:8080)
 #   make verify-mixed   # health check against the RUNNING mixed net
+#   make test-nets      # net configs: dev keys, genesis node table, generated compose files
 #   make down           # stop whichever stack is up (all compose files)
 #
 # TWO MIXED MODES (see docker-compose.mixed-dex.yml + docs/mixed_chain_dex_settlement.md):
@@ -34,7 +35,7 @@ MIXED_DEX    = -f docker-compose.mixed.yml -f docker-compose.mixed-dex.yml
 MONITOR      = -f docker-compose.mixed.yml -f docker-compose.monitor.yml
 LOAD         = -f docker-compose.mixed.yml -f docker-compose.load.yml
 
-.PHONY: up down logs mixed mixed-down mixed-dex mixed-dex-down build-local local mixed-local mixed-dex-local verify verify-mixed monitor monitor-down load load-down
+.PHONY: up down logs mixed mixed-down mixed-dex mixed-dex-down build-local local mixed-local mixed-dex-local verify verify-mixed test-nets monitor monitor-down load load-down
 
 up:
 	docker compose up -d
@@ -102,3 +103,7 @@ verify:
 # Health check against the RUNNING mixed net (give it ~90s of slots first).
 verify-mixed:
 	bash mixed/verify.sh
+
+# Unit tests of the net configs (nets/): no Docker needed. `./dex up NET=<name>` runs a net.
+test-nets:
+	python3 -m unittest discover -s nets/tests

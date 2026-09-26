@@ -30,6 +30,143 @@ so your local changes are always live — only `service/*.jam` needs a `./dex re
 | `docker-compose.monitor.yml` | overlay (mixed) | Grafana :3010 | Prometheus + Grafana on the mixed net. |
 | `docker-compose.lasair6-monitor.yml` | overlay (lasair6) | Grafana :3010 | Prometheus + Grafana on the DEX net. |
 | `docker-compose.load.yml` | overlay | — | Standalone load generator layer. `./dex load` already covers the common case. |
+| `nets/compose/<net>.yml` | per-index client layouts | — | **Generated** test nets (below): PolkaJam, JavaJAM, pbnjam and lasair in any mix. `./dex up NET=<net>`. |
+
+## Test nets: one command per net
+
+Every net is a profile in [`nets/profiles.py`](../nets/profiles.py); `./dex nets` lists
+them. Add `NET=<name>` to any `./dex` verb (default `lasair6`, which behaves exactly as
+before):
+
+```bash
+./dex up NET=pj6            # build/pull, mint the shared genesis, start every node
+./dex heads NET=pj6 600     # one head + finality across every node for 600 s (default 300)
+./dex status NET=pj6        # one sample of the same
+./dex logs NET=pj6 pj3      # a node's log (native JavaJAM nodes too)
+./dex down NET=pj6          # tear down, wipe the chain, stop native nodes
+./dex gen                   # regenerate nets/compose/*.yml after editing nets/
+```
+
+| Net | Validators 0..5 | Finality | For | Status (2026-09-26, Apple M1 Pro) |
+|---|---|---|---|---|
+| `lasair6` | lasair ×6 | lasair GRANDPA (PR #6 draft) | the DEX | hand-written `docker-compose.lasair6.yml`, unchanged |
+| `mixed` | pj ×3, lasair ×3 | none shared | #2 research | hand-written `docker-compose.mixed.yml` |
+| `pj6` | pj ×6 | GRANDPA | #17 | **one head + finality**: 61/61 samples SAME over 6 min, finalized advanced on all six |
+| `pj-pbnjam` | pj ×5, pbnjam | GRANDPA (pj's 5-of-6) | #19 | **pbnjam can't start** (see below); the five PolkaJam nodes keep one head and finalize |
+| `pj-pbnjam-42` | pj ×4, pbnjam ×2 | GRANDPA | #19 | blocked on the pbnjam image |
+| `pj-javajam` | pj ×3, JavaJAM ×3 | GRANDPA both | #18 | **one head, no finality**: 70/71 samples SAME over 7 min (the other: JavaJAM still starting); finalized stays at genesis on all six |
+| `pj-javajam-42` | pj ×4, JavaJAM ×2 | GRANDPA both | #18 | untested (same adapters as `pj-javajam`) |
+| `lasair-pj-javajam` | lasair ×2, pj ×2, JavaJAM ×2 + DEX | GRANDPA | #20 | needs lasair#54/#60/#66 |
+| `nolasair` | pj ×2, JavaJAM ×2, pbnjam ×2 | GRANDPA | #21 | needs #18 and #19 |
+
+### Layout, keys and genesis
+
+A layout is one client per validator index: `lasair`, `pj` (`polkajam`), `pbnjam`,
+`javajam` (`jj`); tiny = 6. Validator *i* is always the **standard JAM dev account i**
+(JIP-5: seed = `u32-LE(i)` × 8), whichever client runs it, and that client holds exactly
+that key: JavaJAM and pbnjam start with `--dev-validator i`, PolkaJam loads dev seed *i*
+(`--key-seed-file`, same keys as its `--dev-validator i`), lasair runs `OWN=i`.
+
+The shared genesis is minted by [`nets/genesis.py`](../nets/genesis.py) in the
+`spec-init` container, with no lasair binary unless lasair is in the layout:
+
+- **public keys**: [`nets/devkeys.py`](../nets/devkeys.py) derives the Ed25519 key and
+  JAMNP-S peer id (JIP-5 + RFC 8032 in pure Python) and takes the Bandersnatch key from
+  the published table (docs.jamcha.in/basics/dev-accounts; the test checks the
+  derivation against it). With lasair in the layout, `lasair --dev-account i` must agree.
+- **chain spec**: `polkajam gen-spec` (black box: config in, JIP-4 spec out). The same
+  spec file goes to every client; genesis header hash `245becfe…` for every tiny layout
+  (the header carries keys, not addresses).
+- **addresses**: validator *i* is `10.231.<net>.(10+i):41000+100·net+i`, a static IP on
+  the net's compose network (the hand-written nets keep their 172.28/29/30 subnets).
+- the minter, the node table (`nodes.json`) and the service injection (`SERVICE`, lasair
+  only) are the same code for the hand-written nets: lasair6 and mixed mint the same
+  genesis as before (checked: every output file equal, the spec equal as JSON).
+
+### Per-client adapters
+
+| Client | Image / binary (pinned) | Started as validator *i* | RPC (host) |
+|---|---|---|---|
+| lasair | `${LASAIR_IMAGE}` (default `ghcr.io/abutlabs/lasair:2.0.0`) | mesh entrypoint, `OWN=i`, `WALL=1` next to wall-clock clients | none yet (lasair#68): the probe reads its `STATUS` log line |
+| PolkaJam | `jamswap-polkajam:<PJ_RELEASE>`, built by `mixed/Dockerfile.polkajam` (target `polkajam`): the release tarball fetched at build time, sha256-pinned per release and arch | `mixed/pj-entrypoint.sh`: `--peer-id`, `--key-seed-file pj_i.seed`, `--finality-mode`, `--bootnode` | `127.0.0.1:42000+100·net+i` |
+| pbnjam | `docker.io/shimonchick/pbnjam-node:main-54226be@sha256:ceb5f651…` | `--chain /shared/spec.json --dev-validator i --rpc-port … --temp` (its documented flags; `--help` can't run, see below) | same |
+| JavaJAM (macOS) | native: release zip 0.4.3 + Temurin JRE 25.0.4.1, fetched at run time into `~/.cache/jamswap` (sha256-checked) by [`nets/javajam-native.sh`](../nets/javajam-native.sh) | `run --chain <spec> --dev-validator i --port … --rpc --finality-mode …` | same |
+| JavaJAM (Linux) | `ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b…` (amd64) / `:0.4.3-arm64@sha256:ab8d65b5…`, compose profile `javajam-docker`, heap capped (`JAVAJAM_HEAP`, default 2g; the image pins 12 GB) | same flags | same |
+
+`JAVAJAM_RUNNER=native|docker` picks the runner (default: native on macOS, docker
+elsewhere).
+
+**JavaJAM on macOS.** Its images — and its Linux release zip in a container — die with
+SIGILL in their native crypto libraries under Docker Desktop on Apple silicon (#2). So
+the runner starts the macOS release on the host. A native process can reach no container
+IP, so such a net is minted with `HOST_IP` (the host's LAN address, detected; override
+with `HOST_IP=`): every validator's genesis address is `HOST_IP:port`, and every
+container publishes its UDP port on `HOST_IP`. Container↔container traffic then hairpins
+through Docker Desktop's port forwarding; the same compose file serves both modes. The
+release's `bin/javajam` launcher pins `-Xms6g -Xmx6g -XX:+AlwaysPreTouch` (observed on the
+java command line it starts) and ignores `JAVA_OPTS`, so three nodes would commit 18 GB:
+the runner starts the release jar with the same flags, minus pre-touch, and a capped
+heap (~110 MB resident per node on a tiny net). Each node runs in its own session under
+[`nets/supervise.py`](../nets/supervise.py), which restarts it if it exits (as Docker's
+`restart: unless-stopped` does for the containers), logs to
+`~/.cache/jamswap/nets/<net>/jj<i>/`, and stops with `./dex down`.
+
+### Keys per client
+
+The target: **no node signs as another client's validator.** PolkaJam, JavaJAM and pbnjam
+already hold only their own dev key. lasair ≤ 2.x is the exception — to guarantee and
+assure on its own it derives every dev secret — until lasair#54 (one key per validator),
+#60 (CE-134/135 co-guaranteeing) and #62 (assurances) land. That is now an explicit,
+per-net switch:
+
+| `LASAIR_DEV_ALL_KEYS` | lasair nodes sign guarantees as | Default on |
+|---|---|---|
+| `1` | every **lasair** index of the layout (`GUARANTOR_OWN` = the lasair set; lasair6: all six, mixed: 3,4,5) | nets with a lasair node |
+| `0` | their own index only (`./dex` sets `LASAIR_GUARANTOR_OWN=` empty) | nets with no lasair node (forced: nothing to share) |
+
+With lasair 2.0.0, `0` narrows **guarantees** only: that release still derives every dev
+secret and assures for any validator. The switch is also passed to each lasair node as
+`LASAIR_DEV_ALL_KEYS`, for a lasair#54 entrypoint to choose `--dev-all-keys` or
+`--dev-validator i`. Expect `0` to stop settlement until lasair#60/#62.
+
+### Checking a net: `./dex heads`
+
+[`nets/onehead.py`](../nets/onehead.py) samples every node every 6 s: best block and
+finalized block over JIP-2 (`bestBlock`, `finalizedBlock`, `parent`) on PolkaJam, JavaJAM
+and pbnjam; lasair's `STATUS` log line and `lasair_finalized_slot`. Each sample is
+**SAME** (one best hash), **LAG** (lower heads are ancestors of the highest, checked by
+walking `parent`), **FORK** (a head off the highest head's chain) or **DOWN**. Verdict
+ONE HEAD: no fork longer than two samples, nobody down at the end, heads advanced, and on
+a finalizing net finality advanced on every node with no conflicting finalized blocks.
+
+### What the clients did (2026-09-26)
+
+- **PolkaJam + JavaJAM (`pj-javajam`) co-author one chain** — blocks from both clients,
+  one best hash on all six nodes (JavaJAM native on the Mac, PolkaJam in Docker,
+  addressed through the host IP) — **but never finalize.** Both run `--finality-mode
+  grandpa` and talk over the PR #6 streams: PolkaJam logs every JavaJAM validator's
+  GRANDPA view ("updated view. Now at 1, 0") and 9 incoming round-1 messages; JavaJAM
+  logs "Grandpa state received for round 1, set 0" and "Grandpa vote received for round 1
+  and set 0". Yet round 1 of set 0 never completes: PolkaJam's round state stays
+  `prevote_ghost = genesis, estimate = genesis, finalized = None, completable = false`
+  after it prevoted and precommitted, and `finalizedBlock` is genesis on every node for
+  the whole soak (the same PolkaJam build finalizes within seconds as `pj6`). So the votes
+  cross the wire but are not counted across clients (3 + 3 < the 5-of-6 quorum). Next
+  (#18): which side drops which vote, judged against the PR #6 text (vote encoding and
+  signing context).
+- **JavaJAM 0.4.3 sometimes shuts itself down right after it starts**: ~0.5 s after its
+  first outbound connections the netty event loop is gone ("event executor terminated"),
+  and the process exits with status 0 ("Bye") after 3–9 s; seen in 4 of 9 starts in
+  three-node launches and 1 of 14 single-node starts. `nets/supervise.py` restarts it (a `[supervise]` line in its log),
+  which then joins normally. After such a restart it logs (debug) ~200 `Import rejected:
+  bad_state_root` in the first second of re-sync, then follows the head.
+
+- **pbnjam-node `main-54226be`** does not start, on either arch: every run (18 restarts
+  in the soak, `--help` too) exits 1 with `ENOENT: no such file or directory, open
+  '/app/packages/bandersnatch-vrf/wasm-ark-vrf/ark_vrf_wasm_bg.wasm'` (Bun 1.4.2). The
+  published image lacks its Bandersnatch wasm; it is the only published version
+  (`latest` = `main` = the same digest). The five PolkaJam validators of `pj-pbnjam`
+  still kept one head and finalized (5-of-6 GRANDPA).
 
 ## The `Makefile` still works
 

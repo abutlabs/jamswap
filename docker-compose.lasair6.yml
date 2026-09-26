@@ -35,11 +35,15 @@ x-mesh: &mesh
 
 # every validator is a guarantor that derives all six dev-account secrets, so it can
 # report as any assigned index and assure any pending report to the 5-of-6 threshold.
+# That key sharing is the switch LASAIR_DEV_ALL_KEYS (docs/NETS.md, "Keys per client"):
+# ON by default until lasair#62; `LASAIR_DEV_ALL_KEYS=0 ./dex up` sets
+# LASAIR_GUARANTOR_OWN= (empty) so each node signs guarantees as its own index only.
 x-mesh-env: &mesh-env
   SPEC: /shared/spec.json
   SERVICE: /work/jamswap-service.jam
   SERVICE_ID: "100"
-  GUARANTOR_OWN: "0,1,2,3,4,5"
+  GUARANTOR_OWN: "${LASAIR_GUARANTOR_OWN-0,1,2,3,4,5}"
+  LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-1}"
   INTERVAL: "1"
   # CHAIN-PACED, not wall-clock. --wall (WALL=1) exists to co-pace with PolkaJam on the
   # MIXED net; here there is no PolkaJam. The shared genesis is minted at slot 0, but the
@@ -56,7 +60,7 @@ x-mesh-env: &mesh-env
 
 services:
   # mint the all-lasair shared genesis (runs once, then exits 0). Reuses the mixed
-  # image only because it carries gen-spec.py + the lasair binary; no PolkaJam runs.
+  # image only because it carries nets/genesis.py + the lasair binary; no PolkaJam runs.
   # Built here too, from the SAME lasair image the validators run (its lasair binary
   # writes the service into genesis), so a fresh clone needs nothing prebuilt.
   spec-init:
