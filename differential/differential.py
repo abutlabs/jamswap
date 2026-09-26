@@ -72,16 +72,20 @@ def run_scenario(client):
     client.deploy()
     print(f"[{client.name}] service id {client.sid}", file=sys.stderr)
     client.item(bytes([7]) + pk + sk.sign(canon(b"register", pk)).signature)   # REGISTER
+    # the chain assigns the account handle: 1 on a fresh chain, but a genesis that seeds
+    # dev accounts (lasair6 seeds 1-6) assigns the next free one — use what it assigned
+    handle = client.poll(b"h" + pk)
+    out["handle"] = handle.hex()
+    acct = struct.unpack("<I", handle[:4])[0] if len(handle) >= 4 else 1
     client.item(bytes([6]) + struct.pack("<III", MARKET, BASE, QUOTE))         # LIST
-    client.item(bytes([1]) + struct.pack("<II", 1, QUOTE) + p64(1000 * S))     # DEPOSIT
-    out["handle"] = client.poll(b"h" + pk).hex()
-    out["balance"] = client.poll(b"b" + p32(QUOTE) + p32(1)).hex()
-    print(f"[{client.name}] registered + funded", file=sys.stderr)
-    client.item(smatch([signed_order(sk, 1, 10, 0, 80, 5, 1)]))                # SIGNED order
+    client.item(bytes([1]) + struct.pack("<II", acct, QUOTE) + p64(1000 * S))  # DEPOSIT
+    out["balance"] = client.poll(b"b" + p32(QUOTE) + p32(acct)).hex()
+    print(f"[{client.name}] registered as account {acct} + funded", file=sys.stderr)
+    client.item(smatch([signed_order(sk, acct, 10, 0, 80, 5, 1)]))             # SIGNED order
     book = client.poll(b"book" + p32(MARKET))
     out["book"] = book.hex()
-    print(f"[{client.name}] signed order rested", file=sys.stderr)
-    client.item(smatch([signed_order(mal, 1, 11, 0, 80, 5, 99)], book))        # FORGED order
+    print(f"[{client.name}] signed order " + ("rested" if book else "NOT on the book"), file=sys.stderr)
+    client.item(smatch([signed_order(mal, acct, 11, 0, 80, 5, 99)], book))     # FORGED order
     time.sleep(client.settle_secs * 3)      # a rejection writes no new state — fixed wait, then re-read
     out["book_after_forgery"] = client.storage(b"book" + p32(MARKET)).hex()
     return out
@@ -179,7 +183,16 @@ def compare(a_path, b_path):
     na, nb = a.get("_client", "A"), b.get("_client", "B")
     print(f"\n{'check':<20} {na:<44} {nb:<44} verdict")
     ok = True
-    for check in ("handle", "balance", "book", "book_after_forgery"):
+    # the handle is chain-assigned (genesis-seeded accounts shift it), so book entries are
+    # compared with their account field replaced by the lane's own handle marker
+    def norm(book_hex, handle_hex):
+        recs = [book_hex[i:i + 34] for i in range(0, len(book_hex), 34)]   # 17-byte orders
+        return "".join(("<own>" + r[8:]) if r[:8] == handle_hex else r for r in recs)
+    for side in (a, b):
+        for k in ("book", "book_after_forgery"):
+            side[k] = norm(side.get(k, ""), side.get("handle", "")[:8])
+    print(f"handles (chain-assigned, informational): {na} {a.get('handle')}  {nb} {b.get('handle')}")
+    for check in ("balance", "book", "book_after_forgery"):
         va, vb = a.get(check, ""), b.get(check, "")
         same = va == vb and va != ""
         ok &= same
