@@ -127,6 +127,17 @@ fn assemble_round(
 /// ([ns=0][np=0] — a bare empty byte string is malformed and refine rejects the round.)
 const EMPTY_SECTION: [u8; 4] = [0, 0, 0, 0];
 
+/// Corrupt the Chaum-Pedersen response z of the LAST partial in an assembled ENC_ROUND whose
+/// public section (after the partials) is `section_len` bytes: its second-lowest byte (z is
+/// little-endian, so it stays a canonical scalar and the proof equation, not the decoding,
+/// is what fails; as in vdec's tampered_response_is_rejected). Flipping the payload's last
+/// byte, as this once did, hit the public section instead: refine then rejected a malformed
+/// section and never reached the proofs.
+fn tamper_last_proof(round: &mut [u8], section_len: usize) {
+    let z_start = round.len() - section_len - vdec::SCALAR_LEN;
+    round[z_start + 1] ^= 0x01;
+}
+
 fn cmd_setup() {
     let (_members, _joint, blob) = fixed_committee();
     println!("setup {}", hex(&setup_payload(&blob, 0)));
@@ -224,10 +235,9 @@ fn scenario(_gov_byte: u8) {
     let cts = vec![(c1b.to_vec(), bb.clone()), (c1s.to_vec(), bs.clone())];
     // honest
     println!("round {}", hex(&assemble_round(&members, &blob, market, base, quote, &cts, &EMPTY_SECTION)));
-    // tampered: flip a byte in the assembled partials region (after header+cts)
+    // tampered: the last member's proof for the last ciphertext answers wrongly
     let mut tampered = assemble_round(&members, &blob, market, base, quote, &cts, &EMPTY_SECTION);
-    let tlen = tampered.len();
-    tampered[tlen - 1] ^= 0x01; // corrupt the last partial's z tail
+    tamper_last_proof(&mut tampered, EMPTY_SECTION.len());
     println!("round_tampered {}", hex(&tampered));
     // wrong committee: build with a DIFFERENT committee (keys + partials) -> committee-hash mismatch
     let evil_members: Vec<Member> = (0..COMMITTEE_SIZE).map(|i| keygen(&[i as u8, 0x99, 7])).collect();
@@ -293,5 +303,34 @@ fn main() {
             eprintln!("usage: committee <setup | encrypt <market> <order_hex> <seed_hex> | round <m> <b> <q> <plaintext_hex> <ct_csv> | scenario <gov> | govpub | govfind>");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vdec::{verify_and_decrypt, PARTIAL_LEN, SCALAR_LEN};
+
+    #[test]
+    fn tampered_round_breaks_only_the_last_proof() {
+        let (members, joint, blob) = fixed_committee();
+        let order = ord_bytes(1, 1, true, 100, 5);
+        let (c1, body) = encrypt(&order, &joint, b"seed");
+        let honest = assemble_round(&members, &blob, 1, 10, 20, &[(c1.to_vec(), body.clone())], &EMPTY_SECTION);
+        let mut tampered = honest.clone();
+        tamper_last_proof(&mut tampered, EMPTY_SECTION.len());
+
+        // one byte differs, inside the last partial's response z; the public section is intact
+        let parts_end = honest.len() - EMPTY_SECTION.len();
+        let parts_start = parts_end - members.len() * PARTIAL_LEN;
+        let diffs: Vec<usize> = (0..honest.len()).filter(|&i| honest[i] != tampered[i]).collect();
+        assert_eq!(diffs.len(), 1, "exactly one byte is tampered");
+        assert!((parts_end - SCALAR_LEN..parts_end).contains(&diffs[0]), "inside the last z, at {}", diffs[0]);
+        assert_eq!(&tampered[parts_end..], &EMPTY_SECTION[..], "the public section is untouched");
+
+        // refine's check: the honest partials decrypt the order, the tampered ones do not
+        let pks: Vec<[u8; POINT_LEN]> = blob[1..].chunks(POINT_LEN).map(|c| c.try_into().unwrap()).collect();
+        assert_eq!(verify_and_decrypt(&c1, &body, &pks, &honest[parts_start..parts_end]), Some(order));
+        assert_eq!(verify_and_decrypt(&c1, &body, &pks, &tampered[parts_start..parts_end]), None);
     }
 }
