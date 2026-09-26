@@ -238,12 +238,13 @@ class Jip2Backend(unittest.TestCase):
     def test_parameters_pass_through(self):
         self.assertEqual(self.c.parameters(), {"V1": {"core_count": 2, "slot_period_sec": 6}})
 
-    def test_submit_is_not_built_yet(self):
+    def test_submit_needs_an_authorizer(self):
+        # submission itself is covered in test_jip2_submit.py
         self.assertFalse(self.c.submits)
         with self.assertRaises(NotImplementedError) as cm:
             self.c.submit(b"\x07payload")
         self.assertIsInstance(cm.exception, chain.ChainUnsupported)
-        self.assertIn("#11", str(cm.exception))
+        self.assertIn("AUTHORIZER", str(cm.exception))
         self.assertFalse(any(r["method"].startswith("submit") for r in self.node.requests))
 
     def test_node_errors_and_bad_answers_become_chain_errors(self):

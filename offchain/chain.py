@@ -25,8 +25,10 @@ Backends (CHAIN_BACKEND):
                    (lasair has no JIP-2 server yet); this backend retires once it does.
   jip2             JIP-2 node RPC (JSON-RPC over WebSocket) at CHAIN_RPC, default
                    ws://localhost:19800: bestBlock, finalizedBlock, serviceValue,
-                   serviceData, parameters. Submission needs a spec-valid work-package
-                   (anchor, authorizer, core) and is not built yet (issue #11).
+                   serviceData, parameters. Submission builds a GP 0.8.0 work-package
+                   (workpackage.py) and sends it with submitWorkPackage; the authorizer
+                   comes from AUTHORIZER, or from the JIP-4 chain spec at CHAIN_SPEC
+                   (chainspec.py).
 
 SERVICE_ID names the service. Runtime deployment is not part of the interface yet
 (issue #13): the id comes from genesis or from an out-of-band deploy.
@@ -34,7 +36,9 @@ SERVICE_ID names the service. Runtime deployment is not part of the interface ye
 import json, os, time, urllib.request
 from typing import NamedTuple, Optional
 
+import chainspec
 import jip2
+import workpackage
 
 
 class ChainError(Exception):
@@ -42,9 +46,10 @@ class ChainError(Exception):
 
 
 class ChainBusy(ChainError):
-    """Every guarantor refused the submission (their work-package queues are full): the
-    payload never reached the chain. Callers either retry later (the round builder
-    re-queues the round's orders) or surface it as HTTP 503 (user ops)."""
+    """Every guarantor refused the submission (their work-package queues are full), or the
+    backend could not read what it needs to build it: the payload never reached the chain.
+    Callers either retry later (the round builder re-queues the round's orders) or surface
+    it as HTTP 503 (user ops)."""
 
 
 class ChainUnsupported(ChainError, NotImplementedError):
@@ -224,10 +229,13 @@ class JamnpChain(Chain):
 class Jip2Chain(Chain):
     name = "jip2"
 
-    def __init__(self, service_id=None, url="ws://localhost:19800", timeout=30.0, client=None):
+    def __init__(self, service_id=None, url="ws://localhost:19800", timeout=30.0, client=None,
+                 authorizer=None, chain_spec=None, cores=None, refine_gas=None,
+                 accumulate_gas=None):
         super().__init__(service_id)
         self.url = url
         self.rpc = client or jip2.Jip2Client(url, timeout)
+        self._init_submission(authorizer, chain_spec, cores, refine_gas, accumulate_gas)
 
     def describe(self):
         return f"jip2 ({self.url}; service {self.service_id})"
@@ -285,11 +293,192 @@ class Jip2Chain(Chain):
     def parameters(self):
         return self._call(self.rpc.parameters)
 
+    # ---- submission: one GP 0.8.0 work-package per payload, via submitWorkPackage ----
+    #
+    # The package carries one work-item for the service: its code hash as the chain holds
+    # it at the anchor, the payload, no imports, extrinsics or exports, and the largest
+    # gas limits one item may have (sum(refine) < G_R, sum(accumulate) < G_A: GP 0.8.0 eq.
+    # wplimits), so no payload runs out of refine gas (a signed order costs ~5.3M to
+    # verify). Its refinement context names the best block's parent as the anchor and the
+    # finalized block's parent as the lookup anchor (see default_anchor and
+    # default_lookup_anchor); no prerequisites. The core is the next one, round robin,
+    # whose authorizer pool accepts the authorizer: one report per core per block, so
+    # consecutive packages spread over the cores.
+
+    def _init_submission(self, authorizer, chain_spec, cores, refine_gas, accumulate_gas):
+        # authorizer: an Authorizer, or its "host:code_hash[:config[:token]]" text; else
+        # chain_spec: a JIP-4 chain spec (path or parsed dict) whose genesis names it.
+        # cores: the cores to use (default: those whose genesis pool accepts it, else all).
+        # refine_gas / accumulate_gas: the work-item's limits (default: the most allowed).
+        if isinstance(authorizer, str):
+            authorizer = workpackage.Authorizer.parse(authorizer)
+        self.authorizer, self.chain_spec = authorizer, chain_spec
+        self.cores = list(cores) if cores else None
+        self.refine_gas, self.accumulate_gas = refine_gas, accumulate_gas
+        self._params = None
+        self._auth_checked = False
+        self._next_core = 0
+
+    @property
+    def submits(self):
+        return self.authorizer is not None or self.chain_spec is not None
+
+    def _param(self, name):
+        # one chain parameter (JIP-2 parameters().V1), fetched once
+        if self._params is None:
+            p = self.parameters()
+            if not isinstance(p, dict) or not isinstance(p.get("V1"), dict):
+                raise ChainError(f"jip2: parameters: no V1 member in {p!r}")
+            self._params = p["V1"]
+        try:
+            return int(self._params[name])
+        except (KeyError, TypeError, ValueError):
+            raise ChainError(f"jip2: parameters: no number {name}") from None
+
+    def _resolve_authorizer(self):
+        if self.authorizer is None:
+            if self.chain_spec is None:
+                raise ChainUnsupported(
+                    "jip2: no authorizer to submit with: set AUTHORIZER "
+                    "(host:code_hash[:config[:token]]) or CHAIN_SPEC (a JIP-4 chain spec)")
+            try:
+                spec = self.chain_spec
+                self.authorizer, genesis_cores = chainspec.authorizer(
+                    chainspec.load(spec) if isinstance(spec, str) else spec)
+            except (OSError, ValueError, KeyError, TypeError) as e:
+                raise ChainUnsupported(f"jip2: no authorizer from the chain spec: {e}") from e
+            self.cores = self.cores or genesis_cores
+        if self.cores is None:
+            self.cores = list(range(self._param("core_count")))
+        return self.authorizer
+
+    def _check_authorizer(self, at):
+        # The authorizer's code must be a preimage of its host service, or every guarantor
+        # drops the package without a word (JIP-2 has no refusal for it). Checked once; a
+        # node without servicePreimage leaves it unchecked.
+        if self._auth_checked:
+            return
+        a = self.authorizer
+        try:
+            code = self.rpc.service_preimage(at, a.host, a.code_hash)
+        except jip2.Jip2Error as e:
+            if e.code != -32601:               # anything but "method not found": try again later
+                raise ChainError(f"jip2 servicePreimage: {e}") from e
+            code = b""                         # the node cannot tell: leave it unchecked
+        except (OSError, ValueError) as e:
+            raise ChainError(f"jip2 servicePreimage: {e}") from e
+        if code is None:
+            raise ChainUnsupported(
+                f"jip2: authorizer {a}: service {a.host} holds no preimage of its code hash "
+                "on this chain (AUTHORIZER or CHAIN_SPEC is for another chain?)")
+        self._auth_checked = True
+
+    def _parent_of(self, block):
+        # the block's parent, or the block itself if it has none (the genesis block)
+        try:
+            d = self.rpc.parent(block.hash)
+        except jip2.Jip2Error:
+            return block
+        except (OSError, ValueError) as e:
+            raise ChainError(f"jip2 parent: {e}") from e
+        try:
+            return Block(int(d["slot"]), jip2.unb64(d["header_hash"]), None)
+        except (KeyError, TypeError, ValueError) as e:
+            raise ChainError(f"jip2: malformed parent descriptor {d!r}") from e
+
+    def default_anchor(self):
+        """The block a new package anchors at: the best block's parent. The anchor must
+        be in recent history with its state root, and recent history holds the newest
+        block with a zero state root until its child corrects it (GP 0.8.0 eq.
+        correctlaststateroot), so the parent is the newest block whose recorded state
+        root is final."""
+        return self._parent_of(self.head())
+
+    def default_lookup_anchor(self, anchor):
+        """The lookup anchor for a package anchored at `anchor`: the finalized block's
+        parent. A lookup anchor must be in the finalized chain (GP 0.8.0 overview, "The Core
+        Model and Services"), have a child whose prior state root is its posterior one (the
+        ancestor rule under eq. limitlookupanchorage), and be at most L slots older than
+        the block that reports it; the finalized block's parent is the newest block that
+        is all three whether or not the best block is itself finalized. When finality
+        lags so far that it would be too old by the time the report lands (a margin of H
+        slots), the anchor itself is used instead: young enough, but not finalized, so a
+        guarantor that holds to the finality rule refuses it (a net without finality
+        cannot do better)."""
+        lookup = self._parent_of(self.finalized())
+        margin = self._param("max_lookup_anchor_age") - self._param("recent_block_count")
+        return anchor if lookup.slot + margin < anchor.slot else lookup
+
+    def refine_context(self, anchor, lookup_anchor):
+        """The refinement context of a package anchored at `anchor` with `lookup_anchor`
+        (Blocks): each one's posterior state root, the anchor's BEEFY root (its
+        accumulation-output super-peak); no prerequisites."""
+        state_root = self._call(self.rpc.state_root, anchor.hash)
+        return workpackage.RefineContext(
+            anchor.hash, anchor.slot, state_root, self._call(self.rpc.beefy_root, anchor.hash),
+            lookup_anchor.hash, lookup_anchor.slot,
+            state_root if lookup_anchor.hash == anchor.hash
+            else self._call(self.rpc.state_root, lookup_anchor.hash))
+
+    def work_package(self, payload, anchor=None, lookup_anchor=None):
+        """The encoded work-package that carries `payload` for the service, and its refine
+        context. `anchor` and `lookup_anchor` (Blocks) default to default_anchor() and
+        default_lookup_anchor()."""
+        sid = self._sid()
+        auth = self._resolve_authorizer()
+        anchor = anchor or self.default_anchor()
+        lookup_anchor = lookup_anchor or self.default_lookup_anchor(anchor)
+        self._check_authorizer(anchor.hash)
+        ctx = self.refine_context(anchor, lookup_anchor)
+        info = self.service_info(anchor.hash)
+        refine = self.refine_gas or self._param("max_refine_gas") - 1
+        accumulate = self.accumulate_gas or self._param("max_accumulate_gas") - 1
+        if accumulate < info.min_item_gas:
+            raise ChainUnsupported(f"jip2: service {sid} wants at least {info.min_item_gas} "
+                                   f"accumulate gas per item; the package allows {accumulate}")
+        item = workpackage.WorkItem(sid, info.code_hash, bytes(payload), refine, accumulate)
+        return workpackage.WorkPackage.build(auth, ctx, [item]).encode(), ctx
+
     def submit(self, payload):
-        raise ChainUnsupported(
-            "jip2: submission is not implemented yet: submitWorkPackage needs a spec-valid "
-            "work-package (refine context from the chain, an authorizer the chain accepts, "
-            "a core); tracked in abutlabs/jamswap#11")
+        """Send `payload` in its own work-package to the guarantors of the next core that
+        accepts the authorizer; on a refusal (JIP-2: the package reached no guarantor) try
+        the next core. The receipt names the package, core and anchor, for
+        package_status(). ChainBusy: nothing was sent, because every core refused or the
+        node could not serve the reads that build the package. Settlement is seen in the
+        service's state, as for any backend."""
+        self._sid()                            # configuration errors stay ChainError
+        try:
+            package, ctx = self.work_package(payload)
+        except (ChainBusy, ChainUnsupported):
+            raise
+        except ChainError as e:
+            raise ChainBusy(f"not sent: {e}") from e
+        package_hash = workpackage.blake2b256(package)
+        refused = []
+        for k in range(len(self.cores)):
+            core = self.cores[(self._next_core + k) % len(self.cores)]
+            try:
+                self.rpc.submit_work_package(core, package)
+            except jip2.Jip2Error as e:
+                if e.code == -32601:           # JSON-RPC "method not found"
+                    raise ChainUnsupported(f"jip2: the node has no submitWorkPackage: {e}") from e
+                refused.append(f"core {core}: {e}")
+                continue
+            except (OSError, ValueError) as e:
+                raise ChainError(f"jip2 submitWorkPackage: outcome unknown: {e}") from e
+            self._next_core = (self._next_core + k + 1) % len(self.cores)
+            return {"accepted": True, "package_hash": package_hash.hex(), "core": core,
+                    "anchor": ctx.anchor.hex(), "anchor_slot": ctx.anchor_slot,
+                    "lookup_anchor": ctx.lookup_anchor.hex(),
+                    "lookup_anchor_slot": ctx.lookup_anchor_slot, "refused": refused}
+        raise ChainBusy("every core refused the package: " + "; ".join(refused))
+
+    def package_status(self, receipt, at="best"):
+        """JIP-2 workPackageStatus of a submitted package at `at`: {"Reportable": ...},
+        {"Reported": ...}, {"Ready": ...} or {"Failed": reason}. Ready is not
+        accumulated: watch the service's state for that."""
+        return self._call(self.rpc.work_package_status, self._at(at),
+                          bytes.fromhex(receipt["package_hash"]), bytes.fromhex(receipt["anchor"]))
 
 
 # ---- selection ---------------------------------------------------------------
@@ -298,7 +487,8 @@ BACKENDS = ("jamnp", "jip2")
 
 def from_env(env=None):
     """The backend the environment selects. CHAIN_BACKEND defaults to jamnp, configured
-    by BUILDER_URL / READER_URL / NODE_METRICS_URL; jip2 is configured by CHAIN_RPC.
+    by BUILDER_URL / READER_URL / NODE_METRICS_URL; jip2 is configured by CHAIN_RPC, and
+    submits with the authorizer AUTHORIZER names or CHAIN_SPEC's genesis holds.
     Nothing touches the network here."""
     env = os.environ if env is None else env
     sid = int(env["SERVICE_ID"]) if env.get("SERVICE_ID") else None
@@ -307,5 +497,7 @@ def from_env(env=None):
         return JamnpChain(sid, env.get("BUILDER_URL", ""), env.get("READER_URL", ""),
                           env.get("NODE_METRICS_URL", ""))
     if backend == "jip2":
-        return Jip2Chain(sid, env.get("CHAIN_RPC") or "ws://localhost:19800")
+        return Jip2Chain(sid, env.get("CHAIN_RPC") or "ws://localhost:19800",
+                         authorizer=env.get("AUTHORIZER") or None,
+                         chain_spec=env.get("CHAIN_SPEC") or None)
     raise ValueError(f"CHAIN_BACKEND={backend!r}: expected one of {', '.join(BACKENDS)}")

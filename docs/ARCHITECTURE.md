@@ -147,7 +147,9 @@ finalized block, submission, the service's account record, chain parameters — 
 backend is a config choice: `CHAIN_BACKEND=jamnp` (default: lasair's CE-133 builder and
 CE-129 reader bridges at `BUILDER_URL` / `READER_URL`, finality from `NODE_METRICS_URL`)
 or `CHAIN_BACKEND=jip2` (any node's JIP-2 RPC at `CHAIN_RPC`, default
-`ws://localhost:19800`; read-only until #11 builds spec-valid work-packages). The plan's alternative —
+`ws://localhost:19800`; each payload goes out as its own GP 0.8.0 work-package over
+`submitWorkPackage`, authorized by the authorizer `AUTHORIZER` names or the one the JIP-4
+chain spec at `CHAIN_SPEC` holds in genesis). The plan's alternative —
 `refine` reading the prior finalized book via historical-lookup — is a later
 optimization.
 

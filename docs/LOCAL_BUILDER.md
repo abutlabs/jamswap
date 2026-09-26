@@ -23,8 +23,9 @@ SERVICE_ID=<deployed id> BUILDER_URL=<a CE-133 builder bridge> READER_URL=<a CE-
 ```
 
 Against any node that serves JIP-2, `CHAIN_BACKEND=jip2 CHAIN_RPC=ws://<node>:19800` replaces
-the two bridges (`offchain/chain.py`); it is read-only until spec-valid work-package
-submission lands (jamswap#11).
+the two bridges (`offchain/chain.py`). To submit it needs the chain's authorizer: point
+`CHAIN_SPEC` at the net's JIP-4 chain spec (the authorizer is read from its genesis) or
+name it with `AUTHORIZER=<host service>:<code hash hex>`.
 
 ## Why you'd want to
 

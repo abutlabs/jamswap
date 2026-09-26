@@ -15,16 +15,18 @@ DEX's chain adapter (offchain/chain.py):
     BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 SERVICE_ID=100 \
         python3 differential.py lasair > lasair.json
 
-    # pj lane — inside the pj image, against a fresh polkajam-testnet: deploy + items via
-    # the public `jamt` CLI (runtime deploy and spec-valid submission are jamswap #13/#11),
-    # reads via the adapter's jip2 backend (JIP-2 serviceValue at CHAIN_RPC)
+    # pj lane — inside the pj image, against a fresh polkajam-testnet: deploy via the
+    # public `jamt` CLI (runtime deploy is jamswap #13); items and reads via the adapter's
+    # jip2 backend (JIP-2 submitWorkPackage + serviceValue at CHAIN_RPC), with the
+    # authorizer from the dev chain spec (`polkajam dump-spec`, or CHAIN_SPEC).
+    # PJ_SUBMIT=jamt sends the items with `jamt item` instead (an A/B for the builder).
     python3 differential.py pj > pj.json
 
     # verdict
     python3 differential.py compare lasair.json pj.json
 
-Clean-room: PolkaJam is a black box driven only by its public CLI (`jamt`) and its public
-JIP-2 RPC. No internals.
+Clean-room: PolkaJam is a black box driven only by its public CLI (`jamt`, `polkajam
+dump-spec`) and its public JIP-2 RPC. No internals.
 """
 import json
 import os
@@ -131,7 +133,7 @@ class Lasair:
         return b""
 
 
-# ---- polkajam lane: black-box via the jamt CLI ------------------------------
+# ---- polkajam lane: black-box via JIP-2 and the public CLIs ------------------
 class Polkajam:
     name = "polkajam"
     settle_secs = 30
@@ -139,8 +141,16 @@ class Polkajam:
     def __init__(self):
         self.jamt = os.environ.get("JAMT", "/usr/local/bin/jamt")
         self.jam = os.environ.get("JAM", "/work/jamswap-service.jam")
-        # reads go through the chain adapter's JIP-2 backend; the id is set by deploy()
-        self.chain = chain.Jip2Chain(url=os.environ.get("CHAIN_RPC") or "ws://localhost:19800")
+        self.via_jamt = os.environ.get("PJ_SUBMIT", "adapter") == "jamt"
+        # items and reads go through the chain adapter's JIP-2 backend; the id is set by
+        # deploy(); the authorizer comes from the chain spec polkajam-testnet runs (dev)
+        spec = os.environ.get("CHAIN_SPEC")
+        if not spec and not self.via_jamt:
+            spec = "/tmp/pj-dev-spec.json"
+            subprocess.run([os.environ.get("POLKAJAM", "/usr/local/bin/polkajam"), "--chain", "dev",
+                            "dump-spec", spec], capture_output=True, check=True, timeout=60)
+        self.chain = chain.Jip2Chain(url=os.environ.get("CHAIN_RPC") or "ws://localhost:19800",
+                                     chain_spec=spec)
 
     def _jamt(self, *args, check=True, timeout=120):
         return subprocess.run([self.jamt, *args], capture_output=True, text=True,
@@ -158,14 +168,29 @@ class Polkajam:
                 return
         raise RuntimeError(f"create-service failed: {out.stdout} {out.stderr}")
 
-    def item(self, payload):
-        self._jamt("item", "-G", "100000000", "-g", "9000000", self.sid, "0x" + payload.hex())
-        # pj drops work-items submitted back-to-back (they race for the same core/anchor),
-        # so let each one anchor + start accumulating before the next. Without this the
-        # first item (register) is silently lost while later ones land — a HARNESS bug that
-        # masquerades as a conformance divergence. Confirmed live: a spaced register settles
-        # in ~12s; three unspaced items drop the first.
-        time.sleep(10)
+    def item(self, payload, attempts=3):
+        if self.via_jamt:
+            self._jamt("item", "-G", "100000000", "-g", "9000000", self.sid, "0x" + payload.hex())
+            # jamt returns once the package is submitted: let each item anchor + start
+            # accumulating before the next (unspaced, the first register was seen lost
+            # while later items landed, which reads as a divergence but is the harness)
+            time.sleep(10)
+            return
+        # one package per item; wait until JIP-2 workPackageStatus says Ready (available:
+        # accumulated in that block, having no dependencies) so the items land in order.
+        # Failed means it can never become ready on this fork: only then resubmit.
+        for _ in range(attempts):
+            r = self.chain.submit(payload)
+            while True:
+                time.sleep(2)
+                status = next(iter(self.chain.package_status(r)))
+                if status in ("Ready", "Failed"):
+                    break
+            print(f"[{self.name}]   item {payload[:1].hex()} package {r['package_hash'][:12]} "
+                  f"core {r['core']}: {status}", file=sys.stderr)
+            if status == "Ready":
+                return
+        raise RuntimeError(f"item {payload[:1].hex()}: not Ready after {attempts} packages")
 
     def storage(self, key):
         return self.chain.read(key)            # JIP-2 serviceValue at the best block
