@@ -83,8 +83,8 @@ Phase 7 guarantor fixes (block rate, orphaning).
   recovers the order with no secret — **no reveal round, no griefing**. Two
   `accumulate` checks defeat a malicious builder (committee-hash match +
   consume-or-reject ciphertext ids). Crypto in [`crates/vdec`](../crates/vdec/),
-  sidecar in [`crates/committee`](../crates/committee/), proven e2e on lasair's retired HTTP
-  operator RPC (GP 0.7.2; that harness left with the RPC in #10 and returns with #11/#13).
+  sidecar in [`crates/committee`](../crates/committee/), proven e2e on live lasair and
+  PolkaJam nodes (`offchain/test_enc_round.py`, #24).
   ~n·18.7M gas/order (GP 0.8.0).
   See [`SEALED_ORDERS.md`](SEALED_ORDERS.md).
 - 🔬 **Sealed orders — ZK dark-pool (rung 1)** — proven in a spike

@@ -122,8 +122,15 @@ steal or alter).
 **How it runs in Jamswap today:** `docker compose up` builds the committee sidecar
 ([`crates/committee`](../crates/committee/)), commits its keys on-chain at startup, and
 routes sealed orders through it automatically. The crypto is in
-[`crates/vdec`](../crates/vdec/) (with security tests); it was proven end to end
-(honest orders settle; tampered / wrong-committee / injected orders are all rejected) — the harness, `offchain/test_enc_round.py`, drove lasair's retired HTTP operator RPC (GP 0.7.2) and was removed with it (jamswap#10); the payloads still come from `committee scenario`, and the live check returns over `offchain/chain.py` once the service deploys at runtime (#13) and submission is spec-valid (#11).
+[`crates/vdec`](../crates/vdec/) (with security tests); it is proven end to end
+on live lasair and PolkaJam nodes through `offchain/chain.py` (`offchain/test_enc_round.py`,
+jamswap#24): honest orders settle; a tampered Chaum-Pedersen proof is rejected in refine,
+a wrong committee and an injected uncommitted ciphertext in accumulate, each with the
+service state unchanged. (From 2026-07-03 until #24, `committee scenario`'s tampered
+round flipped a byte of the public section that follows the proofs, so that case tested
+refine's section parsing, not the proof check; the proof check itself was covered only by
+the `crates/vdec` unit tests. The scenario now corrupts a proof response, and the e2e
+refuses a scenario whose attacks carry anything but their own fault.)
 
 ---
 

@@ -202,8 +202,9 @@ not idempotent under that.
   (consume-or-reject). Trust is honest-committee for **liveness** only — the DDH proof
   forces honest plaintext, so the committee cannot forge or alter an order, only withhold
   decryption (censorship). Cost ~n·18.7M gas/order (measured, GP 0.8.0). Crypto in `crates/vdec`,
-  committee in `crates/committee`, proven e2e on lasair's retired HTTP operator RPC (GP 0.7.2;
-  the harness left with the RPC in #10 and returns with #11/#13). The residual
+  committee in `crates/committee`, proven e2e on live lasair and PolkaJam nodes
+  (`offchain/test_enc_round.py`, #24: a tampered proof rejected in refine, a swapped
+  committee and an injected ciphertext in accumulate, state unchanged). The residual
   gap vs a true dark pool (option 1) is that a decrypted order is public at clearing, same
   as commit–reveal — persistent hidden *resting* orders still require the ZK/MPC matcher.
 

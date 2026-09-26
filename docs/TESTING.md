@@ -2,9 +2,7 @@
 
 Testing is layered — each layer is fast, deterministic, and checks a different thing.
 Run them all before shipping; CI (`.github/workflows/ci.yml`) runs the first three on
-every push. (The encrypt-until-batch attack e2e — tampered / wrong-committee / injected
-rounds rejected — ran on lasair's retired HTTP operator RPC and left with it in #10; it
-returns over `chain.py` with runtime deploy, #13.)
+every push.
 
 | Layer | Where | What it proves | Needs |
 |-------|-------|----------------|-------|
@@ -26,7 +24,9 @@ returns over `chain.py` with runtime deploy, #13.)
 | **3m. Round batch** | `offchain/tests/test_round_batch.py` | what goes into a round's batch: hidden or deferred sealed orders **never take the batch cap** ahead of public orders (jamswap#6: cap 4, four deferred sealed orders and a crossing public pair → the pair is submitted in the next auction, not starved for the orders' ~32 min life); a sealed order whose counterparty missed the cap waits hidden rather than being revealed alone; a long run of them gives way and crosses the book a round later; sealed orders that can trade keep their place in the queue; a sealed order whose counterparty is dropped or re-priced away before submit (superseded seq, unpriceable or re-priced market order, claimed by a late landing) is **not revealed** (jamswap#8); encrypt-until-batch rounds are **bounded by refine gas** (21 at n = 2, n read from the on-chain committee) and a timed-out one is rebuilt with half as many, doubling back once one lands | Python (stdlib) |
 | **3n. Work-package submission** | `offchain/tests/test_workpackage.py`, `offchain/tests/test_jip2_submit.py` | the GP 0.8.0 work-package codec byte for byte (general naturals at every length boundary, refine context, work-item, package, hash; cross-checked with jam-types-py 0.8.0 when installed), the authorizer found in a JIP-4 chain spec's genesis (pools, preimage keys), and `Jip2Chain.submit`: the package it sends (anchor, lookup anchor, roots, code hash, gas, authorizer), core rotation, refusals as ChainBusy, a dropped send never retried | Python (stdlib) |
 | **3o. Runtime deploy + DEX setup** | `offchain/tests/test_deploy.py`, `offchain/tests/test_dex_setup.py` | the Bootstrap CreateService payload **byte for byte** against two payloads `jamt create-service` sent to a PolkaJam 0.1.29 node we ran; the deploy flow on a fake chain whose Bootstrap service parses the instruction with its own parser and runs GP `new` (lowest free id, the code provided with `submitPreimage`, usable once at the lookup anchor; a re-run reuses the service through the state file or by its code hash; a stale state file, a Failed package resubmitted, a Bootstrap that is not the registrar, one that provides the code itself, an explicit id, a refused create, a timeout); multi-item packages (order, shared gas, limits); `dex_setup`: markets + the six dev accounts in one package (handles 1..6), deposits once per fixed nonce, a re-run sends nothing, only what is missing, lost packages resent; the API opens once the JAMKB reserve covers the footprint | Python (stdlib + PyNaCl) |
+| **3p. Encrypted-round e2e harness** | `offchain/tests/test_enc_round_harness.py`, `crates/committee` (`cargo test`) | the checks the encrypted-round e2e (layer 4) rests on: each attack payload is the honest round with only its own fault (the tampered round flips a byte of a proof response, not the public section after it), the jip2 sentinel is signed by the service's `GOV_PUBKEY`, the GP 0.8.0 work-report decoder (a synthetic report and one PolkaJam 0.1.29 served), each backend's processed signal on scripted chains (a Failed package resent; error digests, dropped or abandoned items refused), the refine-layer check and the honest settlement | Python (stdlib + PyNaCl), Rust |
 | **4. End-to-end** | `offchain/test_sealed_resting_e2e.py`, `offchain/verify.py` | the real service on a live node: sealed orders rest & cross across rounds, a public order followed by the same account's sealed order still fills; register / duplicate-survival / deposit / withdraw / a matched trade | Docker + node |
+| **4b. Encrypted-round attacks** | `offchain/test_enc_round.py` | on a live chain through `chain.py`, both backends: the honest encrypt-until-batch round settles, and a **tampered Chaum-Pedersen proof** (refine rejects), a **wrong committee** (accumulate: committee hash) and an **injected uncommitted ciphertext** (accumulate: consume-or-reject) each leave the service state byte-identical, claimed only once the round is known to have been accumulated. jip2: a fresh service per case (runtime deploy), the round and a nonce sentinel in one package, state at the finalized block, the refine layer read from the work-report. jamnp (lasair): one service seeded empty at genesis, every case in turn, the node's landed-item count | a node + the committee binary |
 
 ## Why layer 3 exists (the bug it caught)
 
@@ -54,6 +54,22 @@ python3 -m unittest discover -s offchain/tests -v
 docker compose up -d
 make verify                                                  # verify.py inside the dex
 JAMSWAP_URL=http://127.0.0.1:8080 python3 offchain/test_sealed_resting_e2e.py
+
+# Layer 4b — the encrypted-round attacks (payloads from the committee binary)
+(cd crates/committee && cargo build --release)
+export COMMITTEE=crates/committee/target/release/committee
+# PolkaJam (or any JIP-2 node with the Bootstrap service), e.g. inside the pj differential
+# image next to `polkajam-testnet` (`polkajam --chain dev dump-spec` writes the spec);
+# where the committee binary cannot run, pass its `scenario 0` output as ENC_SCENARIO
+CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 CHAIN_SPEC=dev-spec.json \
+    python3 offchain/test_enc_round.py
+# lasair: a service seeded EMPTY at genesis, e.g. one native node holding every dev key
+#   lasair_client --dev-all-keys --own 0,1,2,3,4,5 --service service/jamswap-service.jam \
+#       --service-id 100 --metrics-port 9615 --spec-out spec.json
+# plus lasair_reader and jamnp_builder pointed at it (LASAIR_JAMNP_GENESIS_HEX = the
+# blake2b-256 of the spec's genesis_header)
+CHAIN_BACKEND=jamnp BUILDER_URL=http://127.0.0.1:19980 READER_URL=http://127.0.0.1:19990 \
+    NODE_METRICS_URL=http://127.0.0.1:9615/metrics SERVICE_ID=100 python3 offchain/test_enc_round.py
 ```
 
 ## Adding a scenario

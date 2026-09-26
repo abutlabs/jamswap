@@ -84,8 +84,9 @@ and non-reveal griefing; trust is honest-committee for *liveness* only (the DDH 
 forces honest plaintext). Verifiable-decryption cost is ~n·18.7M gas/order (measured, GP 0.8.0;
 zk-jam-service `spikes/vdec-gas/`), bounding a per-order-verified batch to ~267/n orders.
 Crypto lives in `crates/vdec`; the committee sidecar is `crates/committee`; proven e2e
-(honest settles; tampered / wrong-committee / injected all rejected) on a live node —
-the harness, `offchain/test_enc_round.py`, drove lasair's retired HTTP operator RPC (GP 0.7.2) and was removed with it (jamswap#10); the payloads still come from `committee scenario`, and the live check returns over `offchain/chain.py` once the service deploys at runtime (#13) and submission is spec-valid (#11).
+on live lasair and PolkaJam nodes through `offchain/chain.py` (`offchain/test_enc_round.py`,
+jamswap#24): the honest round settles; a tampered proof is rejected in refine, a swapped
+committee and an injected ciphertext in accumulate, each with the service state unchanged.
 
 `refine` for `MATCH`/`REVEAL` emits:
 `[0]‖[market:u32]‖[base:u32]‖[quote:u32]‖[settle_len:u32]‖[settlement]‖[resting book]`.

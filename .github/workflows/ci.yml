@@ -20,6 +20,9 @@ jobs:
       - name: Test the matching engine + auth (incl. property tests)
         run: cargo test --release
         working-directory: crates/match-engine
+      - name: Test the committee sidecar (the encrypted-round e2e's attack payloads)
+        run: cargo test --release
+        working-directory: crates/committee
 
   service-build:
     runs-on: ubuntu-latest
@@ -39,7 +42,7 @@ jobs:
           python-version: '3.11'
       - name: Syntax-check the off-chain builder, chain adapter, harnesses + demo
         run: |
-          python3 -m py_compile offchain/server.py offchain/chain.py offchain/jip2.py offchain/workpackage.py offchain/chainspec.py offchain/deploy.py offchain/dex_setup.py offchain/round.py offchain/treasury.py offchain/clearing.py offchain/verify.py differential/differential.py sim/demo.py
+          python3 -m py_compile offchain/server.py offchain/chain.py offchain/jip2.py offchain/workpackage.py offchain/chainspec.py offchain/deploy.py offchain/dex_setup.py offchain/round.py offchain/treasury.py offchain/clearing.py offchain/verify.py offchain/test_enc_round.py differential/differential.py sim/demo.py
       - name: PyNaCl (the dev accounts sign in the DEX setup tests)
         run: pip install pynacl
       - name: Round-lifecycle tests (sealed-order carry-forward / reveal-on-cross)
