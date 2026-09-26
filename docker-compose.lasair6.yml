@@ -133,6 +133,7 @@ services:
       LASAIR_GUARANTOR_PORT: "40061,40062,40063,40064,40065,40066"
       LASAIR_NODE_RPC: ""
       LASAIR_BUILDER_HTTP_PORT: "19980"
+      LASAIR_BUILDER_FANOUT: ${LASAIR_BUILDER_FANOUT:-}   # "all" = every item to all six (duplication test)
     networks: { lasnet: {} }
     restart: unless-stopped
 
