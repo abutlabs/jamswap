@@ -6,21 +6,25 @@ in-refine-verified signed order → FORGED order) on lasair and on PolkaJam, the
 the resulting on-chain SERVICE STATE is byte-identical. Any divergence is a conformance
 bug in one client (judged against the Graypaper GP 0.8.0 — never "whoever differs from pj").
 
-This is the QUIC-era rewrite of the original driver.py (whose lasair lane used the retired
-HTTP operator RPC). The lanes are now STANDALONE so each runs in its own environment and
-emits its state as JSON; a third `compare` step diffs the two:
+The lanes are STANDALONE so each runs in its own environment and emits its state as
+JSON; a third `compare` step diffs the two. Both lanes read service state through the
+DEX's chain adapter (offchain/chain.py):
 
-    # lasair lane — inside the lasair6 network, service seeded at genesis (SERVICE_ID)
+    # lasair lane — inside the lasair6 network, service seeded at genesis (SERVICE_ID);
+    # the adapter's jamnp backend (CE-133 builder + CE-129 reader bridges)
     BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 SERVICE_ID=100 \
         python3 differential.py lasair > lasair.json
 
-    # pj lane — inside the pj image, against a fresh polkajam-testnet
+    # pj lane — inside the pj image, against a fresh polkajam-testnet: deploy + items via
+    # the public `jamt` CLI (runtime deploy and spec-valid submission are jamswap #13/#11),
+    # reads via the adapter's jip2 backend (JIP-2 serviceValue at CHAIN_RPC)
     python3 differential.py pj > pj.json
 
     # verdict
     python3 differential.py compare lasair.json pj.json
 
-Clean-room: PolkaJam is a black box driven only by its public CLI (`jamt`). No internals.
+Clean-room: PolkaJam is a black box driven only by its public CLI (`jamt`) and its public
+JIP-2 RPC. No internals.
 """
 import json
 import os
@@ -28,9 +32,12 @@ import struct
 import subprocess
 import sys
 import time
-import urllib.request
 
 from nacl.signing import SigningKey
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, "..", "offchain")]   # chain.py: beside us in the image
+import chain  # noqa: E402
 
 S = 10_000
 MARKET, BASE, QUOTE = 1, 1, 0
@@ -91,34 +98,26 @@ def run_scenario(client):
     return out
 
 
-# ---- lasair lane: QUIC via the CE-133 builder + CE-129 reader bridges --------
+# ---- lasair lane: the chain adapter (jamnp: CE-133 builder + CE-129 reader) ---
 class Lasair:
     name = "lasair"
     settle_secs = 8
 
     def __init__(self):
-        self.builder = os.environ["BUILDER_URL"].rstrip("/")
-        self.reader = os.environ["READER_URL"].rstrip("/")
-        self.sid = int(os.environ.get("SERVICE_ID", "100"))
-
-    def _post(self, url, body):
-        req = urllib.request.Request(url, data=json.dumps(body).encode(),
-                                     headers={"content-type": "application/json"}, method="POST")
-        return json.loads(urllib.request.urlopen(req, timeout=60).read())
+        self.chain = chain.from_env()          # CHAIN_BACKEND (default jamnp) + SERVICE_ID
+        if self.chain.service_id is None:
+            self.chain.service_id = 100        # lasair6's genesis-seeded id
+        self.sid = self.chain.service_id
 
     def deploy(self):
-        # QUIC has no runtime deploy — the service is seeded at genesis; sid is fixed.
+        # no runtime deploy yet (jamswap #13) — the service is seeded at genesis; sid is fixed.
         pass
 
     def item(self, payload):
-        r = self._post(self.builder + "/submit", {"service_id": self.sid, "payload_hex": payload.hex()})
-        if r.get("accepted") is False:
-            raise RuntimeError("builder refused work-item (CE-133 queues full)")
+        self.chain.submit(payload)             # raises chain.ChainBusy if every guarantor refused
 
     def storage(self, key):
-        req = urllib.request.Request(f"{self.reader}/read?service={self.sid}&key={key.hex()}")
-        r = json.loads(urllib.request.urlopen(req, timeout=60).read())
-        return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
+        return self.chain.read(key)
 
     def poll(self, key, timeout=180):
         deadline = time.time() + timeout
@@ -138,6 +137,8 @@ class Polkajam:
     def __init__(self):
         self.jamt = os.environ.get("JAMT", "/usr/local/bin/jamt")
         self.jam = os.environ.get("JAM", "/work/jamswap-service.jam")
+        # reads go through the chain adapter's JIP-2 backend; the id is set by deploy()
+        self.chain = chain.Jip2Chain(url=os.environ.get("CHAIN_RPC") or "ws://localhost:19800")
 
     def _jamt(self, *args, check=True, timeout=120):
         return subprocess.run([self.jamt, *args], capture_output=True, text=True,
@@ -150,6 +151,7 @@ class Polkajam:
         for tok in out.stdout.split():
             if len(tok) == 8 and all(c in "0123456789abcdefABCDEF" for c in tok):
                 self.sid = str(int(tok, 16))
+                self.chain.service_id = int(tok, 16)
                 time.sleep(25)     # let the create anchor before items reference it
                 return
         raise RuntimeError(f"create-service failed: {out.stdout} {out.stderr}")
@@ -164,9 +166,7 @@ class Polkajam:
         time.sleep(10)
 
     def storage(self, key):
-        r = self._jamt("inspect", "storage", "--raw", self.sid, "0x" + key.hex(), check=False, timeout=60)
-        out = (r.stdout + r.stderr).strip()
-        return bytes.fromhex(out[2:]) if out.startswith("0x") else b""
+        return self.chain.read(key)            # JIP-2 serviceValue at the best block
 
     def poll(self, key, timeout=180):
         deadline = time.time() + timeout

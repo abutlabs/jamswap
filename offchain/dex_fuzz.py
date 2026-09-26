@@ -322,7 +322,7 @@ def run():
     prog = load_progress()
     seed = args.seed or (1000 + prog["levels_passed"])
     print(f"dex_fuzz: seed={seed} deepest_so_far={prog['deepest_pairs']} pairs  "
-          f"dex={L.DEX}  reader={S.READER_URL}")
+          f"dex={L.DEX}  chain={S.CHAIN.describe()}")
     _init_seqs()
 
     levels = list(enumerate(LEVELS, 1))

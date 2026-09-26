@@ -1,12 +1,16 @@
-import urllib.request as u, time, sys
+"""Finality soak (Gate 3a): every 5 min for ~13 h, sample the chain's finalized head and the
+DEX's cumulative volume + settle reverts, counting samples where finality did not advance.
+Runs beside the dex (same env: chain.py picks the backend; the finalized head is a height
+where the backend reports one, else a slot)."""
+import urllib.request as u, time
+import chain
+
+CHAIN = chain.from_env()
 last_fin = -1.0; stalls = 0
 for i in range(160):
     try:
-        m = u.urlopen("http://lm0:9615/metrics", timeout=5).read().decode()
-        fin = -1.0
-        for l in m.splitlines():
-            if l.startswith("lasair_finalized_height"):
-                fin = float(l.split()[-1])
+        f = CHAIN.finalized()
+        fin = -1.0 if f is None else float(f.height if f.height is not None else f.slot)
         d = u.urlopen("http://localhost:8080/metrics", timeout=5).read().decode()
         cv = "?"; rev = 0.0
         for l in d.splitlines():

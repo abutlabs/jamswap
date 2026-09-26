@@ -8,7 +8,7 @@ rerunnable against a long-lived chain:
 
   1. register  -> a handle is assigned on-chain        (accumulate + ed25519 verify)
   2. duplicate -> the SAME register payload is force-submitted twice straight to the
-                  builder (bypassing the dex's idempotency guard): GP rejects the
+                  chain (chain.py, bypassing the dex's idempotency guard): GP rejects the
                   duplicate work-package and the chain must keep authoring (the
                   pre-1.6.2 wedge regression test)
   3. deposit   -> faucet credit lands                  (unsigned accumulate)
@@ -20,9 +20,10 @@ import json, os, struct, sys, time, urllib.request
 
 from nacl.signing import SigningKey
 
+import chain                     # the dex's own chain adapter, configured by the same env
+
 DEX = "http://localhost:8080"
-BUILDER = os.environ["BUILDER_URL"]
-SID = int(os.environ["SERVICE_ID"])
+CHAIN = chain.from_env()
 SCALE = 10000
 
 
@@ -66,9 +67,10 @@ print("PASS register: handle", handle)
 # 2. duplicate work-packages must not wedge the chain
 payload = bytes([7]) + pub + sig
 for i in range(2):
-    r = post(BUILDER + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
-    if not r.get("accepted"):
-        sys.exit("FAIL: builder refused duplicate submit %d: %r" % (i, r))
+    try:
+        CHAIN.submit(payload)
+    except chain.ChainError as e:
+        sys.exit("FAIL: chain refused duplicate submit %d: %s" % (i, e))
 print("PASS duplicate: 2 identical packages submitted (chain must survive)")
 
 # 3. faucet deposit lands (this also proves the chain still accumulates AFTER the

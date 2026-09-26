@@ -3,15 +3,22 @@
 
 This is the operating layer the plan calls Phase 6: it collects orders into a
 pending batch per market, and on `/api/round` reads the market's resting book from
-chain, assembles the work-package (book + pending), submits it to the JAM node
-(TAG_MATCH), and clears the pending queue. It also serves the trading UI and proxies
-balance/state reads. Stdlib only (http.server, urllib, struct).
+chain, assembles the round's work-item (book + pending), submits it (TAG_SMATCH), and
+clears the pending queue. It also serves the trading UI and proxies balance/state reads.
+Every chain access goes through `chain.py` (one client-neutral interface; the backend is
+chosen by CHAIN_BACKEND, see there). Stdlib only (http.server, struct), plus PyNaCl for
+the signature preflight when installed.
 
-  LASAIR_RPC=http://localhost:19900 PORT=8080 python3 offchain/server.py
+  SERVICE_ID=100 BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 \
+      PORT=8080 python3 offchain/server.py                       # jamnp (default)
+  SERVICE_ID=<id> CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 \
+      python3 offchain/server.py                                 # JIP-2 node RPC
 """
-import hashlib, json, os, secrets, struct, subprocess, threading, time, urllib.request
+import hashlib, json, os, secrets, struct, subprocess, threading, time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import chain                       # the one client-neutral interface to the chain
+from chain import ChainBusy, ChainUnsupported
 import metrics                     # /metrics + the submit->settle pending ledger
 import order_telemetry            # per-order lifecycle SLO (placement -> durable clear)
 from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
@@ -92,29 +99,13 @@ def disp(v):                           # atomic int -> display number (int if wh
 _lock = threading.Lock()              # guards the pending books across request + auction threads
 _next_auction = [0.0]                 # wall-clock of the next auction tick (for the UI countdown)
 
-RPC = os.environ.get("LASAIR_RPC", "http://localhost:19900").rstrip("/")
-# Standard-service path. When BUILDER_URL is set, work-items are submitted through the
-# JAMNP-S builder daemon (which wraps each payload in a GP work-package and submits it
-# to the node's guarantor over CE-133/QUIC — refine -> accumulate), instead of the node's
-# operator-RPC /item route. This is what makes jamswap a STANDARD JAM service: it reaches
-# the chain through the published network protocol, not a lasair-specific API. Service
-# DEPLOY and all storage READS still use the node RPC (deploy is an operator action; the
-# guarantor shares the node's in-process service registry, so state settles in one place).
-BUILDER_URL = os.environ.get("BUILDER_URL", "").rstrip("/")
-# Storage READS: when READER_URL is set, on-chain service storage is read through the
-# lasair-reader daemon (which turns each GET into a JAMNP-S CE-129 state request to the
-# node over QUIC), instead of the node's operator-RPC storage route. Together with
-# BUILDER_URL (submit -> CE-133), this makes jamswap reach the chain ENTIRELY through
-# the published QUIC/JAMNP protocol — no lasair-specific HTTP API. In this mode the
-# service is DEPLOYED by being seeded into genesis (Chain.seed_service), so its id is
-# fixed and SERVICE_ID is required (there is no runtime deploy over QUIC).
-READER_URL = os.environ.get("READER_URL", "").rstrip("/")
-QUIC_MODE = bool(READER_URL or BUILDER_URL)
-# Service id: an explicit SERVICE_ID wins; otherwise (node-RPC mode only) we DEPLOY the
-# blob ($JAM) at startup and use whatever id the node assigns. Deploying here (rather
-# than trusting a hardcoded id) is what keeps the UI pointed at THIS service — node
-# service ids are assigned sequentially, so a node reused across runs drifts 1729 -> ...
-SID = int(os.environ["SERVICE_ID"]) if os.environ.get("SERVICE_ID") else None
+# The chain: submission, storage reads, heads and finality all go through this one
+# client-neutral interface (chain.py). CHAIN_BACKEND picks the backend: jamnp (default;
+# the CE-133 builder + CE-129 reader bridges at BUILDER_URL / READER_URL, finality from
+# NODE_METRICS_URL) or jip2 (the JIP-2 node RPC at CHAIN_RPC). SERVICE_ID names the
+# service, which is deployed out of band (genesis, or `jamt create-service`) until
+# runtime deploy lands (issue #13).
+CHAIN = chain.from_env()
 PORT = int(os.environ.get("PORT", "8080"))
 WEB = os.path.join(os.path.dirname(__file__), "web")
 
@@ -146,45 +137,34 @@ def committee_run(*args):
             d[p[0]] = p[1]
     return d
 
-# ---- node RPC + wire ------------------------------------------------------
-def node(path, body=None):
-    data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(RPC + path, data=data,
-        headers={"content-type": "application/json"}, method="POST" if data else "GET")
-    return json.loads(urllib.request.urlopen(req, timeout=30).read())
-def reader_get(path):
-    # local HTTP bridge to the lasair-reader daemon -> CE-129/QUIC to the node
-    req = urllib.request.Request(READER_URL + path, method="GET")
-    return json.loads(urllib.request.urlopen(req, timeout=30).read())
-
 # ---- finality (β) visibility ---------------------------------------------
 # A settled fill is on-chain and its balance delta is already applied, but the
 # block it landed in is not yet GRANDPA-finalized (β) — a short "Finalizing"
 # window (~finality lag, measured ~2 blocks / ~12s on the all-lasair net) before
-# it is irreversible. We surface it by scraping the node's Prometheus gauges
-# (lasair_finalized_height / _block_height) and stamping each fill with the head
-# height at settle time; the UI compares settle_height vs finalized_height.
-NODE_METRICS_URL = os.environ.get("NODE_METRICS_URL", "").strip()
+# it is irreversible. We surface it from the chain's best and finalized blocks and
+# stamp each fill with the head at settle time; the UI compares settle_height vs
+# finalized_height. The "heights" are block heights where the backend reports them
+# (jamnp); a backend whose blocks carry only a slot (jip2) orders by slot instead
+# ("ordinal": "slot") — every use only asks whether finality has reached a head seen
+# earlier, which a slot answers as well as a height on one chain.
 _fin_cache = {"t": 0.0, "v": None}
 def _read_finality():
     # {available, finalized_height, finalized_slot, block_height, slot, lag}; cached ~2s.
-    if not NODE_METRICS_URL:
-        return {"available": False}
     tnow = time.time()
     if _fin_cache["v"] is not None and tnow - _fin_cache["t"] < 2.0:
         return _fin_cache["v"]
     try:
-        txt = urllib.request.urlopen(NODE_METRICS_URL, timeout=2).read().decode()
-        g = {}
-        for ln in txt.splitlines():
-            if ln.startswith("lasair_") and " " in ln:
-                k, _, val = ln.partition(" ")
-                try: g[k] = float(val)
-                except ValueError: pass
-        fh, bh = int(g.get("lasair_finalized_height", 0)), int(g.get("lasair_block_height", 0))
-        v = {"available": fh > 0, "finalized_height": fh, "block_height": bh,
-             "finalized_slot": int(g.get("lasair_finalized_slot", 0)),
-             "slot": int(g.get("lasair_slot", 0)), "lag": max(0, bh - fh)}
+        fin = CHAIN.finalized()
+        head = CHAIN.head() if fin is not None else None
+        if fin is None or head is None:
+            v = {"available": False}
+        else:
+            by_height = fin.height is not None and head.height is not None
+            fh, bh = (fin.height, head.height) if by_height else (fin.slot, head.slot)
+            v = {"available": fh > 0, "finalized_height": fh, "block_height": bh,
+                 "finalized_slot": fin.slot or 0, "slot": head.slot or 0, "lag": max(0, bh - fh)}
+            if not by_height:
+                v["ordinal"] = "slot"
     except Exception:
         v = {"available": False}
     _fin_cache["t"], _fin_cache["v"] = tnow, v
@@ -192,27 +172,17 @@ def _read_finality():
 def api_finality(q):
     return _read_finality()
 def order_bytes(a, oid, side, p, q): return struct.pack("<IIBII", a, oid, side, p, q)
-def _post_json(url, body):
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(url, data=data,
-        headers={"content-type": "application/json"}, method="POST")
-    return json.loads(urllib.request.urlopen(req, timeout=30).read())
 # payload tag byte -> human op name, for the metrics ledger (matches the TAG_* consts)
 TAG_NAMES = {0: "match", 1: "deposit", 2: "commit", 3: "reveal", 4: "cancel", 5: "withdraw",
              6: "list", 7: "register", 8: "treasury", 9: "enc_setup", 10: "enc_commit",
              11: "enc_round", 12: "round", 13: "carry_commit", 14: "carry_enc_commit"}
-class ChainBusy(Exception):
-    """Every guarantor refused the CE-133 submission (mempool at --wp-queue-cap):
-    the payload never reached the chain. Callers either retry-later (api_round
-    re-queues the round's orders) or surface it as HTTP 503 (user ops)."""
-
 def submit(payload, check=None, detail=""):
-    # STANDARD path when BUILDER_URL is set: the builder daemon wraps this payload in a
-    # GP work-package and submits it to the guarantor over CE-133/QUIC. Otherwise the
-    # operator-RPC /item route (single-node harness / backward-compatible).
-    # Every relay is recorded in the pending ledger (by its tag byte); ops whose caller
-    # supplies a settle predicate are tracked submit->state-visible (/api/pending +
-    # the jamswap_settle_latency_seconds histogram).
+    # Relay one work-item payload to the chain (CHAIN.submit). Every relay is recorded in
+    # the pending ledger (by its tag byte); ops whose caller supplies a settle predicate are
+    # tracked submit->state-visible (/api/pending + the jamswap_settle_latency_seconds
+    # histogram). ChainBusy (every guarantor refused: backpressure) and ChainUnsupported
+    # (the backend cannot submit) mean the payload never reached the chain: the ledger
+    # entry is resolved as refused and the error raised for the caller to handle.
     op = TAG_NAMES.get(payload[0], f"tag{payload[0]}")
     tid = metrics.track(op, detail, check)
     if payload[0] in (TAG_SMATCH, TAG_REVEAL):
@@ -226,23 +196,17 @@ def submit(payload, check=None, detail=""):
                 f.write(payload.hex())
         except Exception:
             pass
-    if BUILDER_URL:
-        r = _post_json(BUILDER_URL + "/submit", {"service_id": SID, "payload_hex": payload.hex()})
-        if r.get("accepted") is False:
-            # backpressure: no guarantor took it — resolve the ledger entry (it can
-            # never settle) and raise for the caller to back off
-            metrics.refused(tid)
-            raise ChainBusy(f"{op}: all guarantors refused (CE-133 queues full)")
-        return r
-    return node(f"/v1/service/{SID}/item", {"payload_hex": payload.hex()})
+    try:
+        return CHAIN.submit(payload)
+    except ChainBusy as e:
+        metrics.refused(tid)           # it can never settle; the caller backs off
+        raise ChainBusy(f"{op}: {e}") from None
+    except ChainUnsupported:
+        metrics.refused(tid)
+        raise
 def storage(key):
-    # STANDARD path when READER_URL is set: read the key from the node's on-chain
-    # State_db over CE-129/QUIC via the reader bridge. Otherwise the operator-RPC route.
-    if READER_URL:
-        r = reader_get(f"/read?service={SID}&key={key.hex()}")
-        return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
-    r = node(f"/v1/service/{SID}/storage/{key.hex()}")
-    return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
+    # the value under `key` in the service's storage at the best head (b"" when absent)
+    return CHAIN.read(key)
 def bal(asset, acct):
     return int.from_bytes(storage(b"b" + struct.pack("<II", asset, acct)) or b"\0", "little")
 def handle_of(pubkey):                 # b"h"+pubkey(32) -> account handle (or None)
@@ -429,13 +393,11 @@ def api_handle(q):
 def api_nonce(q):
     return {"nonce": nonce_of(int(q["handle"]))}
 def footprint_octets():
-    # the service's live state footprint in octets (validator RAM), from the node. 0 if
-    # the node predates the footprint endpoint (rent then reads as 0 — fail-open, honest).
-    # QUIC mode has no CE for the account footprint yet -> 0 (same fail-open).
-    if QUIC_MODE:
-        return 0
+    # the service's live state footprint in octets (validator RAM), from its on-chain
+    # account record. 0 when the backend cannot read the record (jamnp has no CE for it
+    # yet) — rent then reads as 0: fail-open, honest.
     try:
-        return int(node(f"/v1/service/{SID}/footprint").get("octets", 0))
+        return CHAIN.service_info().octets
     except Exception:
         return 0
 def rent_reserve_atomic():
@@ -1777,16 +1739,12 @@ def api_footprint(q):
     # JAMKB is a READ-ONLY tracker for now: 1 JAMKB = 1 KB of footprint. This is a
     # measurement only — nothing is held, funded, or consumed. Whether to enforce a
     # reserve/consumption model in the node is a deferred protocol decision (docs/JAMKB.md).
-    if QUIC_MODE:
-        # no CE-129 account-footprint read yet — degrade gracefully
-        return {"available": False}
     try:
-        fp = node(f"/v1/service/{SID}/footprint")
+        info = CHAIN.service_info()
     except Exception:
-        # older lasair-node (< the footprint endpoint) — degrade gracefully
+        # the backend cannot read the account record (jamnp) — degrade gracefully
         return {"available": False}
-    fp["available"] = True
-    return fp
+    return {"items": info.items, "octets": info.octets, "available": True}
 
 ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
                "/api/list": api_list, "/api/order": api_order, "/api/round": api_round,
@@ -2126,37 +2084,24 @@ class H(BaseHTTPRequestHandler):
             self._send(404, json.dumps({"error": "no route"}).encode())
 
 def wait_for_node():
-    # QUIC mode: wait for the reader bridge to have learned a chain head (so CE-129
-    # reads will succeed). Node-RPC mode: wait for the operator /v1/healthz.
+    # wait (up to ~60 s) until the backend can serve reads: the reader bridge has learned
+    # a head (jamnp), or the node answers bestBlock (jip2)
     for _ in range(60):
         try:
-            if READER_URL:
-                if reader_get("/healthz").get("head_hex"): return
-            elif "ok" in str(node("/v1/healthz")): return
+            if CHAIN.ready(): return
         except Exception: pass
         time.sleep(1)
 
-def deploy_jam():
-    jam = open(os.environ["JAM"], "rb").read()
-    r = node("/v1/service", {"jam_hex": jam.hex()})
-    return int(r["service_id"])
-
 if __name__ == "__main__":
-    if SID is None and QUIC_MODE:
-        raise SystemExit("QUIC mode (BUILDER_URL/READER_URL set) requires SERVICE_ID: "
-                         "the service is seeded into genesis (Chain.seed_service), not "
-                         "deployed at runtime. Set SERVICE_ID to the seeded id.")
-    if SID is None and os.environ.get("JAM"):
-        wait_for_node()
-        SID = deploy_jam()                      # use the id THIS deploy was assigned
-        print(f"deployed jamswap-service -> service id {SID}")
-    elif SID is None:
-        SID = 1729                              # last-resort default (first deploy on a fresh node)
-    elif QUIC_MODE:
-        # explicit, genesis-seeded id — just wait for the chain to be reachable
-        print(f"jamswap-service pre-seeded in genesis at id {SID} (QUIC mode); waiting for head ...")
-        wait_for_node()
-    print(f"jamswap off-chain API + UI on :{PORT} (node {RPC}, service {SID})")
+    if CHAIN.service_id is None:
+        raise SystemExit("SERVICE_ID is required: the service is deployed out of band (seeded "
+                         "into genesis, or `jamt create-service`); runtime deploy is issue #13")
+    print(f"jamswap-service at id {CHAIN.service_id} via {CHAIN.describe()}; waiting for head ...")
+    wait_for_node()
+    if not CHAIN.submits:
+        print(f"WARNING: {CHAIN.name} cannot submit work-items yet (issue #11): the DEX is "
+              f"read-only — orders queue but rounds cannot reach the chain")
+    print(f"jamswap off-chain API + UI on :{PORT} ({CHAIN.describe()})")
     load_trades(); load_execs()
     try: ensure_markets(); ensure_reserve(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)
