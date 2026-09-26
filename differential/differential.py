@@ -4,7 +4,7 @@
 Runs the IDENTICAL trustless scenario (owner-signed register → list → deposit →
 in-refine-verified signed order → FORGED order) on lasair and on PolkaJam, then asserts
 the resulting on-chain SERVICE STATE is byte-identical. Any divergence is a conformance
-bug in one client (judged against the Graypaper GP 0.7.2 — never "whoever differs from pj").
+bug in one client (judged against the Graypaper GP 0.8.0 — never "whoever differs from pj").
 
 This is the QUIC-era rewrite of the original driver.py (whose lasair lane used the retired
 HTTP operator RPC). The lanes are now STANDALONE so each runs in its own environment and
@@ -140,9 +140,11 @@ class Polkajam:
                               timeout=timeout, check=check)
 
     def deploy(self):
-        out = self._jamt("create-service", self.jam, "1000000000", check=False, timeout=300)
-        for tok in (out.stdout + out.stderr).split():
-            if tok.isalnum() and len(tok) == 8 and tok.startswith("0000"):
+        # --raw: jamt prints only the new service id (8 hex digits) on stdout; since
+        # jamt 0.1.29 the id is not printed at all without it
+        out = self._jamt("create-service", "--raw", self.jam, "1000000000", check=False, timeout=300)
+        for tok in out.stdout.split():
+            if len(tok) == 8 and all(c in "0123456789abcdefABCDEF" for c in tok):
                 self.sid = str(int(tok, 16))
                 time.sleep(25)     # let the create anchor before items reference it
                 return
