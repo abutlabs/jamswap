@@ -184,7 +184,11 @@ therefore cannot change the clearing price or volume. The matching the validator
 re-run is identical to what it would be if the resting sealed order had been included;
 it just wouldn't have traded. (This carry-forward logic is the pure `offchain/round.py`
 planner, regression-tested in `offchain/tests/test_round_lifecycle.py` — including the
-exact "sealed sells, then later sealed buys" sequence that was previously broken.)
+exact "sealed sells, then later sealed buys" sequence that was previously broken.) A
+waiting sealed order — hidden, or its commit not yet final — also takes **no place in
+the auction's capped batch**: only orders that can trade this round compete for it, so
+resting sealed orders never hold public orders back (`plan_batch`; jamswap#6,
+`offchain/tests/test_round_batch.py`).
 
 **One honest limitation.** A sealed order that never finds a counterparty keeps a small
 commitment/ciphertext on-chain until it expires (good-till-time) or you cancel it. And

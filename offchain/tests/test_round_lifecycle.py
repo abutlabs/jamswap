@@ -20,7 +20,7 @@ import sys
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from round import plan_round, BUY, SELL  # noqa: E402
+from round import plan_batch, plan_round, BUY, SELL, FIT_PASSES  # noqa: E402
 
 _oid = [0]
 
@@ -199,6 +199,67 @@ class CommitReadinessGate(unittest.TestCase):
         plan = plan_round([s], [], now=200.0, sealed_ready=lambda o: False)
         self.assertEqual([o["oid"] for o in plan.expired], [s["oid"]])
         self.assertEqual(len(plan.deferred), 0)
+
+
+def ids(orders):
+    return [id(o) for o in orders]
+
+
+class BatchCap(unittest.TestCase):
+    """plan_batch (jamswap#6): the batch cap applies only to orders that can trade this round.
+    A hidden or deferred sealed order waits OUTSIDE the cap, so it can't keep public orders
+    out; a sealed order is never revealed in a batch its counterparty didn't make."""
+
+    @staticmethod
+    def first(cap):
+        return lambda orders: (orders[:cap], orders[cap:])
+
+    def test_waiting_sealed_orders_take_no_place_in_the_batch(self):
+        hidden = [sell(9) for _ in range(3)]            # no buy reaches 9
+        deferred = [sell(1) for _ in range(3)]          # would cross, but commit not final
+        pb, ps = pbuy(2), psell(2)
+        waiting = set(ids(deferred))
+        plan = plan_batch(hidden + deferred + [pb, ps], [], self.first(2),
+                          sealed_ready=lambda o: id(o) not in waiting)
+        self.assertEqual(ids(plan.public), ids([pb, ps]))
+        self.assertEqual((plan.reveal, plan.overflow), ([], []))
+        self.assertEqual(ids(plan.carry), ids(hidden))
+        self.assertEqual(ids(plan.deferred), ids(deferred))
+
+    def test_no_reveal_without_the_counterparty_in_the_batch(self):
+        s = [sell(1) for _ in range(2)]
+        pb = pbuy(1)
+        plan = plan_batch(s + [pb], [], self.first(2))
+        self.assertEqual(plan.reveal, [], "the buy they cross would be over the cap")
+        self.assertEqual(ids(plan.public), ids([pb]))
+        self.assertEqual(ids(plan.carry), ids(s))
+
+    def test_crossing_orders_over_the_cap_overflow_in_queue_order(self):
+        pending = [sell(1), pbuy(1), pbuy(1), psell(1), pbuy(1)]
+        plan = plan_batch(pending, [], self.first(3))
+        self.assertEqual(ids(plan.reveal + plan.public), ids([pending[0]] + pending[1:3]))
+        self.assertEqual(ids(plan.overflow), ids(pending[3:]))
+
+    def test_refills_are_bounded_and_public_orders_still_get_in(self):
+        calls = []
+
+        def fit(orders):
+            calls.append(len(orders))
+            return orders[:1], orders[1:]
+        pb = pbuy(1)
+        plan = plan_batch([sell(1) for _ in range(50)] + [pb], [], fit)
+        self.assertLessEqual(len(calls), FIT_PASSES + 1)
+        self.assertEqual((ids(plan.public), plan.reveal), (ids([pb]), []))
+        self.assertEqual(len(plan.carry) + len(plan.overflow), 50)
+
+    def test_with_room_for_everything_it_is_plan_round(self):
+        pending = [buy(3), sell(2), sell(9), buy(1, expiry=5.0), pbuy(2), psell(4)]
+        resting = [{"side": SELL, "price": 3, "qty": 10}]
+        a = plan_round(pending, resting, now=10.0)
+        b = plan_batch(pending, resting, lambda o: (list(o), []), now=10.0)
+        for f in ("reveal", "public", "carry", "expired", "deferred"):
+            self.assertEqual(ids(getattr(b, f)), ids(getattr(a, f)), f)
+        self.assertEqual(b.overflow, [])
 
 
 class Purity(unittest.TestCase):

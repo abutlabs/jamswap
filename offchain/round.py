@@ -2,8 +2,10 @@
 orders rest (hidden) for a later one.
 
 This is pure, deterministic, node-free logic so it can be unit-tested exhaustively
-(see `tests/test_round_lifecycle.py`). `server.py` calls `plan_round` on every 6 s
-auction tick.
+(see `tests/test_round_lifecycle.py`). `server.py` calls `plan_batch` on every 6 s
+auction tick: `plan_round` over the whole queue, with the batch cap applied only to the
+orders that can trade this round (so sealed orders that must wait never take a place in
+the batch — see `plan_batch`).
 
 ## Why this exists (the bug it fixes)
 
@@ -59,18 +61,21 @@ class RoundPlan:
     - `deferred` — sealed orders whose commit isn't on-chain (finalized) yet; held OUT of
                    this batch entirely so they neither reveal nor make another order appear
                    to cross against liquidity that won't be submitted. Retried next round.
+    - `overflow` — orders that could trade but didn't fit this round's batch (`plan_batch`);
+                   they wait for a later round. Always empty from `plan_round`.
     """
 
-    __slots__ = ("reveal", "public", "carry", "expired", "deferred")
+    __slots__ = ("reveal", "public", "carry", "expired", "deferred", "overflow")
 
-    def __init__(self, reveal, public, carry, expired, deferred=None):
+    def __init__(self, reveal, public, carry, expired, deferred=None, overflow=None):
         self.reveal, self.public, self.carry, self.expired = reveal, public, carry, expired
         self.deferred = deferred if deferred is not None else []
+        self.overflow = overflow if overflow is not None else []
 
     def __repr__(self):
         return (f"RoundPlan(reveal={len(self.reveal)}, public={len(self.public)}, "
                 f"carry={len(self.carry)}, expired={len(self.expired)}, "
-                f"deferred={len(self.deferred)})")
+                f"deferred={len(self.deferred)}, overflow={len(self.overflow)})")
 
 
 def _best_opposing(orders):
@@ -149,3 +154,59 @@ def plan_round(pending, resting, now=0.0, sealed_ready=None):
             deferred.append(o)                     # commit not on-chain yet; wait, don't reveal
     return RoundPlan(reveal=reveal, public=public, carry=carry,
                      expired=expired, deferred=deferred)
+
+
+FIT_PASSES = 4   # batch refills before unproven sealed orders give way (see plan_batch)
+
+
+def plan_batch(pending, resting, fit, now=0.0, sealed_ready=None):
+    """Plan one auction round whose batch is bounded: `plan_round`, with the cap applied
+    only to the orders that can join this round.
+
+    `fit(candidates) -> (batch, overflow)` is the capacity policy (the server's
+    `_cap_batch`: the order count, and never an account's newer public order ahead of its
+    older one). `candidates` are in queue order, and `fit` must be prefix-closed: taking
+    orders out of the candidates never drops one it admitted before (the server's cap takes
+    a prefix of the queue).
+
+    ## Who competes for the cap (jamswap#6)
+
+    Public orders, and ready sealed orders that cross the liquidity of the WHOLE queue. A
+    sealed order that is deferred (commit not final yet) or hidden (it crosses nothing even
+    against every queued order, so against no part of it) cannot join this round whatever
+    else does: it waits outside the cap. The server used to cap the queue first and plan
+    only the capped part, re-queueing such orders AHEAD of the overflow every auction —
+    48 of them (the lasair6 cap) kept every public order out of every round for their whole
+    ~32 min life.
+
+    A sealed order in the batch whose only counterparties were left over the cap crosses
+    nothing in the batch: it is taken back out (it waits, still hidden — never revealed
+    alone) and the batch is refilled. Crossing is mutual, so an order that crosses nothing
+    is no other order's counterparty: taking it out uncrosses nothing, and refilling only
+    adds liquidity, so every pass keeps the previous pass's reveals. After FIT_PASSES
+    passes the sealed orders no batch has shown to cross give way to the rest, which bounds
+    the work and keeps a long run of such orders at the head of the queue from holding
+    public orders out (they cross the book those orders leave, a round later).
+
+    Returns a `RoundPlan`: `reveal`/`public` are the batch, `overflow` what waits for a
+    later round. Pure: does not mutate its inputs.
+    """
+    full = plan_round(pending, resting, now, sealed_ready)
+    crossing = {id(o) for o in full.reveal}
+    carry, expired = list(full.carry), list(full.expired)
+    for n in range(FIT_PASSES + 1):
+        if n == FIT_PASSES:
+            crossing = {id(o) for o in plan.reveal}     # only proven reveals compete now
+        cands = [o for o in pending if not o.get("sealed") or id(o) in crossing]
+        batch, _ = fit(cands)
+        plan = plan_round(batch, resting, now)          # its sealed orders are all ready
+        stuck = plan.carry + plan.expired               # counterparty left over the cap
+        if not stuck:
+            break
+        carry += plan.carry
+        expired += plan.expired
+        crossing -= {id(o) for o in stuck}
+    placed = {id(o) for o in plan.reveal + plan.public + carry + expired + full.deferred}
+    return RoundPlan(reveal=plan.reveal, public=plan.public, carry=carry, expired=expired,
+                     deferred=full.deferred,
+                     overflow=[o for o in pending if id(o) not in placed])

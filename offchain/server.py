@@ -21,7 +21,7 @@ import chain                       # the one client-neutral interface to the cha
 from chain import ChainBusy, ChainUnsupported
 import metrics                     # /metrics + the submit->settle pending ledger
 import order_telemetry            # per-order lifecycle SLO (placement -> durable clear)
-from round import plan_round      # pure round planner (sealed carry-forward); tests/test_round_lifecycle.py
+from round import plan_batch        # pure round planner (sealed carry-forward, batch cap); tests/test_round_lifecycle.py
 from clearing import clear        # builder-side clearing (mirrors refine); for per-order fill receipts
 from treasury import (jamkb_rent, profit_split, max_withdrawable, solvency, reserve_target,
                       JAMKB_SUPPLY, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN)
@@ -893,12 +893,14 @@ def _price_market_orders(m, public):
     return public, []
 
 def _cap_batch(orders, cap):
-    """Split the mempool into this round's batch (the first `cap`) and the overflow, without
-    ever letting an account's NEWER public order into the batch while an OLDER one of the
-    same account waits in the overflow: the newer one settling would raise the account's
-    floor past the older one, stranding it for good. Each account's public orders are
-    re-dealt into the queue positions they already hold, lowest seq first, so the cap takes
-    every account's oldest orders. Sealed orders don't move (they carry no order seq)."""
+    """Split the orders that could trade this round (queue order; plan_batch picks them)
+    into the batch (the first `cap`) and the overflow, without ever letting an account's
+    NEWER public order into the batch while an OLDER one of the same account waits in the
+    overflow: the newer one settling would raise the account's floor past the older one,
+    stranding it for good. Each account's public orders are re-dealt into the queue
+    positions they already hold, lowest seq first, so the cap takes every account's oldest
+    orders. Sealed orders don't move (they carry no order seq). A prefix: taking orders out
+    of `orders` never drops one it batched before (plan_batch relies on it)."""
     slots = {}
     for i, o in enumerate(orders):
         if not o.get("sealed"):
@@ -1535,25 +1537,29 @@ def _build_round(m, base, quote):
     sealed_ready = _sealed_ready_predicate(m, commit_entries, fin,
                                            None if final_raw is None else _set_entries(final_raw))
     with _lock:                        # snapshot + re-queue atomically so a concurrent
-        pend_all = pending.get(m, [])  # api_order during submit isn't dropped
-        # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
-        # (~5.29M gas each), so an unbounded batch eventually exceeds any refine
-        # budget and the round becomes a poison pill that can never settle — while
-        # re-queued failures keep GROWING it (observed live: 116-order batches,
-        # volume pinned at 0). Oldest orders go first; the overflow waits its turn —
-        # and never holds an account's older order back behind its newer one (_cap_batch).
-        pend, overflow = _cap_batch(pend_all, MAX_ROUND_ORDERS)
-        for o in pend:                 # attach current GTT expiry for the planner
+        pend_all = list(pending.get(m, []))   # api_order during submit isn't dropped
+        for o in pend_all:             # attach current GTT expiry for the planner
             o["expiry"] = order_expiry.get((m, o["account"], o["oid"]))
         # Decide which orders clear now. Sealed orders that DON'T cross current liquidity
         # rest HIDDEN (carried forward) rather than being immediate-or-cancel — so a sealed
         # sell placed now can meet a sealed buy placed in a later auction. A sealed order is
         # revealed only in the round it actually crosses AND its commit is on-chain
         # (sealed_ready), so the planner and the batch agree (see round.py + tests).
+        # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
+        # (~5.29M gas each), so an unbounded batch eventually exceeds any refine
+        # budget and the round becomes a poison pill that can never settle — while
+        # re-queued failures keep GROWING it (observed live: 116-order batches,
+        # volume pinned at 0). Oldest orders go first; the overflow waits its turn —
+        # and never holds an account's older order back behind its newer one (_cap_batch).
+        # Only orders that can trade this round compete for the cap: a hidden or deferred
+        # sealed order waits outside it, so it can't keep public orders out (jamswap#6).
         resting_orders = [o for o in _parse_book(raw) if (o["account"], o["oid"]) not in set(pruned)]
-        plan = plan_round(pend, resting_orders, now, sealed_ready=sealed_ready)
-        # hidden non-crossing sealed + not-yet-committed (deferred) + over-cap tail all wait
-        pending[m] = plan.carry + plan.deferred + overflow
+        plan = plan_batch(pend_all, resting_orders, lambda c: _cap_batch(c, MAX_ROUND_ORDERS),
+                          now, sealed_ready=sealed_ready)
+        # hidden non-crossing sealed + not-yet-committed (deferred) + over-cap orders all
+        # wait, in the order they were queued
+        wait = {id(o) for o in plan.carry + plan.deferred + plan.overflow}
+        pending[m] = [o for o in pend_all if id(o) in wait]
     # From here this round's orders (the batch, plus the GTT-expired sealed ones) are OUT of the
     # mempool. Each is ended with a terminal, or registered in flight with the round — or, on
     # ANY exception before the round is registered (a reader timeout in the price / seq-floor
@@ -1561,7 +1567,7 @@ def _build_round(m, base, quote):
     # (_requeue_unsent). Such an exception used to lose the whole batch: in neither the mempool
     # nor _inflight, never submitted, and "open" in the order telemetry forever.
     out = {_okey(o) for o in plan.reveal + plan.public + plan.expired}
-    taken = [o for o in pend if _okey(o) in out]
+    taken = [o for o in pend_all if _okey(o) in out]
     ended = set()                      # keys of taken orders already ended with a terminal
     try:
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
