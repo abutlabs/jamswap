@@ -12,8 +12,10 @@ Layout fields:
             41000 + 100*net + i, RPC port 42000 + 100*net + i (both on the host too)
   finality  PolkaJam/JavaJAM --finality-mode (grandpa | dummy); lasair nodes run
             LASAIR_FINALITY (grandpa, the jam-np PR #6 draft wire, by default)
-  dex       add the DEX stack (builder, reader, dex on :8200+net). The bridges are
-            lasair's, so only for layouts with a lasair node until #10/#11/#12.
+  dex       add the DEX (on :8200+net; nets/netgen.py dex_backend). With a lasair node
+            in the layout: lasair's builder and reader bridges, the service in genesis.
+            Without: the dex on a node's JIP-2 RPC, deploying the service at startup,
+            plus a load generator and netwatch over every node (`./dex soak`).
   issue     the jamswap issue the net is for
 """
 
@@ -29,8 +31,8 @@ PROFILES = {
         about="3 PolkaJam : 3 lasair, dummy finality; consensus research"),
     # ---- generated (nets/compose/<name>.yml) -------------------------------------
     "pj6": dict(
-        clients="pj,pj,pj,pj,pj,pj", net=1, finality="grandpa", issue="#17",
-        about="6x PolkaJam, GRANDPA: no lasair node at all"),
+        clients="pj,pj,pj,pj,pj,pj", net=1, finality="grandpa", dex=True, issue="#17",
+        about="6x PolkaJam, GRANDPA + the DEX on JIP-2: no lasair node at all"),
     "pj-pbnjam": dict(
         clients="pj,pj,pj,pj,pj,pbnjam", net=2, finality="grandpa", issue="#19",
         about="5 PolkaJam : 1 pbnjam; PolkaJam's 5-of-6 GRANDPA quorum alone"),

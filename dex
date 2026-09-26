@@ -20,6 +20,12 @@
 #   ./dex down NET=pj6
 #   ./dex nets                 # the profiles;  ./dex gen  regenerates nets/compose/*.yml
 #
+# pj6 carries the DEX on JIP-2 (no lasair anywhere): up deploys the service at startup
+# and waits for the API; load/noload drive its load generator, and
+#
+#   ./dex soak NET=pj6 [SECS]  # A1-A4 (docs/NETS.md): load + netwatch for SECS (600),
+#                              # then state parity and the soak verdict; exit 0 iff all pass
+#
 # Keys: LASAIR_DEV_ALL_KEYS=1 (default on nets with lasair, until lasair#62) lets each
 # lasair node sign guarantees as every lasair index; =0 narrows it to its own index.
 # JAVAJAM_RUNNER=native|docker (default native on macOS, whose Docker can't run it).
@@ -75,6 +81,11 @@ if [ -n "$NET_JAVAJAM" ]; then
 fi
 
 _finality() { curl -s --max-time 5 "$URL/api/finality" 2>/dev/null; }
+_market() {
+  curl -s --max-time 5 "$URL/api/state?market=1" \
+    | python3 -c "import sys,json;d=json.load(sys.stdin);print('market  :',{k:d.get(k) for k in ('price','volume','pending','sealed_onchain','in_auction')})" 2>/dev/null \
+    || echo "market  : (dex not up yet)"
+}
 _available() { _finality | python3 -c "import sys,json;print(json.load(sys.stdin).get('available',False))" 2>/dev/null || echo False; }
 
 # start the JavaJAM validators natively once spec-init has minted the genesis
@@ -116,12 +127,29 @@ case "$cmd" in
       "${COMPOSE[@]}" build -q
       "${COMPOSE[@]}" up -d
       [ "$JJ_NATIVE" = 1 ] && _jj_native_up
+      # manual trading by default, as on lasair6
+      if [ "$NET_DEX_BACKEND" = jip2 ]; then "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true; fi
       echo "✓ $NET up: validators (index order) = $NET_CLIENTS"
       if [ "$JJ_NATIVE" = 1 ]; then echo "  JavaJAM: native processes; every validator addressed at host $HOST_IP"
       elif [ -n "$NET_JAVAJAM" ]; then echo "  JavaJAM: containers ($JAVAJAM_IMAGE)"; fi
       echo "  keys: LASAIR_DEV_ALL_KEYS=$LASAIR_DEV_ALL_KEYS$([ -z "$NET_LASAIR_SET" ] && echo " (no lasair node: every key held only by its own node)")"
-      [ -n "$URL" ] && echo "  DEX → $URL"
       echo "  one head + finality: ./dex heads NET=$NET"
+      if [ -n "$URL" ]; then
+        # the API opens once the service is deployed (jip2), the markets are listed, the
+        # dev accounts are funded and the treasury's reserve has landed: a minute or two
+        echo "DEX starting ($([ "$NET_DEX_BACKEND" = jip2 ] && echo "runtime deploy + setup" || echo "genesis service"))…"
+        for _ in $(seq 1 120); do
+          _finality | grep -q available && break
+          sleep 5
+          printf '.'
+        done
+        echo
+        if _finality | grep -q available; then
+          echo "✓ DEX ready → $URL   (loadgen is OFF; './dex load NET=$NET' to drive it)"
+        else
+          echo "DEX not answering at $URL after 10 min: './dex logs NET=$NET dex'"
+        fi
+      fi
       exit 0
     fi
     # (re)build the genesis minter against the current lasair image: cached when unchanged,
@@ -163,12 +191,16 @@ case "$cmd" in
   heads)  exec python3 nets/onehead.py "$NET" --secs "${2:-300}";;
 
   status)
-    if [ "$NET" != lasair6 ]; then exec python3 nets/onehead.py "$NET" --secs 0; fi
+    if [ "$NET" != lasair6 ]; then
+      rc=0; python3 nets/onehead.py "$NET" --secs 0 || rc=$?
+      [ -n "$URL" ] && _market
+      exit $rc
+    fi
     echo "finality: $(_finality)"
-    curl -s --max-time 5 "$URL/api/state?market=1" \
-      | python3 -c "import sys,json;d=json.load(sys.stdin);print('market  :',{k:d.get(k) for k in ('price','volume','pending','sealed_onchain','in_auction')})" 2>/dev/null \
-      || echo "market  : (dex not up yet)"
+    _market
     ;;
+
+  soak)   exec python3 nets/soak.py "$NET" --secs "${2:-600}";;
 
   nets)   python3 nets/netgen.py list;;
   gen)    python3 nets/netgen.py write && python3 nets/netgen.py check && echo "✓ nets/compose/*.yml regenerated";;

@@ -136,14 +136,56 @@ class Netgen(unittest.TestCase):
         self.assertIn("@sha256:", doc["pb4"]["image"])
         self.assertIn("@sha256:", jj["image"])
 
-    def test_dex_needs_lasair(self):
-        profiles.PROFILES["_t"] = dict(clients="pj,pj,pj,pj,pj,pj", net=98, finality="grandpa",
+    def test_dex_backend_follows_the_layout(self):
+        self.assertEqual(netgen.dex_backend("lasair-pj-javajam"), "jamnp")   # lasair's bridges
+        self.assertEqual(netgen.dex_backend("pj6"), "jip2")
+        self.assertIsNone(netgen.dex_backend("pj-javajam"))
+
+    def test_jip2_dex_deploys_at_startup_with_no_bridge(self):
+        doc = netgen.compose("pj6")["services"]
+        self.assertNotIn("builder", doc)
+        self.assertNotIn("reader", doc)
+        self.assertNotIn("SERVICE", doc["spec-init"]["environment"])     # nothing in genesis
+        env = doc["dex"]["environment"]
+        self.assertNotIn("SERVICE_ID", env)                               # deploy.py at startup
+        self.assertEqual((env["CHAIN_BACKEND"], env["CHAIN_RPC"], env["CHAIN_SPEC"]),
+                         ("jip2", "ws://rpc:42150", "/shared/spec.json"))
+        self.assertEqual(env["SERVICE_CODE"], "/work/jamswap-service.jam")
+        self.assertIn("../../service/jamswap-service.jam:/work/jamswap-service.jam:ro",
+                      doc["dex"]["volumes"])
+        self.assertEqual(doc["dex"]["depends_on"]["rpc"], {"condition": "service_started"})
+        self.assertEqual(doc["dex"]["ports"], ["8201:8080"])
+        self.assertEqual(doc["loadgen"]["environment"]["DEX_URL"], "http://dex:8080")
+        nw = doc["netwatch"]["environment"]
+        self.assertEqual(nw["NETWATCH_NODES"].split(),
+                         ["pj%d,polkajam,ws://pj%d:%d" % (i, i, 42100 + i) for i in range(6)])
+        self.assertEqual(nw["NETWATCH_VALIDATORS"], "pj0,pj1,pj2,pj3,pj4,pj5")
+
+    def test_jip2_dex_gateway_is_an_ordinary_polkajam_node(self):
+        # a validator's RPC does not forward work-packages: the DEX has a node of its own
+        profiles.PROFILES["_t"] = dict(clients="pbnjam,pj,pj,pj,pj,pj", net=98, finality="grandpa",
                                        dex=True, issue="-", about="-")
         try:
-            with self.assertRaises(ValueError):
-                netgen.compose("_t")
+            doc = netgen.compose("_t")["services"]
+            gw = doc["rpc"]
+            self.assertEqual(gw["image"], doc["spec-init"]["image"])      # the net's PolkaJam build
+            self.assertEqual(gw["environment"]["ROLE"], "node")          # no validator key
+            self.assertEqual(gw["environment"]["FINALITY_MODE"], "grandpa")
+            self.assertEqual((gw["environment"]["PORT"], gw["environment"]["RPC_PORT"]),
+                             ("50850", "51850"))
+            self.assertEqual(doc["dex"]["environment"]["CHAIN_RPC"], "ws://rpc:51850")
+            # netwatch judges the validators, whatever their client
+            self.assertEqual(doc["netwatch"]["environment"]["NETWATCH_NODES"].split()[0],
+                             "pb0,pbnjam,ws://pb0:51800")
         finally:
             del profiles.PROFILES["_t"]
+
+    def test_the_lasair_dex_stack_is_unchanged(self):
+        doc = netgen.compose("lasair-pj-javajam")["services"]
+        self.assertEqual(doc["dex"]["depends_on"], ["builder", "reader"])
+        self.assertEqual(doc["dex"]["environment"]["SERVICE_ID"], "100")
+        self.assertEqual(doc["spec-init"]["environment"]["SERVICE"], "/work/jamswap-service.jam")
+        self.assertNotIn("loadgen", doc)
 
     @unittest.skipIf(yaml is None, "PyYAML not installed")
     def test_yaml_round_trip(self):
