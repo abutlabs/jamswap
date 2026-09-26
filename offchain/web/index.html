@@ -834,10 +834,13 @@ class Component extends DCLogic {
       else if(isRest){st=(dp.indexOf('partial')>=0)?'partial · resting':'resting';stColor='#F59E0B';stBg='rgba(245,158,11,.1)';}
       else if(isFilled){st='filled';stColor=T.buy;stBg='rgba(22,163,74,.1)';}
       else{st='filled';stColor=T.buy;stBg='rgba(22,163,74,.1)';}
-      // finality: a fill is β-final once the finalized head reaches its settle block.
+      // finality: where the server read it from the finalized state (ex.final: the fill's
+      // round is there), that answer; otherwise (a backend that cannot read there) the fill
+      // is β-final once the finalized head reaches its settle block (height, or slot).
       // only meaningful when something actually filled (a bare cancel moves no balance).
       const hasFill=(Number(ex.filled)||0)>0;
-      const fnl=(finalHt!=null&&ex.settle_height!=null&&hasFill)?(finalHt>=ex.settle_height):null;
+      const fnl=!hasFill?null:(typeof ex.final==='boolean')?ex.final
+               :(finalHt!=null&&ex.settle_height!=null)?(finalHt>=ex.settle_height):null;
       return {
         sideColor:esd==='buy'?T.buy:T.sell,side:esd.toUpperCase(),
         filled:ex.filled!=null?String(ex.filled):'?',price:ex.price!=null?String(ex.price):'?',
@@ -937,7 +940,10 @@ class Component extends DCLogic {
       // executions
       execList,hasExecs:execList.length>0,hasNoExecs:execList.length===0,execCount:execList.length,
       finalityAvailable:fin.available===true,
-      finalityChip:fin.available?('β #'+fin.finalized_height+' · head #'+fin.block_height+(fin.lag?' · lag '+fin.lag:'')):'',
+      // heads by block height (jamnp) or by slot (jip2: "ordinal":"slot")
+      finalityChip:fin.available?(fin.ordinal==='slot'
+        ?('β slot '+fin.finalized_height+' · head slot '+fin.block_height+(fin.lag?' · lag '+fin.lag:''))
+        :('β #'+fin.finalized_height+' · head #'+fin.block_height+(fin.lag?' · lag '+fin.lag:''))):'',
       // orders
       orderList,hasOrders:orderList.length>0,hasNoOrders:orderList.length===0,orderCount:String(orderList.length),
       // trade card

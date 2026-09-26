@@ -69,11 +69,11 @@ class SealedCarry(unittest.TestCase):
     def _settle(self):
         # simulate the round accumulating on-chain AND SURVIVING the durability
         # hold: its id is marked landed, one sweep starts the hold window,
-        # a second sweep past SETTLE_HOLD_SECS confirms (receipts + carry)
+        # a second sweep past the settle hold confirms (receipts + carry)
         self._land()
         t = time.time()
         server._resolve_rounds_once(now=t)
-        server._resolve_rounds_once(now=t + server.SETTLE_HOLD_SECS + 1)
+        server._resolve_rounds_once(now=t + server.settle_hold_secs() + 1)
 
     def test_receipts_are_settlement_contingent(self):
         # submit alone produces NO receipt and NO carry — the round is in flight.
@@ -135,7 +135,7 @@ class SealedCarry(unittest.TestCase):
         self.assertIn(1, server._inflight, "round stays in flight awaiting re-settle")
         self._land(rid)                                              # re-applied
         server._resolve_rounds_once(now=t + 20)                      # hold restarts here
-        server._resolve_rounds_once(now=t + 20 + server.SETTLE_HOLD_SECS + 1)
+        server._resolve_rounds_once(now=t + 20 + server.settle_hold_secs() + 1)
         rec = server.api_executions({"account": 7})["executions"][0]
         self.assertEqual(rec["disposition"], "partial-carried")
         self.assertEqual(rec["filled"], 10)

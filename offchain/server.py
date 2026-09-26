@@ -137,20 +137,51 @@ def committee_run(*args):
             d[p[0]] = p[1]
     return d
 
-# ---- finality (β) visibility ---------------------------------------------
+# ---- finality (β) -----------------------------------------------------------
 # A settled fill is on-chain and its balance delta is already applied, but the
 # block it landed in is not yet GRANDPA-finalized (β) — a short "Finalizing"
 # window (~finality lag, measured ~2 blocks / ~12s on the all-lasair net) before
-# it is irreversible. We surface it from the chain's best and finalized blocks and
-# stamp each fill with the head at settle time; the UI compares settle_height vs
-# finalized_height. The "heights" are block heights where the backend reports them
-# (jamnp); a backend whose blocks carry only a slot (jip2) orders by slot instead
-# ("ordinal": "slot") — every use only asks whether finality has reached a head seen
-# earlier, which a slot answers as well as a height on one chain.
+# it is irreversible. Heads and finality come from CHAIN.head() / CHAIN.finalized().
+#
+# Durable decisions (revealing a sealed order, receipting a round, calling a fill
+# final) ask the STATE at the finalized head — CHAIN.read(key, at="final") — whether
+# the thing they depend on is there: the commit, the round's landed marker. That is
+# exact: a key in the finalized state can never be re-orged away, whichever fork it
+# landed on. The jip2 backend reads there. The jamnp backend cannot (lasair's reader
+# bridge reads only at the head it follows; lasair#70), so for it every such decision
+# keeps its height rule: pin the head height at which a thing is first seen and call
+# it final once the finalized height reaches that height. _storage_final returns None
+# for such a backend, which is how callers pick the rule.
+#
+# /api/finality orders heads by block height where the backend reports one (jamnp)
+# and by slot otherwise ("ordinal": "slot"; jip2), and adds the head hashes where the
+# backend has them. Each fill is stamped with the head at settle time (settle_height),
+# and — where the backend reads the finalized state — with its round and whether that
+# round is final (see _record_exec).
+SLOT_SECS = 6                      # GP 0.8.0 P: the slot period, 6 s on every JAM chain
+FINALITY_WINDOW_SLOTS = int(os.environ.get("FINALITY_WINDOW_SLOTS", "10"))
+                                   # finality is "advancing" while the finalized head has
+                                   # moved within this many slots (60 s); it drives the
+                                   # derived settle hold (settle_hold_secs)
 _fin_cache = {"t": 0.0, "v": None}
-def _read_finality():
+_fin_track = {"key": None, "seen": 0.0, "moved": None}   # the finalized head last seen,
+                                   # when it was seen, and when it last moved
+def _fin_key(fin):
+    # the identity of a finalized head: (slot, hash) where the backend has hashes (jip2),
+    # else its height (jamnp)
+    return (fin.slot, fin.hash) if fin.hash is not None else fin.height
+
+def _track_finality(key, now):
+    t = _fin_track
+    if t["key"] is not None and key != t["key"]:
+        # it moved at some moment since the previous look: count the EARLIEST, so a look
+        # after a long silence never makes a stalled finality look fresh
+        t["moved"] = t["seen"]
+    t["key"], t["seen"] = key, now
+
+def _read_finality(now=None):
     # {available, finalized_height, finalized_slot, block_height, slot, lag}; cached ~2s.
-    tnow = time.time()
+    tnow = time.time() if now is None else now
     if _fin_cache["v"] is not None and tnow - _fin_cache["t"] < 2.0:
         return _fin_cache["v"]
     try:
@@ -165,10 +196,32 @@ def _read_finality():
                  "finalized_slot": fin.slot or 0, "slot": head.slot or 0, "lag": max(0, bh - fh)}
             if not by_height:
                 v["ordinal"] = "slot"
+            if fin.hash is not None and head.hash is not None:
+                v["finalized_hash"], v["head_hash"] = fin.hash.hex(), head.hash.hex()
+            if v["available"]:
+                _track_finality(_fin_key(fin), tnow)
     except Exception:
         v = {"available": False}
     _fin_cache["t"], _fin_cache["v"] = tnow, v
     return v
+
+def _finality_advancing(now=None):
+    # has the finalized head moved within the last FINALITY_WINDOW_SLOTS slots?
+    now = time.time() if now is None else now
+    if not _read_finality(now).get("available"):
+        return False
+    moved = _fin_track["moved"]
+    return moved is not None and now - moved <= FINALITY_WINDOW_SLOTS * SLOT_SECS
+
+def _storage_final(key):
+    # the value under `key` in the service's storage at the FINALIZED head (b"" when
+    # absent), or None when the backend cannot read there (jamnp) — then the caller
+    # keeps its height rule. Other chain errors propagate.
+    try:
+        return CHAIN.read(key, at="final")
+    except ChainUnsupported:
+        return None
+
 def api_finality(q):
     return _read_finality()
 def order_bytes(a, oid, side, p, q): return struct.pack("<IIBII", a, oid, side, p, q)
@@ -872,6 +925,11 @@ def round_id(payload):
 def _landed_slot(rid):
     v = storage(b"rl" + rid)
     return int.from_bytes(v[:4], "little") if len(v) >= 4 else None
+def _landed_final(rid):
+    # is the round marked landed in the state at the finalized head? None when the backend
+    # cannot read there (jamnp)
+    v = _storage_final(b"rl" + rid)
+    return None if v is None else len(v) >= 4
 def _consumed_entry(o):
     # the (hash ‖ account) set entry a revealed sealed order consumes: H(order‖nonce) in
     # commit–reveal, H(C1‖body) (the ciphertext id) in encrypt-until-batch
@@ -913,8 +971,9 @@ def _parse_book(raw):
 # rewrites the book just the same, and its marker shows it.
 #
 # RECEIPTS ARE SETTLEMENT-CONTINGENT: a round's per-order receipts and sealed-remainder
-# carries are recorded only once its id is marked landed and is still marked at a second
-# sighting (SETTLE_HOLD_SECS, and at least one resolver period, later) — on the real mixed
+# carries are recorded only once its id is marked landed and that landing is durable
+# (_confirmed: in the finalized state, or still marked at a second sighting the settle
+# hold, and at least one resolver period, later) — on the real mixed
 # chain most overloaded rounds time out or are service-rejected, and receipting at submit
 # time filled the execution report with "filled" orders whose balances never moved (phantom
 # fills, found live 2026-07-09: report full of fills, every balance still genesis
@@ -952,8 +1011,23 @@ DEAD_CONFIRM_SECS = float(os.environ.get("DEAD_CONFIRM_SECS", "4"))     # dead t
 MIN_CONFIRM_SECS = 2.0             # a landing is confirmed by a second sighting at least one
                                    # resolver period after the first, even with no settle hold:
                                    # two reads a moment apart (a build checks twice) see one head
-def _confirmed(ok_since, now):
-    return now - ok_since >= max(SETTLE_HOLD_SECS, MIN_CONFIRM_SECS)
+def _confirmed(rec, now):
+    """Is a round's landing (first seen on the best chain at rec["ok_since"]) durable
+    enough to receipt? A backend that reads the finalized state (jip2) answers exactly: the
+    landing is durable once the round's marker is there, and while finality advances that
+    is the only way in (the derived hold is 0: finality replaces the timer). Otherwise the
+    landing must have held on the best chain for the settle hold, and at least one resolver
+    period: the rule for a backend that cannot read there (jamnp; lasair#70), for a
+    finality that has stalled, and for an explicit SETTLE_HOLD_SECS."""
+    try:
+        final = _landed_final(rec["rid"])
+    except Exception:
+        return False                       # reader hiccup: judge it next sweep
+    if final:
+        return True
+    if final is False and SETTLE_HOLD_SECS is None and _finality_advancing(now):
+        return False                       # finality replaces the timer: wait for it to reach the landing
+    return now - rec["ok_since"] >= max(settle_hold_secs(now), MIN_CONFIRM_SECS)
 ZOMBIE_WATCH_SECS = float(os.environ.get("ZOMBIE_WATCH_SECS", "900"))   # watch a released round this long
 ZOMBIE_CAP = 32                    # per market: beyond it the oldest UNSIGHTED zombies are forgotten
 
@@ -976,19 +1050,31 @@ REG_MAX_ATTEMPTS = int(os.environ.get("REG_MAX_ATTEMPTS", "20"))
 ROUND_GATE_SECS = float(os.environ.get("ROUND_GATE_SECS", "300"))   # settle patience for a round that is
                                    # NOT dead (still landable) before it is abandoned + re-queued: it only
                                    # catches rounds the chain never included (dead ones go in seconds)
-SETTLE_HOLD_SECS = float(os.environ.get("SETTLE_HOLD_SECS", "150"))
-                          # durability: the cv predicate must HOLD this long before receipts. The
-                          # right value is the DEEPEST re-org the chain can produce, which depends
-                          # on the consensus:
-                          #   * MIXED lasair+PolkaJam (no shared finality): a settling branch can
-                          #     lose fork choice minutes later — observed live 2026-07-09: volume
-                          #     54 -> 0, balances snapped back to genesis; a 60 s hold was breached
-                          #     once by a re-org spanning a full Safrole epoch. 150 s (> 2 tiny
-                          #     epochs of 12x6 s) rides those out. This is the honest stopgap until
-                          #     a cross-client finality gadget lands (docs/TOKENS.md roadmap).
-                          #   * ALL-LASAIR (one coherent fork choice): re-orgs are 1-2 blocks, so
-                          #     SETTLE_HOLD_SECS=18 (3 slots) confirms fast — set it in the compose.
-                          # jamswap_settle_reverted_total measures whether the chosen hold is safe.
+# Settle hold — durability: how long a round's landing must HOLD on the best chain before
+# receipts. Derived from the chain unless set explicitly (settle_hold_secs):
+#   * finality ADVANCING (the finalized head moved within FINALITY_WINDOW_SLOTS): 0 —
+#     finality replaces the timer. On jip2 a round is then receipted once its marker is in
+#     the finalized state (_confirmed); on jamnp, which cannot read there, after a second
+#     best-chain sighting (what lasair6 has run with SETTLE_HOLD_SECS=0).
+#   * no finality, or STALLED: SETTLE_HOLD_SLOTS slots. The right value is the DEEPEST
+#     re-org the chain can produce: on the MIXED lasair+PolkaJam net (no shared finality) a
+#     settling branch lost fork choice minutes later — observed live 2026-07-09: volume
+#     54 -> 0, balances snapped back to genesis; a 60 s hold was breached once by a re-org
+#     spanning a full Safrole epoch. 25 slots (150 s, > 2 tiny epochs of 12x6 s) ride those
+#     out — the old fixed default.
+#   * SETTLE_HOLD_SECS set: exactly that, whatever finality does (lasair6 sets 0); a landing
+#     already in the finalized state still needs no hold.
+# jamswap_settle_reverted_total measures whether the hold is safe; jamswap_settle_hold_seconds
+# shows the one in force.
+def _env_secs(name):
+    v = os.environ.get(name, "").strip()
+    return float(v) if v else None
+SETTLE_HOLD_SECS = _env_secs("SETTLE_HOLD_SECS")      # explicit override; None = derived
+SETTLE_HOLD_SLOTS = int(os.environ.get("SETTLE_HOLD_SLOTS", "25"))
+def settle_hold_secs(now=None):
+    if SETTLE_HOLD_SECS is not None:
+        return SETTLE_HOLD_SECS
+    return 0.0 if _finality_advancing(now) else float(SETTLE_HOLD_SLOTS * SLOT_SECS)
 MAX_ROUND_ORDERS = int(os.environ.get("MAX_ROUND_ORDERS", "150"))
                                    # per-round batch cap. Refine gas ~5.29M/signed order (GP 0.8.0)
                                    # against a package budget of G_R (1e9 on tiny) caps a round at
@@ -1097,7 +1183,7 @@ def _finalize_round(m, fr):
         print(f"round m{m}: WARNING settled while {len(lost)} of its order(s) are held by "
               f"another landed round — receipting only the rest")
     carried = _carry_sealed_remainders(m, sealed, fr["clearing"]["fills"], now)
-    try: record_executions(m, fr["resting"], sealed, public, fr["clearing"])
+    try: record_executions(m, fr["resting"], sealed, public, fr["clearing"], rid=fr["rid"])
     except Exception as e: print("exec record failed", m, e)
     for a, oid in fr.get("pruned", ()):
         # the prune landed with the round: the expired resting order is off the book now
@@ -1191,8 +1277,8 @@ def _unclaim(m, z):
 def _resolve_zombies(now, m):
     """Watch market m's released rounds for a LATE landing: lasair can still include a
     round's work-item after the builder gave up on it. A zombie whose id is marked landed
-    settled: its orders are claimed at once and, on a LATER sweep once the settle hold has
-    passed, it is finalized like any round — two sightings, exactly as for the round in
+    settled: its orders are claimed at once and, on a LATER sweep once the landing is
+    durable (_confirmed), it is finalized like any round — two sightings, exactly as for the round in
     flight, so a landing seen once on a fork that then loses is undone, not receipted (with
     SETTLE_HOLD_SECS=0 it used to finalize, irreversibly, on the very sweep that first saw
     it). A late landing a re-org erases gives its orders back. Unsighted zombies are
@@ -1215,7 +1301,7 @@ def _resolve_zombies(now, m):
                 metrics.inc("jamswap_round_late_landed_total", {"market": str(m)})
                 print(f"round m{m}: released round ({z['why']}) SETTLED LATE at slot {slot} — "
                       f"claimed its {len(z['sealed']) + len(z['public'])} order(s)")
-            elif _confirmed(z["ok_since"], now) and not _rival_landed(m, z):
+            elif _confirmed(z, now) and not _rival_landed(m, z):
                 try: _finalize_round(m, z)
                 except Exception as e: print("late round finalize failed", m, e)
                 continue                                 # done: stop watching it
@@ -1254,7 +1340,7 @@ def _resolve_inflight(m, fr, now):
         fr.pop("dead_since", None)
         if fr.get("ok_since") is None:
             fr["ok_since"] = now                  # first sighting on-chain: start the hold
-        elif _confirmed(fr["ok_since"], now) and not _rival_landed(m, fr):
+        elif _confirmed(fr, now) and not _rival_landed(m, fr):
             _inflight.pop(m, None)                # survived the hold window: durable
             try: _finalize_round(m, fr)
             except Exception as e: print("round finalize failed", m, e)
@@ -1354,10 +1440,11 @@ def _stats_poller():
             print("stats poller error:", e)
 
 # Per-market record of the head height at which each on-chain commit entry was first
-# observed — the basis for the Phase-2 finality gate below.  market -> {entry: height}
+# observed — the basis of the Phase-2 height rule below (backends that cannot read the
+# finalized state).  market -> {entry: height}
 _commit_seen = {}
 
-def _sealed_ready_predicate(m, commit_entries, fin):
+def _sealed_ready_predicate(m, commit_entries, fin, final_entries=None):
     """Return a predicate `o -> bool`: may this sealed order be REVEALED this round?
 
     Phase 1 — its owner-signed commit must be on the best chain (`commit_entries`: the
@@ -1366,14 +1453,24 @@ def _sealed_ready_predicate(m, commit_entries, fin):
 
     Phase 2 — on a FINALIZING chain, the commit must also be β-FINALIZED. A finalized
     commit can never re-org out, so the reveal round can't be rolled back for a vanished
-    commit (the race the old deferral loop fought). We approximate 'finalized'
-    conservatively without a finalized-state read: pin the head height at which each
-    commit is first seen on-chain, and treat it as final once `finalized_height` reaches
-    that height. This only ever DELAYS a reveal relative to Phase 1 — it never reveals a
+    commit (the race the old deferral loop fought).
+      * `final_entries` given — the same set read at the finalized head (jip2): the commit
+        is final when it is there. Exact, whichever fork it landed on.
+      * otherwise (jamnp: lasair's reader bridge reads only at its head, lasair#70) we
+        approximate 'finalized' conservatively: pin the head height at which each commit
+        is first seen on-chain, and treat it as final once `finalized_height` reaches that
+        height.
+    Either way this only ever DELAYS a reveal relative to Phase 1 — it never reveals a
     commit that isn't on-chain — so it is a strict safety improvement. On a NON-finalizing
-    chain (no finalized height, e.g. the mixed net) it falls back to best-chain membership,
-    so sealed trading still works there.
+    chain (no finalized head, e.g. the mixed net) it falls back to best-chain membership,
+    so sealed trading still works there; the caller passes `final_entries` only when
+    finality is available.
     """
+    if final_entries is not None:
+        def ready_final(o):
+            e = _consumed_entry(o)
+            return e in commit_entries and e in final_entries
+        return ready_final
     seen = _commit_seen.setdefault(m, {})
     bh = fin.get("block_height")
     for e in commit_entries:                 # first sighting of a commit: pin the head height
@@ -1431,7 +1528,12 @@ def _build_round(m, base, quote):
     # committee and re-submitting — every auction until the commit landed.
     set_key = b"encset" if ENC_MODE else b"commits"
     commit_entries = _set_entries(storage(set_key + struct.pack("<I", m)))
-    sealed_ready = _sealed_ready_predicate(m, commit_entries, _read_finality())
+    fin = _read_finality()
+    # A commit is final when it is in the set at the finalized head, where the backend
+    # reads there (jip2); jamnp cannot (None: the height rule applies instead).
+    final_raw = _storage_final(set_key + struct.pack("<I", m)) if fin.get("available") else None
+    sealed_ready = _sealed_ready_predicate(m, commit_entries, fin,
+                                           None if final_raw is None else _set_entries(final_raw))
     with _lock:                        # snapshot + re-queue atomically so a concurrent
         pend_all = pending.get(m, [])  # api_order during submit isn't dropped
         # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
@@ -1915,10 +2017,11 @@ def load_execs():
 # likewise non-terminal.
 _TERMINAL_DISP = {"filled", "partial-cancelled", "cancelled", "rejected"}
 
-def _record_exec(o, filled, price, sealed, now):
+def _record_exec(o, filled, price, sealed, now, landing=None):
     # append one order's outcome to its owner's receipt feed. A sealed order's disposition is
     # decided upstream (_carry_sealed_remainders) and stamped on o["_outcome"] with a human
-    # o["_reason"]; a public order derives its disposition from the fill here.
+    # o["_reason"]; a public order derives its disposition from the fill here. `landing` is
+    # (round id hex, final) where the backend reads the finalized state (record_executions).
     qty, rem = o["qty"], o["qty"] - filled
     disp_ = o.get("_outcome")
     reason = o.get("_reason")
@@ -1936,24 +2039,41 @@ def _record_exec(o, filled, price, sealed, now):
     dq = executions.setdefault(o["account"], deque(maxlen=EXEC_HISTORY))
     _fin = _read_finality()
     _sh = _fin.get("block_height") if _fin.get("available") else None
-    dq.append({"ts": now, "market": o["market"], "side": o["side"],
-               "price": disp(price), "qty": disp(qty), "filled": disp(filled),
-               "remainder": disp(rem), "disposition": disp_, "reason": reason, "oid": o["oid"],
-               # head height at settle time; the fill is β-final once finalized_height reaches it
-               "settle_height": _sh})
+    rec = {"ts": now, "market": o["market"], "side": o["side"],
+           "price": disp(price), "qty": disp(qty), "filled": disp(filled),
+           "remainder": disp(rem), "disposition": disp_, "reason": reason, "oid": o["oid"],
+           # head height at settle time: with no "final" field below, the fill is β-final
+           # once finalized_height reaches it (jamnp's height rule)
+           "settle_height": _sh}
+    if landing is not None and filled > 0:
+        # the fill's finality read from state: the round it settled in, and whether that
+        # round's landed marker is in the state at the finalized head (api_executions
+        # re-checks one that is not yet)
+        rec["round"], rec["final"] = landing
+    dq.append(rec)
     if disp_ in _TERMINAL_DISP:
         order_telemetry.terminal(o["market"], o["account"], o["oid"], disp_, filled=filled,
                                  reason=reason)
-def record_executions(m, resting, reveal, public, clearing=None):
+def record_executions(m, resting, reveal, public, clearing=None, rid=None):
     # write a per-order receipt for the trader-submitted orders (reveal=sealed, public=rests) and
     # any resting maker that filled, from this round's clearing. `clearing` may be passed in (api_round
     # computes it once, for both the receipt and the sealed-remainder carry); recomputed if omitted.
     # No receipts when nothing crossed. Every public order the round leaves on the book (unfilled,
     # part-filled, or a resting maker the price reached but rationing passed over) is also marked
     # `rested` in the order telemetry, with the clearing price it met (soak_verdict judges by it).
+    # `rid` is the round's id: where the backend reads the finalized state, each fill records
+    # it and whether the round is final (jamnp cannot read there: receipts carry neither).
     combined = list(resting) + list(reveal) + list(public)
     if not combined:
         return
+    landing = None
+    if rid is not None:
+        try:
+            final = _landed_final(rid)
+        except Exception:
+            final = False                           # reader hiccup: re-checked on read
+        if final is not None:
+            landing = (rid.hex(), final)
     c = clearing if clearing is not None else clear(combined)
     price, fills = c["price"], c["fills"]
     reveal_ids = {o["oid"] for o in reveal}
@@ -1979,7 +2099,7 @@ def record_executions(m, resting, reveal, public, clearing=None):
             rests(o, filled)                        # a public order's remainder rests on the book
             if filled == 0:
                 continue                            # a fully-unfilled public order: no receipt
-        _record_exec(o, filled, price, o["oid"] in reveal_ids, now)
+        _record_exec(o, filled, price, o["oid"] in reveal_ids, now, landing)
         touched = True
     for o in resting:                               # resting makers that got filled this round
         filled = fills.get(o["oid"], 0)
@@ -1988,7 +2108,7 @@ def record_executions(m, resting, reveal, public, clearing=None):
             # reached it and rationing passed it over (an untouched maker needs no event)
             rests(o, filled)
         if filled > 0:
-            _record_exec(dict(o, market=m), filled, price, sealed=False, now=now)
+            _record_exec(dict(o, market=m), filled, price, sealed=False, now=now, landing=landing)
             touched = True
     if touched:
         _save_execs()
@@ -1996,7 +2116,34 @@ def api_executions(q):
     # a trader's recent per-order fill receipts, most-recent first.
     acct = int(q["account"])
     dq = executions.get(acct, ())
-    return {"executions": list(reversed(list(dq)))[:100]}
+    out = list(reversed(list(dq)))[:100]
+    _refresh_final(out)
+    return {"executions": out}
+
+LANDED_TTL_SLOTS = 600             # a landed marker is reaped this many slots after it landed
+                                   # (LANDED_TTL_SLOTS in crates/match-engine/src/round_id.rs)
+def _refresh_final(recs):
+    # A fill receipted before its round's marker reached the finalized state (finality had
+    # stalled: the slot hold receipted it) turns final once the marker is there. Finality is
+    # irreversible, so a receipt once final is never read again; one finalizedBlock per call
+    # and one read per round. Receipts older than the marker's lifetime are left as they are.
+    todo = [r for r in recs if r.get("final") is False and r.get("round")
+            and time.time() - r.get("ts", 0) < LANDED_TTL_SLOTS * SLOT_SECS]
+    if not todo:
+        return
+    try:
+        at = CHAIN.finalized()
+        known = {}
+        for r in todo:
+            if r["round"] not in known:
+                v = CHAIN.read(b"rl" + bytes.fromhex(r["round"]), at=at)
+                known[r["round"]] = len(v) >= 4
+            if known[r["round"]]:
+                r["final"] = True
+    except Exception:
+        return                             # the receipts say "not final yet"; next call retries
+    if any(r["final"] for r in todo):
+        _save_execs()
 
 def api_pending(q):
     # the submit->settle ledger (docs/OBSERVABILITY_PLAN.md phase 0): where every
@@ -2142,10 +2289,16 @@ if __name__ == "__main__":
     metrics.gauge_fn("jamswap_resting_orders",
                      "resting orders across all on-chain books",
                      lambda: sum(len(book_of(m)) for m, _b, _q in DEFAULT_MARKETS))
+    metrics.gauge_fn("jamswap_settle_hold_seconds",
+                     "settle hold in force: 0 while finality advances, SETTLE_HOLD_SLOTS slots "
+                     "when it does not, or the SETTLE_HOLD_SECS override",
+                     lambda: settle_hold_secs())
     metrics.start_watcher()
     threading.Thread(target=auction_loop, daemon=True).start()
     threading.Thread(target=_round_resolver, daemon=True).start()
     threading.Thread(target=_stats_poller, daemon=True).start()
     print(f"auction loop running every {AUCTION_SECS}s (like JAM block production); "
           f"round resolver confirming settlements every 2s")
+    print("settle hold: " + (f"{SETTLE_HOLD_SECS:g}s (SETTLE_HOLD_SECS)" if SETTLE_HOLD_SECS is not None
+          else f"derived — 0 while finality advances, else {SETTLE_HOLD_SLOTS} slots"))
     ThreadingHTTPServer(("0.0.0.0", PORT), H).serve_forever()

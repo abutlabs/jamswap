@@ -341,9 +341,11 @@ class ServerRoutesThroughTheAdapter(unittest.TestCase):
         self.assertEqual(self._ledger_state("reveal"), "pending")
 
     def test_finality_by_slot_when_blocks_carry_no_height(self):
+        # blocks with hashes (jip2) also report them
         self.assertEqual(self.srv._read_finality(),
                          {"available": True, "finalized_height": 47, "block_height": 50,
-                          "finalized_slot": 47, "slot": 50, "lag": 3, "ordinal": "slot"})
+                          "finalized_slot": 47, "slot": 50, "lag": 3, "ordinal": "slot",
+                          "finalized_hash": "ff" * 32, "head_hash": "bb" * 32})
 
     def test_finality_by_height_when_reported(self):
         self.c.best, self.c.final = Block(50, None, 20), Block(47, None, 18)
