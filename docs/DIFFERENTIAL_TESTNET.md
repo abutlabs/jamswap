@@ -57,7 +57,7 @@ lanes merge into one chain and the byte-comparison becomes consensus itself.
 | lane | client | how | status |
 |---|---|---|---|
 | 1 | **lasair** (ours, OCaml) | `ghcr.io/abutlabs/lasair-node`, HTTP operator RPC | ✅ green |
-| 2 | **PolkaJam** (Parity, Rust, binary-only) | public release fetched at image build (never committed — black-box use, see lasair `docs/DISCLOSURES.md`); local `polkajam-testnet` + `jamt` CLI | ✅ green |
+| 2 | **PolkaJam** (Parity, Rust, binary-only) | public release fetched at image build (never committed — black-box use, see lasair `docs/DISCLOSURES.md`); local `polkajam-testnet`; the service deployed over JIP-2 through the Bootstrap service (`offchain/deploy.py`, no `jamt`; `PJ_DEPLOY=jamt` for the old path) | ✅ green |
 | 3 | **JAM DUNA** (`jam-duna/jamtestnet`) | published `jamduna` binary (linux/amd64) + chainspec tooling + JSON-RPC :19800-19805, GP 0.7.2 | 🔜 best next candidate — needs its RPC's service-deploy/work-item surface verified; amd64-only (emulated on arm64) |
 | 4 | **TurboJam** (r2rationality, C++) | source-build Dockerfiles upstream; JIP-2 RPC | ⏸ deferred — no prebuilt release, work-item interface unverified |
 

@@ -200,5 +200,21 @@ class OnePayloadAtATime(unittest.TestCase):
         self.assertEqual([p[1] for p in sent], [1, 2])
 
 
+class ServerStartup(unittest.TestCase):
+    """server.ensure_markets lists only the markets not on chain yet."""
+    def test_ensure_markets(self):
+        import server
+        listed = []
+        saved = server.CHAIN, server.api_list
+        server.CHAIN = KvChain({b"mkt" + u32(2): u32(2) + u32(0)})
+        server.api_list = listed.append
+        try:
+            server.ensure_markets()
+        finally:
+            server.CHAIN, server.api_list = saved
+        self.assertEqual([b["market"] for b in listed], [1, 3])
+        self.assertIs(server.DEFAULT_MARKETS, dex_setup.DEFAULT_MARKETS)
+
+
 if __name__ == "__main__":
     unittest.main()

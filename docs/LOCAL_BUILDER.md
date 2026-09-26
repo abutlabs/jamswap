@@ -25,7 +25,10 @@ SERVICE_ID=<deployed id> BUILDER_URL=<a CE-133 builder bridge> READER_URL=<a CE-
 Against any node that serves JIP-2, `CHAIN_BACKEND=jip2 CHAIN_RPC=ws://<node>:19800` replaces
 the two bridges (`offchain/chain.py`). To submit it needs the chain's authorizer: point
 `CHAIN_SPEC` at the net's JIP-4 chain spec (the authorizer is read from its genesis) or
-name it with `AUTHORIZER=<host service>:<code hash hex>`.
+name it with `AUTHORIZER=<host service>:<code hash hex>`. Leave `SERVICE_ID` unset and the
+builder deploys the service itself through the chain's Bootstrap service, or reuses the
+one it (or anyone) already deployed with this code (`offchain/deploy.py`; see
+[RUNNING.md](RUNNING.md#run-it-on-any-jip-2-node--runtime-deploy-no-lasair-no-jamt)).
 
 ## Why you'd want to
 

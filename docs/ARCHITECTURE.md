@@ -148,8 +148,13 @@ backend is a config choice: `CHAIN_BACKEND=jamnp` (default: lasair's CE-133 buil
 CE-129 reader bridges at `BUILDER_URL` / `READER_URL`, finality from `NODE_METRICS_URL`)
 or `CHAIN_BACKEND=jip2` (any node's JIP-2 RPC at `CHAIN_RPC`, default
 `ws://localhost:19800`; each payload goes out as its own GP 0.8.0 work-package over
-`submitWorkPackage`, authorized by the authorizer `AUTHORIZER` names or the one the JIP-4
-chain spec at `CHAIN_SPEC` holds in genesis). The plan's alternative —
+`submitWorkPackage`, or several as the work-items of one package, accumulated in order;
+authorized by the authorizer `AUTHORIZER` names or the one the JIP-4 chain spec at
+`CHAIN_SPEC` holds in genesis). The service itself is seeded into genesis on lasair nets;
+over JIP-2 it is deployed at runtime (`offchain/deploy.py`: a CreateService work-item to
+the chain's Bootstrap service, whose accumulate calls GP `new`, then the code provided
+with `submitPreimage`), and `offchain/dex_setup.py` lists the markets and registers and
+funds the dev accounts with ordinary work-items. The plan's alternative —
 `refine` reading the prior finalized book via historical-lookup — is a later
 optimization.
 

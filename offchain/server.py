@@ -11,14 +11,18 @@ the signature preflight when installed.
 
   SERVICE_ID=100 BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 \
       PORT=8080 python3 offchain/server.py                       # jamnp (default)
-  SERVICE_ID=<id> CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 \
+  SERVICE_ID=<id> CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 CHAIN_SPEC=spec.json \
       python3 offchain/server.py                                 # JIP-2 node RPC
+  CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 CHAIN_SPEC=spec.json \
+      python3 offchain/server.py      # no SERVICE_ID: deploy (or reuse) it, then set it up
 """
 import hashlib, json, os, secrets, struct, subprocess, threading, time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chain                       # the one client-neutral interface to the chain
-from chain import ChainBusy, ChainUnsupported
+from chain import ChainBusy, ChainError, ChainUnsupported
+import deploy                      # runtime deploy through the Bootstrap service (jip2)
+import dex_setup                   # markets + dev accounts made on chain (after a runtime deploy)
 import metrics                     # /metrics + the submit->settle pending ledger
 import order_telemetry            # per-order lifecycle SLO (placement -> durable clear)
 from round import plan_batch, plan_round   # pure round planner (sealed carry-forward, batch cap); tests/test_round_lifecycle.py
@@ -84,7 +88,7 @@ def gov_sign(msg):                     # ed25519 signature by the governance key
 JAMKB_BACKPRESSURE = os.environ.get("JAMKB_BACKPRESSURE", "1") == "1"
 
 # assets + the six markets are config; the service itself is asset-agnostic.
-USDC, DOT, JAMKB = 0, 1, 2
+USDC, DOT, JAMKB = dex_setup.USDC, dex_setup.DOT, dex_setup.JAMKB
 AUCTION_SECS = 6                       # auctions clear every 6s, like JAM block production
 # Fixed-point price scale (must match SCALE in service/src/lib.rs). On-chain, prices,
 # quantities, and balances are integer *atomic* units = display × SCALE, so a fractional
@@ -103,8 +107,9 @@ _next_auction = [0.0]                 # wall-clock of the next auction tick (for
 # client-neutral interface (chain.py). CHAIN_BACKEND picks the backend: jamnp (default;
 # the CE-133 builder + CE-129 reader bridges at BUILDER_URL / READER_URL, finality from
 # NODE_METRICS_URL) or jip2 (the JIP-2 node RPC at CHAIN_RPC). SERVICE_ID names the
-# service, which is deployed out of band (genesis, or `jamt create-service`) until
-# runtime deploy lands (issue #13).
+# service: seeded into genesis (lasair nets), or, left unset on jip2, deployed at startup
+# through the chain's Bootstrap service (deploy.py) and set up with its markets and dev
+# accounts (dex_setup.py).
 CHAIN = chain.from_env()
 PORT = int(os.environ.get("PORT", "8080"))
 WEB = os.path.join(os.path.dirname(__file__), "web")
@@ -321,8 +326,7 @@ def deposit_nonce():
         return n
 def deposit_payload(acct, asset, amount, nonce=None):
     # [tag][account][asset][amount][nonce] — crates/match-engine/src/deposit.rs is the layout
-    n = deposit_nonce() if nonce is None else nonce
-    return bytes([TAG_DEPOSIT]) + struct.pack("<IIQQ", acct, asset, amount, n)
+    return dex_setup.deposit_payload(acct, asset, amount, deposit_nonce() if nonce is None else nonce)
 
 # ---- API handlers ---------------------------------------------------------
 def api_deposit(b):
@@ -1966,12 +1970,14 @@ ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
                "/api/beneficiary_sweep": api_beneficiary_sweep,
                "/api/reserve_topup": api_reserve_topup}
 
-# the markets the UI shows; listed once at startup so they're tradable.
+# the markets the UI shows; listed at startup (those not yet listed) so they're tradable.
 # every combination of the three assets: (market_id, base, quote)
-DEFAULT_MARKETS = [(1, DOT, USDC), (2, JAMKB, USDC), (3, JAMKB, DOT)]
+DEFAULT_MARKETS = dex_setup.DEFAULT_MARKETS
 def ensure_markets():
     for m, base, quote in DEFAULT_MARKETS:
-        try: api_list({"market": m, "base": base, "quote": quote})
+        try:
+            if not dex_setup.market_listed(CHAIN, m):
+                api_list({"market": m, "base": base, "quote": quote})
         except Exception as e: print("list failed", m, e)
 
 def ensure_reserve():
@@ -2349,12 +2355,31 @@ def wait_for_node():
         except Exception: pass
         time.sleep(1)
 
+def deploy_at_startup():
+    # SERVICE_ID unset: deploy the service through the Bootstrap service, or reuse the one
+    # the state file names / the chain already runs (deploy.py). Only the jip2 backend
+    # can: jamnp (lasair) nets seed the service into genesis.
+    if CHAIN.name != "jip2":
+        raise SystemExit("SERVICE_ID is required on the jamnp backend (lasair nets seed the "
+                         "service into genesis); CHAIN_BACKEND=jip2 deploys it at runtime")
+    print(f"no SERVICE_ID: deploying through the Bootstrap service ({CHAIN.url}); waiting for head ...")
+    wait_for_node()
+    try:
+        d = deploy.from_env(CHAIN)
+    except (deploy.DeployError, ChainError, OSError) as e:
+        raise SystemExit(f"runtime deploy failed: {e}")
+    print(f"service {d.service_id} " + ("reused" if d.reused else "deployed"))
+
 if __name__ == "__main__":
-    if CHAIN.service_id is None:
-        raise SystemExit("SERVICE_ID is required: the service is deployed out of band (seeded "
-                         "into genesis, or `jamt create-service`); runtime deploy is issue #13")
+    deployed = CHAIN.service_id is None
+    if deployed:
+        deploy_at_startup()
     print(f"jamswap-service at id {CHAIN.service_id} via {CHAIN.describe()}; waiting for head ...")
     wait_for_node()
+    if dex_setup.wanted(deployed=deployed):
+        # the markets and funded dev accounts genesis gives a lasair net (DEX_SETUP)
+        try: dex_setup.setup(CHAIN)
+        except (dex_setup.SetupError, ChainError) as e: raise SystemExit(f"dex setup failed: {e}")
     if not CHAIN.submits:
         print(f"WARNING: {CHAIN.name} cannot submit work-items yet (issue #11): the DEX is "
               f"read-only — orders queue but rounds cannot reach the chain")

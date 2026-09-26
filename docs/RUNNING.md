@@ -137,6 +137,31 @@ LAYOUT=lasair,lasair,polkajam,polkajam,lasair,polkajam docker compose -f docker-
 > lasair client image is a normal multi-arch pull. See
 > [`mixed/`](./mixed) and lasair's [`docs/MIXED_CLIENT_NETWORK.md`](https://github.com/abutlabs/lasair/blob/main/docs/MIXED_CLIENT_NETWORK.md).
 
+### Run it on any JIP-2 node — runtime deploy, no lasair, no `jamt`
+
+On a chain that has a Bootstrap service (id 0, e.g. PolkaJam's `--chain dev`) the DEX
+deploys itself: start `offchain/server.py` on the JIP-2 backend with **no `SERVICE_ID`**
+and it creates the service through the Bootstrap service, provides the code with JIP-2
+`submitPreimage`, then lists the default markets and registers and funds the six dev
+accounts with ordinary work-items (what genesis does on a lasair net). The id is kept in
+`DEPLOY_STATE` (default `/tmp/jamswap_deploy.json`); a restart reuses the service (so
+does a restart without the file: a service already running this code is reused).
+
+```sh
+polkajam --chain dev dump-spec /tmp/spec.json      # the authorizer comes from its genesis
+CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 CHAIN_SPEC=/tmp/spec.json \
+    python3 offchain/server.py                     # deploys, sets up, serves :8080
+# or just deploy + set up, and print SERVICE_ID=<id>:
+python3 offchain/deploy.py --rpc ws://localhost:19800 --chain-spec /tmp/spec.json
+```
+
+`DEX_SETUP=0` skips the markets and accounts (`1` runs them on a genesis-seeded service
+too); `GENESIS_BALANCE` sets the funding per asset (display units, default 1,000,000);
+`DEPLOY_SERVICE_ID` asks for an id, `DEPLOY_FRESH=1` never reuses. How the Bootstrap
+instruction was established is in [`offchain/deploy.py`](../offchain/deploy.py).
+lasair nets keep the genesis-seeded service: lasair has no Bootstrap service or JIP-2
+server yet (lasair#68, #69).
+
 ### Options
 
 ```sh

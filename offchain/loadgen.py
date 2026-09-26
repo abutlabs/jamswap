@@ -3,7 +3,7 @@
 
 Drives the PUBLIC DEX API with signed orders from the six standard JAM dev accounts
 (Alice..Fergie — pre-registered and funded in genesis via mixed/gen-spec.py
-GENESIS_BALANCE), so the matching engine + the full JAM settlement pipeline are
+GENESIS_BALANCE, or on chain by dex_setup.py after a runtime deploy), so the matching engine + the full JAM settlement pipeline are
 exercised exactly the way real traders exercise them. Runs anywhere it can reach
 the dex (compose service, `make load`; or the k8s Deployment in k8s/loadgen.yaml
 for scale-out) and exports its own view on :9111/metrics — offered load measured
@@ -27,6 +27,7 @@ import json, os, random, struct, threading, time, urllib.error, urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from nacl.signing import SigningKey
+import dex_setup
 import metrics
 
 DEX = os.environ.get("DEX_URL", "http://dex:8080").rstrip("/")
@@ -40,16 +41,8 @@ PORT = int(os.environ.get("LOADGEN_PORT", "9111"))
 SCALE = 10_000
 
 # the standard JAM dev accounts (docs.jamcha.in/basics/dev-accounts) — the same
-# public seeds the trading UI holds; genesis registers them as handles 1..6.
-DEV_SEEDS = [
-    "996542becdf1e78278dc795679c825faca2e9ed2bf101bf3c4a236d3ed79cf59",  # Alice
-    "b81e308145d97464d2bc92d35d227a9e62241a16451af6da5053e309be4f91d7",  # Bob
-    "0093c8c10a88ebbc99b35b72897a26d259313ee9bad97436a437d2e43aaafa0f",  # Carol
-    "69b3a7031787e12bfbdcac1b7a737b3e5a9f9450c37e215f6d3b57730e21001a",  # David
-    "b4de9ebf8db5428930baa5a98d26679ab2a03eae7c791d582e6b75b7f018d0d4",  # Eve
-    "4a6482f8f479e3ba2b845f8cef284f4b3208ba3241ed82caa1b5ce9fc6281730",  # Fergie
-]
-KEYS = [SigningKey(bytes.fromhex(s)) for s in DEV_SEEDS]
+# public seeds the trading UI holds; genesis (or dex_setup) registers them as handles 1..6.
+KEYS = [SigningKey(bytes.fromhex(seed)) for _, seed in dex_setup.DEV_ACCOUNTS]
 
 metrics.describe("loadgen_ops_total", "operations offered to the dex API, by op")
 metrics.describe("loadgen_op_errors_total", "API calls the dex refused/failed, by op")
