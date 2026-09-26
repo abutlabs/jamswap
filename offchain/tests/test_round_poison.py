@@ -14,7 +14,8 @@ same style as test_sealed_carry.py):
   * a round that can no longer settle (book moved / consumed commit gone / an account's
     floor passed its oldest order) is released within seconds, its orders to the FRONT;
   * a released round that settles late (its round id is marked landed) is finalized —
-    filled, not rejected — after a second sighting, and its orders are not re-submitted;
+    filled, not rejected — after a second sighting a real MIN_CONFIRM_SECS after the first
+    (each stamped with the time of its read), and its orders are not re-submitted;
     a re-org that erases the landing (on either side of a two-fork flip) undoes the claim;
   * one record per round id: an unchanged rebuild of a released round is that round;
   * a build and the resolver never interleave on one market (no double terminals);
@@ -34,6 +35,7 @@ import sys
 import tempfile
 import threading
 import time
+import types
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -422,6 +424,57 @@ class LateLanding(_Base):
         self.assertEqual(len(server._zombies[M]), 1, "still watched inside the window")
         self.sweeps(server.ROUND_GATE_SECS + 902)
         self.assertNotIn(M, server._zombies, "forgotten after ZOMBIE_WATCH_SECS")
+
+    def fake_clock(self):
+        # server.time.time() returns clock[0] (the test moves it); restored after the test
+        real, clock = server.time, [time.time()]
+        server.time = types.SimpleNamespace(time=lambda: clock[0], sleep=real.sleep)
+        self.addCleanup(setattr, server, "time", real)
+        return clock
+
+    def test_a_landing_a_build_sees_is_stamped_with_the_time_of_its_read(self):
+        # the build takes `now` before its chain reads; a landing seen at its second zombie
+        # check, after 10 s of slow floor reads, was stamped with that earlier `now` — and a
+        # resolver sweep 1 s later found the re-org guard's 2 s spacing already met
+        self.crossing_pair()
+        self.build()
+        r1 = self.time_out()
+        clock = self.fake_clock()
+        t0 = clock[0]
+        real_get = self.chain.get
+
+        def slow(key):
+            if key == b"sq" + u32(7) and self.chain.kv.get(b"rl" + r1["rid"]) is None:
+                self.chain.land(r1)                          # R1 lands during the floor reads
+                clock[0] += 10                               # ... which take 10 s
+            return real_get(key)
+        server.storage = slow
+        self.build()
+        server.storage = real_get
+        self.assertEqual(server._zombies[M][0]["ok_since"], t0 + 10)
+        server._resolve_rounds_once(now=t0 + 11)
+        self.assertEqual(self.receipts(7), [], "1 s after the first sighting is not a second")
+        server._resolve_rounds_once(now=t0 + 12)
+        self.assertEqual(self.dispositions(7), ["filled"])
+
+    def test_a_landing_a_sweep_sees_is_stamped_with_the_time_of_its_read(self):
+        # the resolver re-posts queued re-seals before it judges the markets, and a slow
+        # builder there made every sighting of the sweep look older than it was
+        self.crossing_pair()
+        self.build()
+        r1 = self.time_out()
+        clock = self.fake_clock()
+        t0 = clock[0]
+        server._carry_retry[M] = [{"account": 9, "oid": 50, "side": server.BUY, "price": S,
+                                   "qty": S, "type": "limit", "sealed": True, "address": ""}]
+
+        def slow_submit(payload, check=None, detail=""):
+            clock[0] += 10                                   # the builder took 10 s
+            self.sent.append(payload)
+        server.submit = slow_submit
+        self.chain.land(r1)
+        server._resolve_rounds_once()
+        self.assertEqual(server._zombies[M][0]["ok_since"], t0 + 10)
 
     def test_several_released_rounds_are_watched_at_once(self):
         # two different released rounds; the OLDER one lands late and is still finalized

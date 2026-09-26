@@ -126,6 +126,17 @@ not idempotent under that.
 
 ## Accepted / documented (production hardening needed)
 
+- **A copy of our signed orders landed by someone else is receipted "rejected".** Signed
+  public orders are public once submitted, and anyone may land them in a round of their own
+  (another subset, another prune list). The builder recognises only its own round ids: it
+  sees its round die (the orders' seq floors passed), re-queues the orders and ends them
+  `rejected: superseded` although they filled. Balances are right; the receipt is wrong
+  (jamswap#8).
+- **Order seq floors are per account, across markets.** An account's newer order settling
+  on one market leaves its older order still queued on another at or below the floor; the
+  builder ends it `rejected: superseded` with that reason (it keeps an account's orders in
+  seq order only within a market's batch). jamswap#8.
+
 - **A late carry-commit copy can still spend a credit.** The duplicate check sees only the
   live set, so a copy that lands after its original was revealed and consumed (or expired)
   is admitted and spends one of the account's credits, if it holds any. The builder reveals

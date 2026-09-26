@@ -114,7 +114,10 @@ steal or alter).
   counterparty stays hidden (only its ciphertext on-chain) and is retried each auction;
   it is decrypted on-chain only in the round it crosses (see "How sealed orders rest").
 - **Cost:** ~18.7M gas per order per committee member (measured, GP 0.8.0). That bounds
-  a per-order-verified batch to ~267/n orders — which is exactly why rung 1 exists.
+  a per-order-verified batch to ~267/n orders — which is exactly why rung 1 exists. The
+  builder sizes each round to the refine budget (21 sealed orders at n = 2 on tiny, where
+  G_R = 1e9), and rebuilds one that times out with half as many
+  ([`THROUGHPUT.md`](THROUGHPUT.md)).
 
 **How it runs in Jamswap today:** `docker compose up` builds the committee sidecar
 ([`crates/committee`](../crates/committee/)), commits its keys on-chain at startup, and

@@ -180,7 +180,9 @@ becomes structurally impossible.
 > `tests/test_round_lifecycle.py`. Since jamswap#6 the builder plans over the whole queue
 > and caps only the orders that can trade (`plan_batch`): a deferred or hidden sealed
 > order takes no place in the batch, and one whose counterparty missed the cap is not
-> revealed (`tests/test_round_batch.py`).
+> revealed (`tests/test_round_batch.py`). Since jamswap#8 the reveals are re-checked after
+> the public orders are priced, seq-sanitized and claimed by a late landing: a sealed
+> order whose counterparty was dropped goes back to the queue, still hidden.
 
 ### R2 — Reveal on commit *finalization*, not accumulation (hardens F1/F3). *Offchain; reads `/api/finality` we already built.*
 Gate reveals on β-finalized commits, not merely accumulated ones. A finalized commit

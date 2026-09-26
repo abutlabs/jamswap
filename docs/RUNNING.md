@@ -198,7 +198,9 @@ Prometheus itself is on :9090.
 
 Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to
 the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
-`ENC_MODE: "1"` under the `dex` service in `docker-compose.yml`.
+`ENC_MODE: "1"` under the `dex` service in `docker-compose.yml`. Rounds are sized to the
+refine budget of a tiny chain (G_R = 1e9); on a full-spec chain set `REFINE_GAS: "5e9"`
+there too ([`THROUGHPUT.md`](THROUGHPUT.md)).
 
 | Your machine | What runs | Notes |
 |---|---|---|

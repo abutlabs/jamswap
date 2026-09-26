@@ -156,11 +156,16 @@ whether what they depend on is there, where the backend reads there (jip2): a se
 order is revealed once its commit is in the finalized commit set, and a round is
 receipted once its landed marker (`b"rl"‖round id`) is in the finalized state; each
 fill then carries its round and whether it is final. The jamnp backend cannot read
-there (lasair's reader bridge follows its head; lasair#70), so for it these keep their
-height rule: a commit or landing first seen at head height *h* is final once the
-finalized height reaches *h*. The settle hold is derived: 0 while the finalized head
-moves (within `FINALITY_WINDOW_SLOTS`, 10 slots), else `SETTLE_HOLD_SLOTS` slots (25 =
-150 s) of best-chain survival; `SETTLE_HOLD_SECS` overrides it (lasair6 sets 0).
+there (lasair's reader bridge follows its head; lasair#70), so for it a commit first seen
+at head height *h* is final once the finalized height reaches *h* (a fill's finality is
+shown the same way, by its settle height), while a round is receipted by the settle hold
+alone. The settle hold is derived: 0 while the finalized head moves (within
+`FINALITY_WINDOW_SLOTS`, 10 slots), else `SETTLE_HOLD_SLOTS` slots (25 = 150 s) of
+best-chain survival; `SETTLE_HOLD_SECS` overrides it (lasair6 sets 0). With a hold of 0 —
+jamnp while finality advances, or an explicit `SETTLE_HOLD_SECS=0` on either backend — a
+round is receipted on a second best-chain sighting of its marker at least 2 s after the
+first (each stamped with the time of its read): it reads the head, not finality (known;
+jamswap#8).
 
 ## How the clearing price is chosen (`clear()` in `match-engine`)
 

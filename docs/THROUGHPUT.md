@@ -36,6 +36,14 @@ order uses n of the 267 verification slots:
 | **Sealed — encrypt-until-batch** (rung 2, default) | ~n × 18.7 M gas (n = committee size) | refine gas | **~267/n** (n=5 → ~53) | **cores × (267 ÷ n)**. Inverse in committee size: every member proves per order, so a bigger committee buys trust and liveness at the direct cost of throughput. The scaling answer is rung 1 |
 | **Sealed — ZK dark-pool** (rung 1, spiked) | ~0: one 260 M-gas proof settles the batch, flat | input size (W_B ≈ 13.15 MiB) | **~27,500–68,900** | cores × prover capacity; on-chain cost flat in order count |
 
+The builder plans each round against the refine budget: at most `ROUND_GAS_BUDGET` = 80%
+of `REFINE_GAS` (G_R; default 1e9, tiny — set 5e9 on a full-spec chain), summed over its
+orders at the per-kind costs above, as well as at most `MAX_ROUND_ORDERS` orders. For
+encrypt-until-batch that is 21 sealed orders per round at n = 2 on tiny (n is read from the
+on-chain committee); a round of them that times out is rebuilt with half as many, and the
+limit doubles back as rounds land (jamswap#8 — an oversized round never landed and was
+rebuilt at the same size, wedging the market).
+
 Two independent resources, two meters: **compute** is bought per-slot (coretime/gas —
 the table above), **state** is bought per-byte (JAMKB — see
 [`JAMKB_IN_PRACTICE.md`](JAMKB_IN_PRACTICE.md)). A *filled* order leaves

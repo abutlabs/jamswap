@@ -21,7 +21,7 @@ import chain                       # the one client-neutral interface to the cha
 from chain import ChainBusy, ChainUnsupported
 import metrics                     # /metrics + the submit->settle pending ledger
 import order_telemetry            # per-order lifecycle SLO (placement -> durable clear)
-from round import plan_batch        # pure round planner (sealed carry-forward, batch cap); tests/test_round_lifecycle.py
+from round import plan_batch, plan_round   # pure round planner (sealed carry-forward, batch cap); tests/test_round_lifecycle.py
 from clearing import clear        # builder-side clearing (mirrors refine); for per-order fill receipts
 from treasury import (jamkb_rent, profit_split, max_withdrawable, solvency, reserve_target,
                       JAMKB_SUPPLY, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN)
@@ -892,15 +892,21 @@ def _price_market_orders(m, public):
         o["price"] = market_price(o["side"], lp)
     return public, []
 
-def _cap_batch(orders, cap):
+def _cap_batch(orders, cap, gas=None, budget=0, sealed_cap=None):
     """Split the orders that could trade this round (queue order; plan_batch picks them)
-    into the batch (the first `cap`) and the overflow, without ever letting an account's
-    NEWER public order into the batch while an OLDER one of the same account waits in the
-    overflow: the newer one settling would raise the account's floor past the older one,
-    stranding it for good. Each account's public orders are re-dealt into the queue
-    positions they already hold, lowest seq first, so the cap takes every account's oldest
-    orders. Sealed orders don't move (they carry no order seq). A prefix: taking orders out
-    of `orders` never drops one it batched before (plan_batch relies on it)."""
+    into the batch and the overflow, without ever letting an account's NEWER public order
+    into the batch while an OLDER one of the same account waits in the overflow: the newer
+    one settling would raise the account's floor past the older one, stranding it for good.
+    Each account's public orders are re-dealt into the queue positions they already hold,
+    lowest seq first, so the cap takes every account's oldest orders. Sealed orders don't
+    move (they carry no order seq).
+
+    The batch is the longest prefix of that queue with at most `cap` orders, at most
+    `budget` refine gas (`gas(o)` per order; no gas bound without `gas`) and at most
+    `sealed_cap` sealed orders (None: no limit). An order that needs more gas than the whole
+    budget can ride no round: it is passed over rather than blocking the queue behind it.
+    Public orders all cost the same, so when one doesn't fit none after it does. A prefix:
+    taking orders out of `orders` never drops one it batched before (plan_batch relies on it)."""
     slots = {}
     for i, o in enumerate(orders):
         if not o.get("sealed"):
@@ -909,7 +915,19 @@ def _cap_batch(orders, cap):
     for idx in slots.values():
         for i, o in zip(idx, sorted((orders[i] for i in idx), key=lambda o: o.get("seq", 0))):
             out[i] = o
-    return out[:cap], out[cap:]
+    batch, used, sealed = [], 0, 0
+    for o in out:
+        g = gas(o) if gas else 0
+        if g > budget:
+            continue                                   # fits no round: never batched
+        if (len(batch) >= cap or used + g > budget
+                or (o.get("sealed") and sealed_cap is not None and sealed >= sealed_cap)):
+            break
+        batch.append(o)
+        used += g
+        sealed += bool(o.get("sealed"))
+    inb = {id(o) for o in batch}
+    return batch, [o for o in out if id(o) not in inb]
 
 # ---- round identity: exactly which rounds settled --------------------------
 # A round's id is blake2s(DOMAIN ‖ the exact work-item payload): refine derives it from the
@@ -1004,6 +1022,8 @@ _inflight = {}                     # market -> the round in flight, awaiting its
                                    #    identity: "rid","book_hash","consumed","set_key","minseq",
                                    #    "claimed": {order key: rid of the landed round holding it}}
 _zombies = {}                      # market -> [released rounds still watched for a late landing]
+_enc_cap = {}                      # market -> most encrypt-until-batch orders a round may carry,
+                                   #   set when such a round timed out (see _abandon)
 _market_locks = {}                 # market -> threading.Lock (see above)
 _market_locks_guard = threading.Lock()
 def _market_lock(m):
@@ -1088,6 +1108,29 @@ MAX_ROUND_ORDERS = int(os.environ.get("MAX_ROUND_ORDERS", "150"))
                                    # small rounds that each settle fast drain a backlog better than one
                                    # 253-order round that keeps timing out (found live 2026-07-09 on the
                                    # all-lasair net). Set it per-net in the compose (e.g. 48).
+# The order count alone doesn't bound a round's refine gas: the kinds differ by orders of
+# magnitude (measured, GP 0.8.0; docs/THROUGHPUT.md). An encrypt-until-batch order costs one proven
+# decryption share per committee member, so with n = 2 about 26 of them fill G_R = 1e9 on
+# their own; a bigger round never lands, times out and is rebuilt at the front, and the
+# market wedges. So a round is also bounded by gas: at most ROUND_GAS_BUDGET, summed over
+# its orders (_order_gas) — which for encrypt-until-batch orders is a per-kind cap of
+# ROUND_GAS_BUDGET // (n x GAS_ENC_SHARE), 21 at n = 2 on tiny.
+GAS_SIGNED_ORDER = 5_290_000       # a signed public order: one in-PVM ed25519 verify
+GAS_REVEAL = 10_100                # a commit-reveal reveal: its hash check against the commit
+GAS_ENC_SHARE = 18_700_000         # an encrypt-until-batch order, per committee member
+REFINE_GAS = int(float(os.environ.get("REFINE_GAS", "1e9")))   # G_R: 1e9 tiny, 5e9 full
+ROUND_GAS_BUDGET = REFINE_GAS * 4 // 5
+                                   # 80%: headroom for a round's fixed cost (the book, the
+                                   # clearing); the same margin MAX_ROUND_ORDERS=150 leaves
+DEFAULT_COMMITTEE_SIZE = 2         # crates/committee COMMITTEE_SIZE, until one is on-chain
+def _committee_size():
+    # n of the committee on-chain (b"committee" = [n:u8][n x 32-byte keys])
+    raw = storage(b"committee")
+    return max(1, raw[0]) if raw else DEFAULT_COMMITTEE_SIZE
+def _order_gas(o, committee_n):
+    if not o.get("sealed"):
+        return GAS_SIGNED_ORDER
+    return committee_n * GAS_ENC_SHARE if ENC_MODE else GAS_REVEAL
 ROUND_ZEROFILL_SECS = 30.0         # cooldown after a busy refusal or a timed-out round, so retries
                                    # don't re-flood the fleet (the name predates tracking zero-fill rounds)
 
@@ -1184,6 +1227,13 @@ def _finalize_round(m, fr):
     if lost:
         print(f"round m{m}: WARNING settled while {len(lost)} of its order(s) are held by "
               f"another landed round — receipting only the rest")
+    if fr["set_key"] == b"encset" and fr["sealed"] and m in _enc_cap:
+        # an encrypt-until-batch round of this size landed: allow twice as many again
+        grown = max(_enc_cap[m], 2 * len(fr["sealed"]))
+        if grown >= MAX_ROUND_ORDERS:
+            _enc_cap.pop(m, None)
+        else:
+            _enc_cap[m] = grown
     carried = _carry_sealed_remainders(m, sealed, fr["clearing"]["fills"], now)
     try: record_executions(m, fr["resting"], sealed, public, fr["clearing"], rid=fr["rid"])
     except Exception as e: print("exec record failed", m, e)
@@ -1234,6 +1284,11 @@ def _abandon(m, fr, why, now):
         # the chain never included it: cool down before re-submitting. A DEAD round is
         # rebuilt at the next auction — the chain did its part, the round was just stale.
         _round_gate[m] = {"check": None, "t": now}
+        if fr["set_key"] == b"encset" and fr["sealed"]:
+            # an encrypt-until-batch round the chain never included: its gas is the likely
+            # cause, and rebuilt at the same size it would time out again, for good. The
+            # next ones carry half as many sealed orders, until one lands (_finalize_round).
+            _enc_cap[m] = max(1, len(fr["sealed"]) // 2)
     metrics.inc("jamswap_round_abandoned_total", {"market": str(m), "reason": why})
     print(f"round m{m}: released ({why}) — re-queued {len(orders)} order(s) to the front, no receipts")
 
@@ -1371,9 +1426,10 @@ def _resolve_rounds_once(now=None):
     """One sweep: fresh-account registrations and queued re-seals; then, per market, its
     released rounds (late landings first, so their claims are known before the live round
     is judged) and its round in flight; then signed cancels. Runs on the resolver thread
-    every 2 s; tests call it directly. A market whose next round is being built right now
-    is skipped until the next sweep (see _market_lock)."""
-    now = now or time.time()
+    every 2 s, judging each market at the time of its own reads; tests call it directly,
+    with `now` pinned. A market whose next round is being built right now is skipped until
+    the next sweep (see _market_lock)."""
+    pinned, now = now, now or time.time()
     _resolve_registrations_once(now)   # confirm-or-retry fresh-account registrations
     _drain_carry_retry(now)            # retry any re-seals the chain was too busy to accept
     for m in sorted(set(_inflight) | set(_zombies)):
@@ -1381,10 +1437,13 @@ def _resolve_rounds_once(now=None):
         if not lk.acquire(blocking=False):
             continue
         try:
-            _resolve_zombies(now, m)
+            # a sighting is stamped with the time of its read: the submits above can take
+            # seconds, and a stale stamp would shorten the settle hold by as much
+            t = pinned or time.time()
+            _resolve_zombies(t, m)
             fr = _inflight.get(m)
             if fr:
-                _resolve_inflight(m, fr, now)
+                _resolve_inflight(m, fr, t)
         finally:
             lk.release()
     _resolve_cancels(now)
@@ -1536,6 +1595,11 @@ def _build_round(m, base, quote):
     final_raw = _storage_final(set_key + struct.pack("<I", m)) if fin.get("available") else None
     sealed_ready = _sealed_ready_predicate(m, commit_entries, fin,
                                            None if final_raw is None else _set_entries(final_raw))
+    committee_n = _committee_size() if ENC_MODE else 0
+
+    def fit(orders):                   # the batch cap: order count, refine gas, ENC shrink
+        return _cap_batch(orders, MAX_ROUND_ORDERS, gas=lambda o: _order_gas(o, committee_n),
+                          budget=ROUND_GAS_BUDGET, sealed_cap=_enc_cap.get(m) if ENC_MODE else None)
     with _lock:                        # snapshot + re-queue atomically so a concurrent
         pend_all = list(pending.get(m, []))   # api_order during submit isn't dropped
         for o in pend_all:             # attach current GTT expiry for the planner
@@ -1546,16 +1610,16 @@ def _build_round(m, base, quote):
         # revealed only in the round it actually crosses AND its commit is on-chain
         # (sealed_ready), so the planner and the batch agree (see round.py + tests).
         # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
-        # (~5.29M gas each), so an unbounded batch eventually exceeds any refine
-        # budget and the round becomes a poison pill that can never settle — while
-        # re-queued failures keep GROWING it (observed live: 116-order batches,
-        # volume pinned at 0). Oldest orders go first; the overflow waits its turn —
-        # and never holds an account's older order back behind its newer one (_cap_batch).
+        # (~5.29M gas each; an encrypt-until-batch order n x 18.7M), so an unbounded batch
+        # eventually exceeds any refine budget and the round becomes a poison pill that can
+        # never settle — while re-queued failures keep GROWING it (observed live: 116-order
+        # batches, volume pinned at 0). Bounded by count and by gas (ROUND_GAS_BUDGET).
+        # Oldest orders go first; the overflow waits its turn — and never holds an account's
+        # older order back behind its newer one (_cap_batch).
         # Only orders that can trade this round compete for the cap: a hidden or deferred
         # sealed order waits outside it, so it can't keep public orders out (jamswap#6).
         resting_orders = [o for o in _parse_book(raw) if (o["account"], o["oid"]) not in set(pruned)]
-        plan = plan_batch(pend_all, resting_orders, lambda c: _cap_batch(c, MAX_ROUND_ORDERS),
-                          now, sealed_ready=sealed_ready)
+        plan = plan_batch(pend_all, resting_orders, fit, now, sealed_ready=sealed_ready)
         # hidden non-crossing sealed + not-yet-committed (deferred) + over-cap orders all
         # wait, in the order they were queued
         wait = {id(o) for o in plan.carry + plan.deferred + plan.overflow}
@@ -1679,8 +1743,11 @@ def _assemble_round(m, base, quote, now, raw, pruned, shrank, plan, resting_orde
         # an order may be stale because its OWN released round landed a moment ago, after
         # the zombie check above but before the floor reads: look again (now after the
         # floors) so such orders are finalized as the fills they are, not rejected. Nothing
-        # else can claim them while we hold the market lock.
-        claimed = _resolve_zombies(now, m)
+        # else can claim them while we hold the market lock. A landing first seen here is
+        # stamped with the time of THIS read, not the build's start (`now`, before the
+        # reads above): the re-org guard's second sighting must come a real
+        # MIN_CONFIRM_SECS later, and a resolver sweep can follow this build at once.
+        claimed = _resolve_zombies(time.time(), m)
         if claimed:
             sealed = [o for o in sealed if _okey(o) not in claimed]
             public = [o for o in public if _okey(o) not in claimed]
@@ -1694,6 +1761,20 @@ def _assemble_round(m, base, quote, now, raw, pruned, shrank, plan, resting_orde
         ended.add(_okey(o))
     if dead:
         _save_execs()
+    if sealed:
+        # The reveals were planned against the public orders as queued; pricing, the seq
+        # discipline and a late landing's claim have since re-priced or dropped some. A
+        # sealed order left with no counterparty among the orders this round submits is
+        # not revealed — its terms would leak for nothing — but goes back to the queue,
+        # still hidden. Crossing is mutual, so one pass settles it (see round.plan_batch).
+        kept = plan_round(sealed + public, resting_orders, now).reveal
+        if len(kept) < len(sealed):
+            keep = {id(o) for o in kept}
+            back = [o for o in sealed if id(o) not in keep]
+            with _lock:
+                pending[m] = back + pending.get(m, [])
+            sealed = kept
+            print(f"round m{m}: {len(back)} sealed order(s) lost their counterparty — kept hidden")
     if not (sealed or public or shrank):
         # nothing to submit (every sealed order is carried hidden or deferred): no round
         return None, None, None, {
