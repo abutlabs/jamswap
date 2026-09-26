@@ -7,6 +7,8 @@ Everything the off-chain layer needs from a JAM chain goes through a `Chain`:
     read(key, at)      a value in the service's storage (b"" when absent), at "best",
                        "final", or an explicit header hash
     submit(payload)    get one work-item payload for the service onto the chain
+    submit_items(ps)   get up to `max_items` payloads onto the chain together, accumulated
+                       in order (one work-package on jip2; jamnp takes one at a time)
     service_info(at)   the service's account record (code hash, balance, footprint ...)
     parameters()       the chain parameters
     ready()            can the backend serve reads yet?
@@ -30,8 +32,8 @@ Backends (CHAIN_BACKEND):
                    comes from AUTHORIZER, or from the JIP-4 chain spec at CHAIN_SPEC
                    (chainspec.py).
 
-SERVICE_ID names the service. Runtime deployment is not part of the interface yet
-(issue #13): the id comes from genesis or from an out-of-band deploy.
+SERVICE_ID names the service. It comes from genesis (lasair nets) or from a runtime
+deploy through the chain's Bootstrap service over JIP-2 (deploy.py, issue #13).
 """
 import json, os, time, urllib.request
 from typing import NamedTuple, Optional
@@ -93,6 +95,7 @@ class Chain:
     """The interface. Backends override what they can serve."""
     name = "chain"
     submits = False            # can submit() get a payload onto the chain?
+    max_items = 1              # payloads submit_items() takes at once
 
     def __init__(self, service_id=None):
         self.service_id = service_id
@@ -119,6 +122,16 @@ class Chain:
         caller watches state rather than resubmitting blindly. Submission is at-least-once:
         the service must stay idempotent under a duplicate."""
         raise ChainUnsupported(f"{self.name}: submit")
+
+    def submit_items(self, payloads):
+        """Relay up to `max_items` payloads so that they land together and are accumulated
+        in the order given; same outcome rules as submit(). A backend that sends one
+        payload at a time takes a single one."""
+        payloads = list(payloads)
+        if len(payloads) != 1:
+            raise ChainUnsupported(f"{self.name}: {len(payloads)} payloads at once "
+                                   f"(max_items is {self.max_items})")
+        return self.submit(payloads[0])
 
     def service_info(self, at="best"):
         raise ChainUnsupported(f"{self.name}: service_info")
@@ -245,6 +258,13 @@ class Jip2Chain(Chain):
     def describe(self):
         return f"jip2 ({self.url}; service {self.service_id})"
 
+    def for_service(self, service_id):
+        """The same node, connection and submission settings, for another service (the
+        chain's Bootstrap service, say)."""
+        return Jip2Chain(service_id, self.url, client=self.rpc, authorizer=self.authorizer,
+                         chain_spec=self.chain_spec, cores=self.cores,
+                         refine_gas=self.refine_gas, accumulate_gas=self.accumulate_gas)
+
     def _call(self, fn, *args):
         # the node refused (Jip2Error), the transport failed (OSError), or the answer was
         # not what JIP-2 says it is (ValueError: bad base64 / JSON)
@@ -290,25 +310,59 @@ class Jip2Chain(Chain):
         return v or b""
 
     def service_info(self, at="best"):
-        data = self._call(self.rpc.service_data, self._at(at), self._sid())
-        if data is None:
+        info = self.service_record(self._sid(), at)
+        if info is None:
             raise ChainError(f"jip2: no service {self._sid()} at that block")
-        return ServiceInfo.decode(data)
+        return info
 
     def parameters(self):
         return self._call(self.rpc.parameters)
 
-    # ---- submission: one GP 0.8.0 work-package per payload, via submitWorkPackage ----
+    # ---- any service's account, preimages and requests (runtime deploy: deploy.py) ----
+    def services(self, at="best"):
+        """The service ids the node lists (JIP-2 listServices: best effort)."""
+        return [int(s) for s in self._call(self.rpc.list_services, self._at(at))]
+
+    def service_record(self, service_id, at="best"):
+        """The account record of `service_id`, or None if there is no such service."""
+        data = self._call(self.rpc.service_data, self._at(at), service_id)
+        return None if data is None else ServiceInfo.decode(data)
+
+    def preimage(self, service_id, preimage_hash, at="best"):
+        """The preimage of `preimage_hash` provided to `service_id`, or None."""
+        return self._call(self.rpc.service_preimage, self._at(at), service_id, preimage_hash)
+
+    def preimage_request(self, service_id, preimage_hash, length, at="best"):
+        """None (neither requested nor provided), [] (requested, not provided) or the slots
+        of its history (JIP-2 serviceRequest)."""
+        return self._call(self.rpc.service_request, self._at(at), service_id, preimage_hash, length)
+
+    def provide(self, service_id, preimage):
+        """Hand a preimage that `service_id` has requested to the node, for a block's
+        preimage extrinsic (JIP-2 submitPreimage; it does not wait for inclusion)."""
+        return self._call(self.rpc.submit_preimage, service_id, preimage)
+
+    def parameter(self, name, default=None):
+        """One chain parameter (JIP-2 parameters().V1), fetched once; `default`, if given,
+        when the node does not report it."""
+        if default is not None and name not in self._load_params():
+            return default
+        return self._param(name)
+
+    # ---- submission: one GP 0.8.0 work-package per submit, via submitWorkPackage ----
     #
-    # The package carries one work-item for the service: its code hash as the chain holds
-    # it at the anchor, the payload, no imports, extrinsics or exports, and the largest
-    # gas limits one item may have (sum(refine) < G_R, sum(accumulate) < G_A: GP 0.8.0 eq.
-    # wplimits), so no payload runs out of refine gas (a signed order costs ~5.3M to
-    # verify). Its refinement context names the best block's parent as the anchor and the
-    # finalized block's parent as the lookup anchor (see default_anchor and
-    # default_lookup_anchor); no prerequisites. The core is the next one, round robin,
-    # whose authorizer pool accepts the authorizer: one report per core per block, so
-    # consecutive packages spread over the cores.
+    # The package carries one work-item per payload, all for the service: its code hash as
+    # the chain holds it at the anchor, the payload, no imports, extrinsics or exports, and
+    # an even share of the largest gas limits a package may have (sum(refine) < G_R,
+    # sum(accumulate) < G_A: GP 0.8.0 eq. wplimits); a lone payload gets all of it, so no
+    # payload runs out of refine gas (a signed order costs ~5.3M to verify). Items are
+    # refined one by one and accumulated in order, in one accumulate call for the service
+    # whose budget is the sum of theirs (GP 0.8.0 section 12, accumulation.tex). Its
+    # refinement context names the best block's parent as the anchor and the finalized
+    # block's parent as the lookup anchor (see default_anchor and default_lookup_anchor);
+    # no prerequisites. The core is the next one, round robin, whose authorizer pool
+    # accepts the authorizer: one report per core per block, so consecutive packages
+    # spread over the cores.
 
     def _init_submission(self, authorizer, chain_spec, cores, refine_gas, accumulate_gas):
         # authorizer: an Authorizer, or its "host:code_hash[:config[:token]]" text; else
@@ -328,13 +382,23 @@ class Jip2Chain(Chain):
     def submits(self):
         return self.authorizer is not None or self.chain_spec is not None
 
-    def _param(self, name):
-        # one chain parameter (JIP-2 parameters().V1), fetched once
+    @property
+    def max_items(self):
+        """I, the most work-items a package may carry (JIP-2 parameters; 1 if the node
+        does not report it)."""
+        return self.parameter("max_work_items", 1)
+
+    def _load_params(self):
+        # the chain parameters (JIP-2 parameters().V1), fetched once
         if self._params is None:
             p = self.parameters()
             if not isinstance(p, dict) or not isinstance(p.get("V1"), dict):
                 raise ChainError(f"jip2: parameters: no V1 member in {p!r}")
             self._params = p["V1"]
+        return self._params
+
+    def _param(self, name):
+        self._load_params()
         try:
             return int(self._params[name])
         except (KeyError, TypeError, ValueError):
@@ -429,20 +493,34 @@ class Jip2Chain(Chain):
         """The encoded work-package that carries `payload` for the service, and its refine
         context. `anchor` and `lookup_anchor` (Blocks) default to default_anchor() and
         default_lookup_anchor()."""
+        return self.work_package_items([payload], anchor, lookup_anchor)
+
+    def work_package_items(self, payloads, anchor=None, lookup_anchor=None):
+        """As work_package, with one work-item per payload, in order. The gas limits are
+        shared evenly (explicit refine_gas / accumulate_gas are per item)."""
         sid = self._sid()
+        payloads = [bytes(p) for p in payloads]
+        n = len(payloads)
+        if n < 1 or n > 1 and n > self.max_items:
+            raise ChainUnsupported(f"jip2: {n} work-items; a package carries 1 to "
+                                   f"{self.max_items}")
         auth = self._resolve_authorizer()
         anchor = anchor or self.default_anchor()
         lookup_anchor = lookup_anchor or self.default_lookup_anchor(anchor)
         self._check_authorizer(anchor.hash)
         ctx = self.refine_context(anchor, lookup_anchor)
         info = self.service_info(anchor.hash)
-        refine = self.refine_gas or self._param("max_refine_gas") - 1
-        accumulate = self.accumulate_gas or self._param("max_accumulate_gas") - 1
+        g_r, g_a = self._param("max_refine_gas"), self._param("max_accumulate_gas")
+        refine = self.refine_gas or (g_r - 1) // n
+        accumulate = self.accumulate_gas or (g_a - 1) // n
+        if n * refine >= g_r or n * accumulate >= g_a:
+            raise ChainUnsupported(f"jip2: {n} items of {refine} refine / {accumulate} "
+                                   f"accumulate gas exceed the package limits G_R={g_r}, G_A={g_a}")
         if accumulate < info.min_item_gas:
             raise ChainUnsupported(f"jip2: service {sid} wants at least {info.min_item_gas} "
                                    f"accumulate gas per item; the package allows {accumulate}")
-        item = workpackage.WorkItem(sid, info.code_hash, bytes(payload), refine, accumulate)
-        return workpackage.WorkPackage.build(auth, ctx, [item]).encode(), ctx
+        items = [workpackage.WorkItem(sid, info.code_hash, p, refine, accumulate) for p in payloads]
+        return workpackage.WorkPackage.build(auth, ctx, items).encode(), ctx
 
     def submit(self, payload):
         """Send `payload` in its own work-package to the guarantors of the next core that
@@ -451,9 +529,15 @@ class Jip2Chain(Chain):
         package_status(). ChainBusy: nothing was sent, because every core refused or the
         node could not serve the reads that build the package. Settlement is seen in the
         service's state, as for any backend."""
+        return self.submit_items([payload])
+
+    def submit_items(self, payloads):
+        """As submit, with one work-package that carries every payload as a work-item, in
+        order (at most max_items)."""
         self._sid()                            # configuration errors stay ChainError
+        payloads = list(payloads)
         try:
-            package, ctx = self.work_package(payload)
+            package, ctx = self.work_package_items(payloads)
         except (ChainBusy, ChainUnsupported):
             raise
         except ChainError as e:

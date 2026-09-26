@@ -265,6 +265,11 @@ class Jip2Client:
         r = self.call("servicePreimage", b64(header_hash), service_id, b64(preimage_hash))
         return None if r is None else unb64(r)
 
+    def service_request(self, header_hash, service_id, preimage_hash, length):
+        """None: neither requested nor provided; []: requested, not yet provided; else the
+        1 to 3 slots of its history (provided, forgotten, requested again)."""
+        return self.call("serviceRequest", b64(header_hash), service_id, b64(preimage_hash), length)
+
     def list_services(self, header_hash):
         return self.call("listServices", b64(header_hash))
 

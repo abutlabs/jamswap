@@ -18,6 +18,8 @@ FROM python:3-slim
 RUN pip install --no-cache-dir pynacl
 COPY --from=build /committee /usr/local/bin/committee
 COPY offchain/ /app/
+# the service blob a jip2 dex deploys at startup when SERVICE_ID is unset (deploy.py)
+COPY service/jamswap-service.jam /service/jamswap-service.jam
 WORKDIR /app
 # The committee binary ships in the image but the DEFAULT sealing mode is commit–reveal
 # (rung 3, the permissionless base state — no committee, no extra operators). Set

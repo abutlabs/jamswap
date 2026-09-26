@@ -15,18 +15,19 @@ DEX's chain adapter (offchain/chain.py):
     BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 SERVICE_ID=100 \
         python3 differential.py lasair > lasair.json
 
-    # pj lane — inside the pj image, against a fresh polkajam-testnet: deploy via the
-    # public `jamt` CLI (runtime deploy is jamswap #13); items and reads via the adapter's
-    # jip2 backend (JIP-2 submitWorkPackage + serviceValue at CHAIN_RPC), with the
-    # authorizer from the dev chain spec (`polkajam dump-spec`, or CHAIN_SPEC).
-    # PJ_SUBMIT=jamt sends the items with `jamt item` instead (an A/B for the builder).
+    # pj lane — inside the pj image, against a fresh polkajam-testnet: deploy through the
+    # Bootstrap service over JIP-2 (offchain/deploy.py, no jamt), items and reads via the
+    # adapter's jip2 backend (JIP-2 submitWorkPackage + serviceValue at CHAIN_RPC), with
+    # the authorizer from the dev chain spec (`polkajam dump-spec`, or CHAIN_SPEC).
+    # PJ_DEPLOY=jamt deploys with `jamt create-service`, PJ_SUBMIT=jamt sends the items
+    # with `jamt item` (A/Bs for the deployer and the builder).
     python3 differential.py pj > pj.json
 
     # verdict
     python3 differential.py compare lasair.json pj.json
 
-Clean-room: PolkaJam is a black box driven only by its public CLI (`jamt`, `polkajam
-dump-spec`) and its public JIP-2 RPC. No internals.
+Clean-room: PolkaJam is a black box driven only by its public CLI (`polkajam dump-spec`,
+and `jamt` for the A/B lanes) and its public JIP-2 RPC. No internals.
 """
 import json
 import os
@@ -40,6 +41,7 @@ from nacl.signing import SigningKey
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "..", "offchain")]   # chain.py: beside us in the image
 import chain  # noqa: E402
+import deploy  # noqa: E402
 
 S = 10_000
 MARKET, BASE, QUOTE = 1, 1, 0
@@ -114,7 +116,8 @@ class Lasair:
         self.sid = self.chain.service_id
 
     def deploy(self):
-        # no runtime deploy yet (jamswap #13) — the service is seeded at genesis; sid is fixed.
+        # seeded at genesis: lasair has no Bootstrap service or JIP-2 server for a runtime
+        # deploy yet (lasair#68, #69); sid is fixed
         pass
 
     def item(self, payload):
@@ -142,10 +145,11 @@ class Polkajam:
         self.jamt = os.environ.get("JAMT", "/usr/local/bin/jamt")
         self.jam = os.environ.get("JAM", "/work/jamswap-service.jam")
         self.via_jamt = os.environ.get("PJ_SUBMIT", "adapter") == "jamt"
+        self.deploy_jamt = os.environ.get("PJ_DEPLOY", "adapter") == "jamt"
         # items and reads go through the chain adapter's JIP-2 backend; the id is set by
         # deploy(); the authorizer comes from the chain spec polkajam-testnet runs (dev)
         spec = os.environ.get("CHAIN_SPEC")
-        if not spec and not self.via_jamt:
+        if not spec and not (self.via_jamt and self.deploy_jamt):
             spec = "/tmp/pj-dev-spec.json"
             subprocess.run([os.environ.get("POLKAJAM", "/usr/local/bin/polkajam"), "--chain", "dev",
                             "dump-spec", spec], capture_output=True, check=True, timeout=60)
@@ -157,6 +161,13 @@ class Polkajam:
                               timeout=timeout, check=check)
 
     def deploy(self):
+        if not self.deploy_jamt:
+            # a new service through the Bootstrap service (CreateService + submitPreimage),
+            # returned once its code is at the lookup anchor the first item will name
+            with open(self.jam, "rb") as f:
+                d = deploy.deploy(self.chain, f.read(), fresh=True)
+            self.sid = str(d.service_id)
+            return
         # --raw: jamt prints only the new service id (8 hex digits) on stdout; since
         # jamt 0.1.29 the id is not printed at all without it
         out = self._jamt("create-service", "--raw", self.jam, "1000000000", check=False, timeout=300)
