@@ -1,31 +1,22 @@
-"""Finality soak (Gate 3a): every 5 min for ~13 h, sample the chain's finalized head and the
-DEX's cumulative volume + settle reverts, counting samples where finality did not advance.
-Runs beside the dex (same env: chain.py picks the backend; the finalized head is a height
-where the backend reports one, else a slot)."""
-import urllib.request as u, time
-import chain
+"""Finality soak (Gate 3a): a sample every 5 min for ~13 h, then the verdict. A thin wrapper
+over netwatch.py (issue #15), which replaced this script's lasair-only loop: it watches every
+node, not one, lines their heads up by hash where they serve JIP-2, and judges one head,
+liveness and finality advance (conflicts, regressions, stalls) at the end.
 
-CHAIN = chain.from_env()
-last_fin = -1.0; stalls = 0
-for i in range(160):
-    try:
-        f = CHAIN.finalized()
-        fin = -1.0 if f is None else float(f.height if f.height is not None else f.slot)
-        d = u.urlopen("http://localhost:8080/metrics", timeout=5).read().decode()
-        cv = "?"; rev = 0.0
-        for l in d.splitlines():
-            if l.startswith('jamswap_cum_volume{market="1"}'):
-                cv = l.split()[-1]
-            if l.startswith("jamswap_settle_reverted_total"):
-                try: rev += float(l.split()[-1])
-                except: pass
-        adv = fin > last_fin
-        if not adv and last_fin >= 0: stalls += 1
-        ts = time.strftime("%H:%M:%S")
-        print("%s sample=%d finalized=%.0f advanced=%s cv=%s reverts=%.0f stalls=%d"
-              % (ts, i, fin, adv, cv, rev, stalls), flush=True)
-        last_fin = fin
-    except Exception as e:
-        print("%s sample=%d ERR %s" % (time.strftime("%H:%M:%S"), i, e), flush=True)
-    time.sleep(300)
-print("GATE3A_SOAK_DONE stalls=%d" % stalls, flush=True)
+Nodes come from NETWATCH_NODES, else from the DEX's own chain env (it runs beside the dex:
+CHAIN_BACKEND=jip2 with CHAIN_RPC, or jamnp with NODE_METRICS_URL). Extra arguments go to
+`netwatch.py poll`, e.g. --samples /shared/gate3a.jsonl --require-finality; the DEX's
+volume and settle reverts are the order verdict's (soak_verdict.py, which takes the
+samples with --chain)."""
+import sys
+
+import netwatch
+
+
+def main(argv=None):
+    extra = sys.argv[1:] if argv is None else list(argv)
+    return netwatch.main(["poll", "--interval", "300", "--count", "160", *extra])
+
+
+if __name__ == "__main__":
+    sys.exit(main())

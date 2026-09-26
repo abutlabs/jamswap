@@ -6,10 +6,18 @@ and reconstructs every order's history, then answers the soak's question order b
 order: did each marketable order CLEAR durably, and if not, where did it die?
 
     python3 soak_verdict.py [events.jsonl] [--target 0.9999] [--json]
+                            [--chain samples.jsonl|verdict.json] [--parity parity.json]
 
 Exit code 0 iff the clearing SLO meets the target AND no order is left in an
 illegal state (open forever, cleared-then-reverted-permanently). Designed to run
 as the assertion at the end of a k8s soak.
+
+The optional CHAIN section (issue #15) judges the net the orders ran on, with
+netwatch.py: --chain takes the samples netwatch poll/serve wrote (or a netwatch
+verdict JSON) and adds one head, liveness and finality advance; --parity takes a
+`netwatch.py parity --json` result and adds state agreement across the nodes. When
+either is given the exit code is 0 only if the orders AND the chain pass; without
+them the verdict is exactly the order verdict.
 
 The SLO denominator is MARKETABLE orders that reached a terminal state — orders a
 correct chain was obliged to clear. A non-marketable order that rested and expired
@@ -157,6 +165,32 @@ def score(orders, target=0.9999, open_grace=600, now=None):
     }
 
 
+def chain_section(chain_path=None, parity_path=None, **opts):
+    """The chain half of the verdict: netwatch's one head / liveness / finality verdict
+    over `chain_path` (samples JSONL or a verdict JSON), and the parity result at
+    `parity_path`. `opts` are netwatch.verdict's thresholds."""
+    sec = {"pass": True, "verdict": None, "parity": None}
+    if chain_path:
+        import netwatch                           # only a chain section needs the chain adapter
+        v = netwatch.load_chain_report(chain_path, **opts)
+        sec["verdict"] = v
+        sec["pass"] = sec["pass"] and bool(v.get("pass"))
+    if parity_path:
+        with open(parity_path) as fh:
+            p = json.load(fh)
+        sec["parity"] = p
+        sec["pass"] = sec["pass"] and bool(p.get("pass"))
+    return sec
+
+
+def with_chain(report, sec):
+    """Fold a chain section into an order report: `pass` becomes orders AND chain."""
+    report["orders_pass"] = report["pass"]
+    report["chain"] = sec
+    report["pass"] = report["pass"] and sec["pass"]
+    return report
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("events", nargs="?", default="/tmp/jamswap_order_events.jsonl")
@@ -165,6 +199,20 @@ def main():
     ap.add_argument("--open-grace", type=float, default=600,
                     help="seconds an order may stay open before it counts as a failure")
     ap.add_argument("--json", action="store_true")
+    ch = ap.add_argument_group("chain section (optional; netwatch.py)")
+    ch.add_argument("--chain", default=None, metavar="FILE",
+                    help="netwatch samples (JSONL) or verdict (JSON): adds one head, liveness "
+                         "and finality advance to the verdict")
+    ch.add_argument("--parity", default=None, metavar="FILE",
+                    help="a `netwatch.py parity --json` result: adds state agreement")
+    ch.add_argument("--max-lag", type=int, default=None,
+                    help="slots a node's best may trail the newest (netwatch default 3)")
+    ch.add_argument("--epoch-slots", type=int, default=None,
+                    help="epoch length in slots (default: as the samples recorded it)")
+    ch.add_argument("--require-finality", action="store_true",
+                    help="fail the chain section if the finalized head does not advance")
+    ch.add_argument("--final-stall-slots", type=int, default=None,
+                    help="longest the finalized head may stand still (default one epoch)")
     args = ap.parse_args()
 
     try:
@@ -174,7 +222,21 @@ def main():
         return 2
 
     report = score(orders, target=args.target, open_grace=args.open_grace)
-    ok, slo, stuck_open = report["pass"], report["slo"], report["stuck_open"]
+    if args.chain or args.parity:
+        opts = {"epoch_slots": args.epoch_slots,
+                "finality": "require" if args.require_finality else "auto",
+                "final_stall_slots": args.final_stall_slots}
+        if args.max_lag is not None:
+            opts["max_lag"] = args.max_lag
+        try:
+            sec = chain_section(args.chain, args.parity, **opts)
+        except (OSError, ValueError, KeyError, TypeError) as e:
+            print(f"cannot read the chain section: {e}", file=sys.stderr)
+            return 2
+        report = with_chain(report, sec)
+    # the order verdict alone (the combined one is report["pass"] when a chain section is in)
+    ok = report.get("orders_pass", report["pass"])
+    slo, stuck_open = report["slo"], report["stuck_open"]
     p50, p99 = report["clear_latency_p50_s"], report["clear_latency_p99_s"]
     missed_orders, n_stuck = report["sample_missed"], report["stuck_open_count"]
     if args.json:
@@ -204,7 +266,16 @@ def main():
                   f"{n_stuck} — e.g. {stuck_open[:5]}")
         if missed_orders:
             print(f"sample missed       : {missed_orders[:5]}")
-    return 0 if ok else 1
+        if "chain" in report:
+            import netwatch
+            sec = report["chain"]
+            print(f"orders              : {'PASS' if report['orders_pass'] else 'FAIL'}")
+            if sec["verdict"] is not None:
+                netwatch.print_verdict(sec["verdict"])
+            if sec["parity"] is not None:
+                netwatch.print_parity(sec["parity"])
+            print(f"VERDICT (orders + chain): {'PASS' if report['pass'] else 'FAIL'}")
+    return 0 if report["pass"] else 1
 
 
 if __name__ == "__main__":
