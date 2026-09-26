@@ -2,7 +2,9 @@
 
 Testing is layered — each layer is fast, deterministic, and checks a different thing.
 Run them all before shipping; CI (`.github/workflows/ci.yml`) runs the first three on
-every push.
+every push. (The encrypt-until-batch attack e2e — tampered / wrong-committee / injected
+rounds rejected — ran on lasair's retired HTTP operator RPC and left with it in #10; it
+returns over `chain.py` with runtime deploy, #13, and spec-valid submission, #11.)
 
 | Layer | Where | What it proves | Needs |
 |-------|-------|----------------|-------|
@@ -18,7 +20,8 @@ every push.
 | **3g. Order lifetime** | `offchain/tests/test_order_lifetime.py` | **anti-bloat** — rent-funded expiry (sealed sooner than public, hard-capped), GTC never infinite, per-account open-order cap | Python (stdlib) |
 | **3h. Sealed carry** | `offchain/tests/test_sealed_carry.py` | a **large sealed order accumulates fills across auctions** — its partial-fill remainder is re-sealed and carried forward (not cancelled), unless expired | Python (stdlib) |
 | **3i. Round poisoning + late settlement** | `offchain/tests/test_round_poison.py` | a trader's own sealed commit no longer sinks their round; a round that can't settle is **released in seconds** to the front of the mempool; a released round that settles late is **finalized, not re-submitted** (after a second sighting; a re-org on either side of a two-fork flip hands the orders to the round that won); one record per round id; a build and the resolver never interleave on a market; submit timeouts and carry-post failures lose nothing; no same-account overtaking under the batch cap; repeated seqs / out-of-band market prices never sink a round; truthful receipts for superseded and cancelled orders; the builder's round id equals the service's (SMATCH and encrypt-until-batch) | Python (stdlib) |
-| **4. End-to-end** | `offchain/test_enc_round.py`, `offchain/test_sealed_resting_e2e.py` | the real service on a live node: honest settles, tampered/injected rejected, sealed orders rest & cross across rounds, a public order followed by the same account's sealed order still fills | Docker + node |
+| **3j. Chain adapter** | `offchain/tests/test_chain.py`, `offchain/tests/test_jip2.py` | the DEX reaches the chain only through `chain.py`: the jamnp backend sends **byte-identical** requests to the pre-adapter code (bridge `/submit` + `/read`, node metrics) and reports the same finality; ChainBusy backpressure and the settle ledger; finality by height or by slot; the JIP-2 client's WebSocket framing (RFC 6455 accept vector, 7/16/64-bit lengths, fragments, ping, close, reconnect, no retry on submit) and the jip2 backend's mapping (block descriptors, `serviceValue` at best/final, the `serviceData` account record) | Python (stdlib) |
+| **4. End-to-end** | `offchain/test_sealed_resting_e2e.py`, `offchain/verify.py` | the real service on a live node: sealed orders rest & cross across rounds, a public order followed by the same account's sealed order still fills; register / duplicate-survival / deposit / withdraw / a matched trade | Docker + node |
 
 ## Why layer 3 exists (the bug it caught)
 
@@ -39,13 +42,13 @@ clear this round) vs **don't** (rest hidden, retry next round). The regression t
 # Layers 1 + 2 — the matching engine (property + scenario tests)
 cd crates/match-engine && cargo test --release
 
-# Layer 3 — the sealed-order round lifecycle (pure, no node needed)
+# Layer 3 — the off-chain builder: round lifecycle, receipts, chain adapter (no node needed)
 python3 -m unittest discover -s offchain/tests -v
 
-# Layer 4 — full end-to-end on a live node (requires the committee sidecar + a node)
-docker run -d --name jamtest -p 19900:19900 ghcr.io/abutlabs/lasair-node:latest
-COMMITTEE_BIN=... LASAIR_RPC=http://127.0.0.1:19900 python3 offchain/test_enc_round.py
-docker rm -f jamtest
+# Layer 4 — full end-to-end against the running stack
+docker compose up -d
+make verify                                                  # verify.py inside the dex
+JAMSWAP_URL=http://127.0.0.1:8080 python3 offchain/test_sealed_resting_e2e.py
 ```
 
 ## Adding a scenario

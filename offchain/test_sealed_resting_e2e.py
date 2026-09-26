@@ -18,7 +18,7 @@ lasair-node, and asserts:
            the service kept a separate commit floor, the commit raised the shared seq
            floor past the buy, which was then rejected: the 2026-09-24 soak failure.)
 
-Unlike `test_enc_round.py` (which talks raw node RPC with pre-baked committee payloads),
+Unlike a raw work-item harness (pre-baked committee payloads straight to the chain),
 this must go through the builder, because carry-forward is builder-side logic.
 
 ## Run it

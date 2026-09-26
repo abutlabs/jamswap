@@ -17,9 +17,14 @@ sequencer — or like Uniswap Labs' front-end vs the Uniswap contracts.
 That means anyone can run their own:
 
 ```sh
-SERVICE_ID=<deployed id> LASAIR_RPC=<any node RPC> PORT=8081 python3 offchain/server.py
+SERVICE_ID=<deployed id> BUILDER_URL=<a CE-133 builder bridge> READER_URL=<a CE-129 reader bridge> \
+    PORT=8081 python3 offchain/server.py
 # your own builder + UI at http://localhost:8081, attached to the SAME on-chain service
 ```
+
+Against any node that serves JIP-2, `CHAIN_BACKEND=jip2 CHAIN_RPC=ws://<node>:19800` replaces
+the two bridges (`offchain/chain.py`); it is read-only until spec-valid work-package
+submission lands (jamswap#11).
 
 ## Why you'd want to
 

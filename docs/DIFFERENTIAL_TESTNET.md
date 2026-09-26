@@ -8,7 +8,11 @@
 > **Rig retired.** This document records a completed milestone. The
 > `docker-compose.differential.yml` rig it describes was removed when jamswap retired
 > the HTTP operator RPC (everything now runs over JAMNP-S/QUIC); the result above
-> stands as recorded, and the driver survives in [`differential/`](../differential/).
+> stands as recorded, and the scenario survives in
+> [`differential/differential.py`](../differential/differential.py) as standalone lanes that
+> read state through the DEX's chain adapter (`offchain/chain.py`: jamnp on lasair, JIP-2
+> on PolkaJam). The GP 0.8.0 re-run (lasair vs PolkaJam 0.1.29, 2026-09-26) agreed byte
+> for byte (jamswap#23).
 > The successor cross-client story is the live mixed-client chain
 > (`docker-compose.mixed.yml` — see the README).
 
@@ -21,7 +25,7 @@ execute the same service identically down to the byte, that's evidence about bot
 clients *and* about the service's portability. If they ever disagree, one of them has a
 conformance bug — and we have a minimal reproducer by construction.
 
-The scenario each client runs (from `differential/driver.py`):
+The scenario each client runs (now `differential/differential.py`):
 
 | step | payload | asserted result |
 |---|---|---|
@@ -57,9 +61,9 @@ lanes merge into one chain and the byte-comparison becomes consensus itself.
 | 3 | **JAM DUNA** (`jam-duna/jamtestnet`) | published `jamduna` binary (linux/amd64) + chainspec tooling + JSON-RPC :19800-19805, GP 0.7.2 | 🔜 best next candidate — needs its RPC's service-deploy/work-item surface verified; amd64-only (emulated on arm64) |
 | 4 | **TurboJam** (r2rationality, C++) | source-build Dockerfiles upstream; JIP-2 RPC | ⏸ deferred — no prebuilt release, work-item interface unverified |
 
-Adding a lane = implement the two-method client shim in `differential/driver.py`
-(`deploy`, `item`, `storage`) against that client's operator interface. The scenario and
-assertions are client-agnostic.
+Adding a lane = implement the client shim in `differential/differential.py`
+(`deploy`, `item`, `storage`); `storage` is `chain.py`'s `read` for any client that serves
+JIP-2. The scenario and assertions are client-agnostic.
 
 ## Operational findings (the rig already paid rent)
 

@@ -83,9 +83,9 @@ and (2) every ciphertext id must already be in the on-chain encrypted-order set
 and non-reveal griefing; trust is honest-committee for *liveness* only (the DDH proof
 forces honest plaintext). Verifiable-decryption cost is ~n·18.7M gas/order (measured, GP 0.8.0;
 zk-jam-service `spikes/vdec-gas/`), bounding a per-order-verified batch to ~267/n orders.
-Crypto lives in `crates/vdec`; the committee sidecar is `crates/committee`; proven e2e by
-`offchain/test_enc_round.py` (honest settles; tampered / wrong-committee / injected all
-rejected).
+Crypto lives in `crates/vdec`; the committee sidecar is `crates/committee`; proven e2e
+(honest settles; tampered / wrong-committee / injected all rejected) on a live node —
+the harness, `offchain/test_enc_round.py`, drove lasair's retired HTTP operator RPC (GP 0.7.2) and was removed with it (jamswap#10); the payloads still come from `committee scenario`, and the live check returns over `offchain/chain.py` once the service deploys at runtime (#13) and submission is spec-valid (#11).
 
 `refine` for `MATCH`/`REVEAL` emits:
 `[0]‖[market:u32]‖[base:u32]‖[quote:u32]‖[settle_len:u32]‖[settlement]‖[resting book]`.
@@ -139,7 +139,13 @@ scales on ingest and de-scales on read, so the UI speaks plain decimals end-to-e
    minted.
 
 The "builder" (the party that reads on-chain `book`/`commits` and assembles the
-next payload) is, in the MVP, the test/off-chain caller. The plan's alternative —
+next payload) is, in the MVP, the test/off-chain caller. It reaches the chain only
+through `offchain/chain.py` — head, finalized head, storage reads at the best or
+finalized block, submission, the service's account record, chain parameters — whose
+backend is a config choice: `CHAIN_BACKEND=jamnp` (default: lasair's CE-133 builder and
+CE-129 reader bridges at `BUILDER_URL` / `READER_URL`, finality from `NODE_METRICS_URL`)
+or `CHAIN_BACKEND=jip2` (any node's JIP-2 RPC at `CHAIN_RPC`, default
+`ws://localhost:19800`; read-only until #11 builds spec-valid work-packages). The plan's alternative —
 `refine` reading the prior finalized book via historical-lookup — is a later
 optimization.
 

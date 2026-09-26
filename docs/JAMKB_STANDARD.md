@@ -122,7 +122,7 @@ There are **two distinct JAMKB quantities**, and a standard must keep them separ
 |---|---|---|---|
 | **Service JAMKB** | the reserve a *service* holds to back its footprint | the service's treasury balance | a per-service JAMKB obligation ledger |
 | **Account JAMKB** | a *user's* holdings of the JAMKB token | a balance in the service's ledger | a shared account/asset registry |
-| **Obligation** | `ceil(footprint/1024)` KB the service occupies | the node's `/v1/service/<id>/footprint` | node-authoritative (already is) |
+| **Obligation** | `ceil(footprint/1024)` KB the service occupies | the service account record's `octets` (JIP-2 `serviceData`, via `chain.py`) | node-authoritative (already is) |
 
 **Because account JAMKB is a tradable token, the cost of state gets a market price** —
 which is the whole point: an inelastic resource with a live, discoverable price.

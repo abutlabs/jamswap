@@ -119,8 +119,10 @@ the service (sealed + unsealed); **users view/decrypt their own** pending orders
 hold the nonce) and **cancel** un-processed ones. *Status: building now.*
 
 **Phase 1 — Footprint instrumentation (read-only, honest).**
-lasair exposes a service's footprint over the operator RPC:
-`GET /v1/service/<id>/footprint → { items, octets }` (sum the service's storage trie).
+The footprint is the `items` / `octets` of the service's on-chain account record
+(GP C(255, s)), read through `offchain/chain.py` `service_info()` — JIP-2 `serviceData`
+(the jamnp bridges have no read for it yet, so it reads 0 there; this was lasair's retired
+operator RPC `GET /v1/service/<id>/footprint`).
 The UI renders a **JAM state-footprint meter**: items, octets, KB — *actual validator
 RAM this service occupies right now*. No token, no enforcement — just the truth, live.
 

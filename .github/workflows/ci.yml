@@ -37,8 +37,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Syntax-check the off-chain builder + demo
+      - name: Syntax-check the off-chain builder, chain adapter, harnesses + demo
         run: |
-          python3 -m py_compile offchain/server.py offchain/round.py offchain/treasury.py offchain/clearing.py offchain/deploy.py sim/demo.py
+          python3 -m py_compile offchain/server.py offchain/chain.py offchain/jip2.py offchain/round.py offchain/treasury.py offchain/clearing.py offchain/verify.py differential/differential.py sim/demo.py
       - name: Round-lifecycle tests (sealed-order carry-forward / reveal-on-cross)
         run: python3 -m unittest discover -s offchain/tests -v

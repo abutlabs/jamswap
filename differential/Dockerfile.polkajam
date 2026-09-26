@@ -12,8 +12,9 @@ RUN arch=$(uname -m | sed s/arm64/aarch64/) \
  && echo "fetching ${url}" \
  && curl -fsSL "$url" | tar xz -C /usr/local/bin --strip-components=1 \
  && /usr/local/bin/polkajam --version
-COPY differential/driver.py /driver/driver.py
+# the pj lane of the differential + the chain adapter it reads through (JIP-2 at :19800)
+COPY differential/differential.py offchain/chain.py offchain/jip2.py /driver/
 COPY service/jamswap-service.jam /work/jamswap-service.jam
-# start a local polkajam validator testnet, then run the differential driver against it
-# and the lasair lane (LASAIR_RPC) — exits 0 only if both clients agree byte-for-byte.
-CMD ["bash", "-c", "polkajam-testnet > /tmp/pj.log 2>&1 & sleep 25 && python3 /driver/driver.py"]
+# start a local polkajam testnet, then run the pj lane against it; its JSON state is
+# compared with the lasair lane's by `differential.py compare lasair.json pj.json`
+CMD ["bash", "-c", "polkajam-testnet > /tmp/pj.log 2>&1 & sleep 25 && python3 /driver/differential.py pj"]
