@@ -142,9 +142,11 @@ def deferred(market, account, oid, reason):
         _log(rec, "deferred", reason=reason)
 
 
-def terminal(market, account, oid, outcome, filled=0):
+def terminal(market, account, oid, outcome, filled=0, reason=None):
     """The order reached a terminal state. `outcome` in TERMINAL; `filled` is the
-    durably-settled quantity (atomic). Updates the SLO for marketable orders."""
+    durably-settled quantity (atomic); `reason` (optional) says why, in the event log —
+    e.g. a "rejected" order superseded by its account's seq floor. Updates the SLO for
+    marketable orders."""
     key = (int(market), int(account), int(oid))
     with _lock:
         rec = _orders.pop(key, None)
@@ -170,8 +172,17 @@ def terminal(market, account, oid, outcome, filled=0):
         metrics.observe("jamswap_order_clear_latency_seconds", None, latency)
     total = c + mi
     metrics.set_gauge("jamswap_order_clearing_slo", None, (c / total) if total else 1.0)
+    extra = {"reason": reason} if reason else {}
     _log(rec, "terminal", outcome=outcome, filled=int(filled),
-         retries=rec.get("retries", 0), latency=round(latency, 2))
+         retries=rec.get("retries", 0), latency=round(latency, 2), **extra)
+
+
+def is_open(market, account, oid):
+    """Is this order live (placed in this process and not yet terminal)? Lets a caller end
+    an order only if nothing else already has — e.g. a signed cancel that lands after a
+    round already filled the order must not record a second terminal."""
+    with _lock:
+        return (int(market), int(account), int(oid)) in _orders
 
 
 def snapshot():

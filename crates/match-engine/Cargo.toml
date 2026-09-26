@@ -7,6 +7,8 @@ description = "Jamswap frequent-batch-auction uniform-price matching engine (no_
 
 [dependencies]
 ed25519-compact = { version = "2", default-features = false }
+# round ids (round_id.rs); the same crate, version and features the service already links
+blake2 = { version = "0.10", default-features = false }
 
 [dev-dependencies]
 # property testing for the clearing invariants

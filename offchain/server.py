@@ -314,11 +314,70 @@ def api_cancel(b):
     # signed cancel of a RESTING (on-chain) order: canon(cancel, handle, market, oid, nonce)
     handle, market, oid, nonce = int(b["account"]), int(b["market"]), int(b["order_id"]), int(b["nonce"])
     sig = bytes.fromhex(b["sig"])
+    try:
+        resting = _resting_entry(market, handle, oid)      # its terms, for the receipt
+    except Exception:
+        resting = None                                     # a read hiccup must not block the cancel
     submit(bytes([TAG_CANCEL]) + struct.pack("<IIIQ", handle, market, oid, nonce) + sig
            + signer_key(handle),
            check=lambda: nonce_of(handle) > nonce,
            detail=f"account {handle} cancel order {oid} market {market}")
+    if resting:
+        with _lock:                                        # the resolver swaps the list out
+            _cancel_watch.append({"market": market, "account": handle, "oid": oid,
+                                  "nonce": nonce, "t": time.time(), "order": resting})
     return {"ok": True}
+
+# Signed cancels awaiting their effect. A resting order's lifecycle is otherwise never
+# closed when its owner cancels it on-chain: it stays "open" in the order telemetry
+# forever. The resolver watches each cancel until it lands, then ends the order with a
+# "cancelled" receipt — unless a round that trades the order is still unresolved (it may
+# have filled it first), or the cancel removed nothing (the order is still on the book).
+_cancel_watch = []
+CANCEL_WATCH_SECS = 600            # a cancel not landed by then is dropped from the watch
+def _resting_entry(m, acct, oid):
+    # the order's (side, price, qty) while it rests on the market's on-chain book, else None
+    raw = storage(b"book" + struct.pack("<I", m))
+    for i in range(len(raw) // 17):
+        a, o, side, p, q = struct.unpack_from("<IIBII", raw, i * 17)
+        if a == acct and o == oid:
+            return {"side": side, "price": p, "qty": q}
+    return None
+def _may_fill(m, oid):
+    # a round of market m that fills this order has LANDED but isn't finalized yet: its
+    # receipt, not the cancel, ends the order (finalizing it makes the order non-open). A
+    # round that fills it but has NOT landed never can, once the cancel has: either the cancel
+    # took the order off the book (the round's input book no longer matches) or the round
+    # landed first (then it is marked). So an unlanded released round must not hold the
+    # cancel back — it used to, until the watch lapsed and the order stayed "open" forever.
+    rounds = ([_inflight[m]] if m in _inflight else []) + list(_zombies.get(m, []))
+    return any(fr["clearing"]["fills"].get(oid) and _landed_slot(fr["rid"]) is not None
+               for fr in rounds)
+def _resolve_cancels(now):
+    with _lock:                    # take the list: api_cancel appends from HTTP threads, and an
+        batch = list(_cancel_watch)    # append between a scan and a rewrite used to be lost
+        _cancel_watch.clear()
+    keep = []
+    for c in batch:
+        m, a, oid = c["market"], c["account"], c["oid"]
+        if now - c["t"] > CANCEL_WATCH_SECS:
+            continue                                   # never took effect: nothing ended
+        try:
+            if nonce_of(a) <= c["nonce"] or _may_fill(m, oid):
+                keep.append(c)                         # not landed yet / a fill may beat it
+                continue
+            still = _resting_entry(m, a, oid)
+        except Exception:
+            keep.append(c)                             # reader hiccup: retry next sweep
+            continue
+        if still is None and order_telemetry.is_open(m, a, oid):
+            order_expiry.pop((m, a, oid), None)
+            _record_exec(dict(c["order"], market=m, account=a, oid=oid, _outcome="cancelled",
+                              _reason="cancelled by owner (signed on-chain cancel)"),
+                         0, c["order"]["price"], False, now)
+            _save_execs()
+    with _lock:
+        _cancel_watch[:0] = keep       # ahead of any cancel appended meanwhile
 def _try_submit_register(pk_hex, now=None):
     # one submit attempt for a pending registration; swallow backpressure (retry next sweep)
     e = _reg_pending.get(pk_hex)
@@ -494,9 +553,17 @@ def verify_order_sig(pubkey, msg, sig):
 ASSET_NAME = {0: "USDC", 1: "DOT", 2: "JAMKB"}
 # A market order is a *marketable limit* with a slippage guard: instead of an unbounded
 # sentinel (which, in a thin book, would clear at an absurd uniform price), it crosses only
-# within MARKET_BAND of the last clearing price. With no last price yet (cold market) a
+# within MARKET_BAND_PCT of the last clearing price. With no last price yet (cold market) a
 # market order is refused — there's no reference to bound it, so use a limit order.
-MARKET_BAND = 0.10                     # ±10% of the last price
+MARKET_BAND_PCT = 10                   # ±10% of the last price (MARKET_BAND_PCT in service/src/lib.rs)
+def market_price(side, lp):
+    # A market order's executed price: the edge of the band the service accepts around the
+    # last price lp, in the service's own integer arithmetic (it accepts p iff
+    # lp*90 <= p*100 <= lp*110) — floor a buy, ceil a sell. round(lp * 1.1) put ~45% of
+    # prices one atomic unit OUTSIDE the band, and the service then rejected the whole round.
+    if side == BUY:
+        return lp * (100 + MARKET_BAND_PCT) // 100
+    return max(1, -(-lp * (100 - MARKET_BAND_PCT) // 100))
 
 # ---- anti-bloat: no order rests forever (rent-funded expiry) ---------------
 # A resting order occupies validator RAM continuously → it consumes JAMKB state rent whether
@@ -557,7 +624,7 @@ def api_seal_prepare(b):
         lp = mstate(b"lp", m)
         if lp <= 0:
             raise ValueError("no reference price yet on this market — place a limit order")
-        price = int(round(lp * (1 + MARKET_BAND))) if side == BUY else max(1, int(round(lp * (1 - MARKET_BAND))))
+        price = market_price(side, lp)
     else:
         price = to_atomic(b["price"])
     oid = next_oid[0]; next_oid[0] += 1
@@ -579,8 +646,13 @@ def _post_carry_seal(m, o):
     # Re-seal the unfilled remainder of a partially-filled sealed order so it carries forward
     # (still hidden). The owner is offline, so this is builder-posted — the service accepts it
     # only against the carry allowance the settling round just minted for this account.
-    cid = _seal_material(m, o)
-    o["commit"] = cid
+    # The seal is made ONCE per remainder: a retry (chain busy, or a submit whose outcome is
+    # unknown) re-posts the same commitment, so if an earlier attempt did land, the retry is
+    # refused harmlessly — a fresh nonce would leave the remainder holding a commitment that
+    # never went on-chain (deferred until it expired).
+    if "commit" not in o:
+        o["commit"] = _seal_material(m, o)
+    cid = o["commit"]
     if ENC_MODE:
         submit(bytes([TAG_CARRY_ENC_COMMIT]) + struct.pack("<I", m)
                + bytes.fromhex(o["ciphertext"]) + struct.pack("<I", o["account"]))
@@ -608,7 +680,7 @@ def api_order(b):
         lp = mstate(b"lp", m)          # atomic last clearing price
         if lp <= 0:
             raise ValueError("no reference price yet on this market — place a limit order")
-        price = int(round(lp * (1 + MARKET_BAND))) if side == BUY else max(1, int(round(lp * (1 - MARKET_BAND))))
+        price = market_price(side, lp)
     else:
         price = to_atomic(b["price"])
     # Order authentication — TRUSTLESS end-to-end for public orders: the client signs
@@ -649,6 +721,18 @@ def api_order(b):
                 struct.pack("<Q", seq))
     if REQUIRE_ORDER_SIG and pub and sig and not verify_order_sig(pub, msg, sig):
         raise ValueError("bad order signature")
+    if not sealed_flag:
+        # the service refuses an order whose seq doesn't beat its account's floor, or repeats
+        # another order's seq in the same round — and it refuses the WHOLE round for it. Turn
+        # such an order away here instead (a re-POSTed signed order is the usual cause); the
+        # round builder still drops any that slip past (_seq_sanitize).
+        fl = _seq_floor(acct)
+        if seq <= fl:
+            raise ValueError(f"order seq {seq} is not above the account's settled seq {fl} — "
+                             f"sign the order with a fresh seq")
+        if _seq_in_use(acct, seq):
+            raise ValueError(f"order seq {seq} is already used by a live order of this account — "
+                             f"sign each order with a fresh seq")
     # Collateral guard (best-effort; on-chain escrow is the trustless version): refuse an
     # order the account can't currently fund. A buy needs qty·price/SCALE of the quote asset;
     # a sell needs qty of the base asset. Note: this checks the current on-chain balance only,
@@ -695,13 +779,16 @@ def expired_pairs(m, rest_bytes):
     # themselves are NO LONGER edited here: the service hash-binds refine's input book to the
     # on-chain book (so a builder can't fabricate resting orders), and expiry is passed as an
     # EXPLICIT prune list inside the round — auditable in the work package, never silent.
+    # Nothing ends HERE: a prune takes effect only if the round carrying it settles, so the
+    # order's "expired" terminal (and dropping its expiry) waits for _finalize_round. A round
+    # that is released instead leaves the expiry in place, and the next round prunes again —
+    # ending it at build time left a released round's expired orders on the book for good.
     now, out = time.time(), []
     for i in range(len(rest_bytes) // 17):
         a, oid, side, p, q = struct.unpack_from("<IIBII", rest_bytes, i * 17)
         exp = order_expiry.get((m, a, oid))
         if exp and exp <= now:
-            order_expiry.pop((m, a, oid), None); out.append((a, oid))
-            order_telemetry.terminal(m, a, oid, "expired")
+            out.append((a, oid))
     return out
 def signed_order_bytes(o):
     # order(17) ‖ flags(1) ‖ signed_price(4) ‖ seq(8) ‖ pubkey(32) ‖ sig(64) — must match
@@ -710,27 +797,109 @@ def signed_order_bytes(o):
     return (order_bytes(o["account"], o["oid"], o["side"], o["price"], o["qty"])
             + bytes([flags]) + struct.pack("<IQ", o["signed_price"], o["seq"])
             + o["pubkey"] + o["sig"])
+def _seq_in_use(acct, seq):
+    # does a live public order of this account (queued, or in a round in flight, on ANY market:
+    # the order floor is per account) already carry this seq?
+    with _lock:
+        live = [o for orders in pending.values() for o in orders]
+    live += [o for fr in list(_inflight.values()) for o in fr["public"]]
+    return any(not o.get("sealed") and o["account"] == acct and o.get("seq") == seq for o in live)
+def _seq_floor(acct):
+    # the account's on-chain PUBLIC-ORDER floor (b"sq"‖handle). Sealed commits have their own
+    # floor (b"sc"), so a commit can no longer push this past the trader's older orders.
+    v = storage(b"sq" + struct.pack("<I", acct))
+    return int.from_bytes(v, "little") if v else 0
 def _seq_sanitize(m, orders):
-    """Enforce the service's per-account seq discipline BEFORE a round is submitted,
-    so the round can never be rejected wholesale for a stale/out-of-order seq.
-    Returns (kept, dead): kept is sorted (account, seq) ascending with every seq
-    strictly above the account's current on-chain floor; dead is permanently stale
-    (seq <= floor — a later order from that account already settled past it)."""
-    floors = {}
-    def floor(acct):
-        if acct not in floors:
-            v = storage(b"sq" + struct.pack("<I", acct))
-            floors[acct] = int.from_bytes(v, "little") if v else 0
-        return floors[acct]
+    """Enforce the service's per-account seq discipline BEFORE a round is submitted, so the
+    round can never be rejected wholesale for a stale, repeated or out-of-order seq.
+    Returns (kept, dead, floors): kept is sorted (account, seq) ascending, each seq strictly
+    above the account's RUNNING floor — the on-chain floor, then each kept seq in turn,
+    exactly as the service's check_bindings walks a round; dead is [(order, reason)] for the
+    orders that can never settle: at/below the on-chain floor (a newer order of the account
+    already settled past it) or repeating a seq another order of the round carries (a
+    re-posted signed order — kept, it would sink every round it rode in); floors holds the
+    on-chain floor read for each account seen."""
+    floors, run = {}, {}
     kept, dead = [], []
     # ascending by (account, seq): the service raises each account's running floor to
     # the order's seq in this order, so ascending guarantees every step strictly rises.
     for o in sorted(orders, key=lambda o: (o["account"], o.get("seq", 0))):
-        if o.get("seq", 0) <= floor(o["account"]):
-            dead.append(o)          # already superseded on-chain — can never settle
+        a, s = o["account"], o.get("seq", 0)
+        if a not in floors:
+            floors[a] = run[a] = _seq_floor(a)
+        if s <= floors[a]:
+            dead.append((o, f"superseded: account seq floor (floor {floors[a]} >= order seq {s})"))
+        elif s <= run[a]:
+            dead.append((o, f"duplicate: another order of this account carries seq {s}"))
         else:
             kept.append(o)
-    return kept, dead
+            run[a] = s
+    return kept, dead, floors
+
+def _price_market_orders(m, public):
+    """Market orders sign no price: the builder picks the executed price, and the service
+    accepts it only within MARKET_BAND_PCT of the market's last price AT ACCUMULATE — which
+    may have moved since the order was placed. Re-price each at the band edge of the CURRENT
+    last price (one round in flight per market, so it holds until this one lands). With no
+    last price at all the order can't be bounded, and a round carrying it would be rejected
+    whole: it is dead. Returns (public, dead) with dead as [(order, reason)]."""
+    market = [o for o in public if o.get("type") == "market"]
+    if not market:
+        return public, []
+    lp = mstate(b"lp", m)
+    if lp <= 0:
+        return ([o for o in public if o.get("type") != "market"],
+                [(o, "market order: the market has no last price to bound it") for o in market])
+    for o in market:
+        o["price"] = market_price(o["side"], lp)
+    return public, []
+
+def _cap_batch(orders, cap):
+    """Split the mempool into this round's batch (the first `cap`) and the overflow, without
+    ever letting an account's NEWER public order into the batch while an OLDER one of the
+    same account waits in the overflow: the newer one settling would raise the account's
+    floor past the older one, stranding it for good. Each account's public orders are
+    re-dealt into the queue positions they already hold, lowest seq first, so the cap takes
+    every account's oldest orders. Sealed orders don't move (they carry no order seq)."""
+    slots = {}
+    for i, o in enumerate(orders):
+        if not o.get("sealed"):
+            slots.setdefault(o["account"], []).append(i)
+    out = list(orders)
+    for idx in slots.values():
+        for i, o in zip(idx, sorted((orders[i] for i in idx), key=lambda o: o.get("seq", 0))):
+            out[i] = o
+    return out[:cap], out[cap:]
+
+# ---- round identity: exactly which rounds settled --------------------------
+# A round's id is blake2s(DOMAIN ‖ the exact work-item payload): refine derives it from the
+# bytes it is given, so it binds everything the round is — market, signed orders, prune list,
+# reveals / ciphertexts, the input book. Accumulate marks every accepted round landed:
+# b"rl"‖id → the slot it landed in, removed only by age (crates/match-engine/src/round_id.rs,
+# the one definition; pinned byte-for-byte by tests/test_round_poison.py). The builder hashes
+# the payload it submits, so `_landed_slot(rid) is not None` says exactly whether THIS round
+# settled — for the live round and for released ones (a late landing is finalized, not
+# misread as a rejection). No stream of other rounds can push a live marker out; a ring of
+# the newest 32 ids could be flushed by anyone who landed 32 cheap rounds.
+ROUND_ID_DOMAIN = b"jamswap:v1:round"
+def round_id(payload):
+    return hashlib.blake2s(ROUND_ID_DOMAIN + payload, digest_size=32).digest()
+def _landed_slot(rid):
+    v = storage(b"rl" + rid)
+    return int.from_bytes(v[:4], "little") if len(v) >= 4 else None
+def _consumed_entry(o):
+    # the (hash ‖ account) set entry a revealed sealed order consumes: H(order‖nonce) in
+    # commit–reveal, H(C1‖body) (the ciphertext id) in encrypt-until-batch
+    h = commitment(bytes.fromhex(o["ciphertext"])) if ENC_MODE else commitment(o["reveal"])
+    return h + struct.pack("<I", o["account"])
+def _set_entries(raw):
+    return {raw[i:i + SET_ENTRY_LEN] for i in range(0, len(raw) - SET_ENTRY_LEN + 1, SET_ENTRY_LEN)}
+def _okey(o):
+    # one incarnation of an order: a carried sealed remainder keeps its oid but gets a fresh
+    # commitment, so it is a different key from the copy that traded
+    return (o["account"], o["oid"], o.get("commit"))
+def _keys(fr):
+    return {_okey(o) for o in fr["sealed"] + fr["public"]}
 
 def public_section_bytes(public, pruned, raw_book):
     # the signed public-order section every round type now ends with:
@@ -751,23 +920,57 @@ def _parse_book(raw):
 # On the contested chain a filling round takes 30-90s to settle while the auction
 # loop ticks every 6s — ungated, rounds N+1..N+k all raced round N and died
 # (surfaced immediately by the phase-3 load test: offered volume >> on-chain cv).
-# Gate: hold a market's next round until the previous one SETTLES (cv predicate),
-# with hard caps so a rejected or zero-fill round can never wedge the market.
-# Orders keep queueing meanwhile and BATCH into the next round — throughput is
-# settlement-bound, exactly what the funnel dashboard shows.
+# Gate: hold a market's next round until the previous one SETTLES — its round id is
+# marked landed (see round_id above) — with hard caps so a rejected round can never
+# wedge the market. Orders keep queueing meanwhile and BATCH into the next round —
+# throughput is settlement-bound, exactly what the funnel dashboard shows. Every
+# submitted round is tracked, zero-fill ones too: a zero-fill round that rests orders
+# rewrites the book just the same, and its marker shows it.
 #
-# RECEIPTS ARE SETTLEMENT-CONTINGENT: a filling round's per-order fill receipts
-# and sealed-remainder carries are recorded only when its cv predicate FIRES —
-# on the real mixed chain most overloaded rounds time out or are service-
-# rejected, and receipting at submit time filled the execution report with
-# "filled" orders whose balances never moved (phantom fills, found live
-# 2026-07-09: report full of fills, every balance still genesis 1,000,000).
-# A round that never settles re-queues its orders (nothing is lost) and leaves
-# NO receipts. Zero-fill rounds (book rewrite only, nothing crossed) have no
-# on-chain marker and keep their immediate low-stakes rested/cancel receipts.
-_round_gate = {}                   # market -> {"check": None, "t": ...} cooldowns (zero-fill/busy/timeout)
-_inflight = {}                     # market -> in-flight FILLING round awaiting its cv predicate:
-                                   #   {"check","t","sealed","public","resting","clearing"}
+# RECEIPTS ARE SETTLEMENT-CONTINGENT: a round's per-order receipts and sealed-remainder
+# carries are recorded only once its id is marked landed and is still marked at a second
+# sighting (SETTLE_HOLD_SECS, and at least one resolver period, later) — on the real mixed
+# chain most overloaded rounds time out or are service-rejected, and receipting at submit
+# time filled the execution report with "filled" orders whose balances never moved (phantom
+# fills, found live 2026-07-09: report full of fills, every balance still genesis
+# 1,000,000). A round that won't settle re-queues its orders (nothing is lost) and leaves
+# NO receipts.
+#
+# A round that CAN'T settle is released in seconds, not after the gate: accumulate
+# re-checks the input book hash, every order seq against its account's floor, and every
+# consumed commit, so once any of those is gone (and stays gone for DEAD_CONFIRM_SECS,
+# a short re-org guard) the round is dead. Its orders go back to the FRONT of the
+# mempool. Every released round (dead or timed out) is still WATCHED as a zombie: if
+# its id is later marked landed it settled after all — its orders are CLAIMED (taken out
+# of the mempool and noted on every other round carrying copies, so none re-queues or
+# receipts them) and it is finalized (receipts, carries), instead of being re-submitted
+# and later misrecorded as rejected. (The 2026-09-24 soak lost 6 rounds to a 60 s gate +
+# tail requeue while each was already dead; see the jamswap late-settlement analysis.)
+#
+# One thread at a time per market: api_round (building from the mempool), the resolver
+# (judging the market's rounds) and a mempool cancel all hold the market's lock, so a
+# released round seen landing is seen either before a build takes its orders or after the
+# build registered its round (and is claimed from it) — never while its orders sit only
+# in a build's locals, where they used to be receipted "rejected" and then "filled".
+_round_gate = {}                   # market -> {"check": None, "t": ...} cooldowns (busy/timeout)
+_inflight = {}                     # market -> the round in flight, awaiting its landed marker:
+                                   #   {"t","sealed","public","resting","clearing","pruned",
+                                   #    identity: "rid","book_hash","consumed","set_key","minseq",
+                                   #    "claimed": {order key: rid of the landed round holding it}}
+_zombies = {}                      # market -> [released rounds still watched for a late landing]
+_market_locks = {}                 # market -> threading.Lock (see above)
+_market_locks_guard = threading.Lock()
+def _market_lock(m):
+    with _market_locks_guard:
+        return _market_locks.setdefault(m, threading.Lock())
+DEAD_CONFIRM_SECS = float(os.environ.get("DEAD_CONFIRM_SECS", "4"))     # dead this long -> released
+MIN_CONFIRM_SECS = 2.0             # a landing is confirmed by a second sighting at least one
+                                   # resolver period after the first, even with no settle hold:
+                                   # two reads a moment apart (a build checks twice) see one head
+def _confirmed(ok_since, now):
+    return now - ok_since >= max(SETTLE_HOLD_SECS, MIN_CONFIRM_SECS)
+ZOMBIE_WATCH_SECS = float(os.environ.get("ZOMBIE_WATCH_SECS", "900"))   # watch a released round this long
+ZOMBIE_CAP = 32                    # per market: beyond it the oldest UNSIGHTED zombies are forgotten
 
 # --- registration confirm-and-retry ------------------------------------------
 # A fresh account's registration is a STANDALONE work-item (not part of an auction
@@ -785,7 +988,9 @@ _reg_pending = {}                  # pubkey_hex -> {"payload","t","attempts","la
 REG_RETRY_SECS   = float(os.environ.get("REG_RETRY_SECS", "8"))     # min spacing between resubmits
 REG_GIVEUP_SECS  = float(os.environ.get("REG_GIVEUP_SECS", "240"))  # abandon after this long unlanded
 REG_MAX_ATTEMPTS = int(os.environ.get("REG_MAX_ATTEMPTS", "20"))
-ROUND_GATE_SECS = float(os.environ.get("ROUND_GATE_SECS", "300"))   # settle patience before a round is abandoned + re-queued
+ROUND_GATE_SECS = float(os.environ.get("ROUND_GATE_SECS", "300"))   # settle patience for a round that is
+                                   # NOT dead (still landable) before it is abandoned + re-queued: it only
+                                   # catches rounds the chain never included (dead ones go in seconds)
 SETTLE_HOLD_SECS = float(os.environ.get("SETTLE_HOLD_SECS", "150"))
                           # durability: the cv predicate must HOLD this long before receipts. The
                           # right value is the DEEPEST re-org the chain can produce, which depends
@@ -799,16 +1004,19 @@ SETTLE_HOLD_SECS = float(os.environ.get("SETTLE_HOLD_SECS", "150"))
                           #   * ALL-LASAIR (one coherent fork choice): re-orgs are 1-2 blocks, so
                           #     SETTLE_HOLD_SECS=18 (3 slots) confirms fast — set it in the compose.
                           # jamswap_settle_reverted_total measures whether the chosen hold is safe.
-MAX_ROUND_ORDERS = int(os.environ.get("MAX_ROUND_ORDERS", "256"))
-                                   # per-round batch cap. Refine gas ~5.29M/signed order and wire
-                                   # ~130 B/order bound it from above, but there is also a THROUGHPUT
+MAX_ROUND_ORDERS = int(os.environ.get("MAX_ROUND_ORDERS", "150"))
+                                   # per-round batch cap. Refine gas ~5.29M/signed order (GP 0.8.0)
+                                   # against a package budget of G_R (1e9 on tiny) caps a round at
+                                   # ~185 signed orders; 150 leaves margin. Wire ~130 B/order also
+                                   # bounds it from above, but there is also a THROUGHPUT
                                    # argument for keeping it SMALL: one round settles per market at a
                                    # time (the in-flight gate), so a giant round that fails to settle
                                    # wedges the whole market for the gate window while it cycles. Many
                                    # small rounds that each settle fast drain a backlog better than one
                                    # 253-order round that keeps timing out (found live 2026-07-09 on the
                                    # all-lasair net). Set it per-net in the compose (e.g. 48).
-ROUND_ZEROFILL_SECS = 30.0         # cooldown for zero-fill rounds (no on-chain marker)
+ROUND_ZEROFILL_SECS = 30.0         # cooldown after a busy refusal or a timed-out round, so retries
+                                   # don't re-flood the fleet (the name predates tracking zero-fill rounds)
 
 # Remainders whose carry-commit couldn't be posted yet (all guarantor queues full).
 # The carry allowance the settled round minted PERSISTS on-chain, so we retry the
@@ -849,12 +1057,16 @@ def _carry_sealed_remainders(m, sealed_orders, fills, now):
                 o["_outcome"], o["_reason"] = "partial-carried", f"filled {disp(filled)}, rest re-sealed & still working"
             else:
                 o["_outcome"], o["_reason"] = "carried", "didn't cross this round — still working (hidden)"
-        except ChainBusy:
+        except Exception as e:
             # R4: don't drop — the credit persists on-chain, so queue the re-seal and
             # retry it each sweep. The order stays live; its receipt is a carry note.
+            # Any failure, not just ChainBusy: a builder timeout used to escape here and
+            # abort the round's finalize before a single receipt was written. (A retry
+            # re-posts the same commitment, so one that did land is refused harmlessly.)
             _carry_retry.setdefault(m, []).append(r)
             o["_outcome"] = "partial-carried" if filled > 0 else "carried"
-            o["_reason"] = "re-seal queued (chain busy)"
+            o["_reason"] = ("re-seal queued (chain busy)" if isinstance(e, ChainBusy)
+                            else f"re-seal queued ({type(e).__name__})")
     if carried:
         with _lock:
             pending.setdefault(m, []).extend(carried)
@@ -876,8 +1088,8 @@ def _drain_carry_retry(now):
                 continue
             try:
                 _post_carry_seal(m, r)
-            except ChainBusy:
-                keep.append(r)             # still busy — retry next sweep
+            except Exception:
+                keep.append(r)             # still busy / unreachable — retry next sweep
                 continue
             with _lock:
                 pending.setdefault(m, []).append(r)
@@ -887,50 +1099,222 @@ def _drain_carry_retry(now):
             _carry_retry.pop(m, None)
 
 def _finalize_round(m, fr):
-    """The round's cv predicate fired: its clearing is REAL on-chain. Only now
-    carry sealed remainders forward and hand out fill receipts."""
+    """The round's id is marked landed and has held: its clearing is REAL on-chain. Only
+    now carry sealed remainders forward, hand out fill receipts, and end the resting orders
+    its prune list expired. Orders another landed round claimed (see _claim) are that
+    round's to receipt: two rounds sharing an order can't both land, so this only happens
+    after reads that straddled a re-org, and never receipts an order twice."""
     now = time.time()
-    carried = _carry_sealed_remainders(m, fr["sealed"], fr["clearing"]["fills"], now)
-    try: record_executions(m, fr["resting"], fr["sealed"], fr["public"], fr["clearing"])
+    lost = fr.get("claimed") or {}
+    sealed = [o for o in fr["sealed"] if _okey(o) not in lost]
+    public = [o for o in fr["public"] if _okey(o) not in lost]
+    if lost:
+        print(f"round m{m}: WARNING settled while {len(lost)} of its order(s) are held by "
+              f"another landed round — receipting only the rest")
+    carried = _carry_sealed_remainders(m, sealed, fr["clearing"]["fills"], now)
+    try: record_executions(m, fr["resting"], sealed, public, fr["clearing"])
     except Exception as e: print("exec record failed", m, e)
-    print(f"round m{m}: settled on-chain — receipted {len(fr['sealed']) + len(fr['public'])} order(s), carried {len(carried)}")
+    for a, oid in fr.get("pruned", ()):
+        # the prune landed with the round: the expired resting order is off the book now
+        order_expiry.pop((m, a, oid), None)
+        order_telemetry.terminal(m, a, oid, "expired")
+    print(f"round m{m}: settled on-chain — receipted {len(sealed) + len(public)} order(s), carried {len(carried)}")
+
+def _round_dead(m, fr):
+    """Why the round can no longer settle, or None. These are the preconditions its
+    accumulate re-checks (service check_round_auth / consume_set), read from the chain.
+    Callers read the landed marker AFTER this, so a round that lands between the two reads
+    is still seen as landed, not dead. It never calls a settle predicate, so a zero-fill
+    round (which has none) is judged the same way as a filling one."""
+    if commitment(storage(b"book" + struct.pack("<I", m))) != fr["book_hash"]:
+        return "book-moved"           # another round or a cancel rewrote the book
+    if fr["consumed"]:
+        have = _set_entries(storage(fr["set_key"] + struct.pack("<I", m)))
+        if any(e not in have for e in fr["consumed"]):
+            return "commit-gone"      # a sealed order's commit was consumed or expired
+    for a, s in fr["minseq"].items():
+        if _seq_floor(a) >= s:
+            return "seq-floor"        # the account's floor passed this round's oldest order
+    return None
+
+def _abandon(m, fr, why, now):
+    """Release a round that won't settle (dead) or hasn't (timeout). Its orders go back to
+    the FRONT of the mempool: they are the oldest orders of their accounts, and behind
+    newer ones they would be overtaken and stranded by the rising seq floor. Orders a
+    landed released round claimed stay out (they settled there). The round is kept as a
+    zombie so a late landing is still finalized (see _resolve_zombies)."""
+    lost = fr.get("claimed") or {}
+    orders = [o for o in fr["sealed"] + fr["public"] if _okey(o) not in lost]
+    with _lock:
+        pending[m] = orders + pending.get(m, [])
+    for o in orders:
+        order_telemetry.requeued(m, o["account"], o["oid"])
+    zs = _zombies.setdefault(m, [])
+    zs.append(dict(fr, abandoned_at=now, why=why, ok_since=None, claimed=dict(lost)))
+    while len(zs) > ZOMBIE_CAP:
+        # forget the OLDEST unsighted zombie: a sighted one holds orders it will receipt
+        i = next((i for i, z in enumerate(zs) if z.get("ok_since") is None), None)
+        if i is None:
+            break
+        del zs[i]
+    if why == "timeout":
+        # the chain never included it: cool down before re-submitting. A DEAD round is
+        # rebuilt at the next auction — the chain did its part, the round was just stale.
+        _round_gate[m] = {"check": None, "t": now}
+    metrics.inc("jamswap_round_abandoned_total", {"market": str(m), "reason": why})
+    print(f"round m{m}: released ({why}) — re-queued {len(orders)} order(s) to the front, no receipts")
+
+def _records(m):
+    # every round of market m still tracked: the one in flight, then the released ones
+    return ([_inflight[m]] if m in _inflight else []) + list(_zombies.get(m, []))
+
+def _claim(m, z):
+    """Released round z landed after all: its orders are ITS to receipt. Take them out of the
+    mempool, and note on every other tracked round carrying copies (the round in flight,
+    other released ones) that z holds them — so none of those re-queues or receipts them,
+    and nothing is ever stripped from a round's own record (a re-org can hand them back,
+    see _unclaim). Returns z's order keys."""
+    keys = _keys(z)
+    with _lock:
+        pending[m] = [o for o in pending.get(m, []) if _okey(o) not in keys]
+    for fr in _records(m):
+        if fr is not z:
+            for k in _keys(fr) & keys:
+                fr.setdefault("claimed", {})[k] = z["rid"]
+    return keys
+
+def _unclaim(m, z):
+    """A re-org erased z's late landing: its orders are free again. Rounds carrying copies
+    own them again; the rest go back to the FRONT of the mempool — not those the round in
+    flight carries (it may still settle them), nor those another landed round holds, nor
+    any already queued. Returns the orders re-queued."""
+    busy = set()
+    for fr in _records(m):
+        if fr is z:
+            continue
+        cl = fr.get("claimed") or {}
+        for k in [k for k, r in cl.items() if r == z["rid"]]:
+            del cl[k]
+        if fr is _inflight.get(m) or fr.get("ok_since") is not None:
+            busy |= _keys(fr)
+    with _lock:
+        busy |= {_okey(o) for o in pending.get(m, [])}
+        back = [o for o in z["sealed"] + z["public"] if _okey(o) not in busy]
+        pending[m] = back + pending.get(m, [])
+    return back
+
+def _resolve_zombies(now, m):
+    """Watch market m's released rounds for a LATE landing: lasair can still include a
+    round's work-item after the builder gave up on it. A zombie whose id is marked landed
+    settled: its orders are claimed at once and, on a LATER sweep once the settle hold has
+    passed, it is finalized like any round — two sightings, exactly as for the round in
+    flight, so a landing seen once on a fork that then loses is undone, not receipted (with
+    SETTLE_HOLD_SECS=0 it used to finalize, irreversibly, on the very sweep that first saw
+    it). A late landing a re-org erases gives its orders back. Unsighted zombies are
+    forgotten after ZOMBIE_WATCH_SECS. Returns the order keys this call claimed.
+    Callers hold the market lock."""
+    taken = set()
+    keep = []
+    for z in list(_zombies.get(m, [])):
+        if z.get("ok_since") is None and now - z["abandoned_at"] > ZOMBIE_WATCH_SECS:
+            continue
+        try:
+            slot = _landed_slot(z["rid"])
+        except Exception:
+            keep.append(z)                               # reader hiccup: retry next sweep
+            continue
+        if slot is not None:
+            if z.get("ok_since") is None:
+                z["ok_since"] = now                      # first sighting: it settled after all
+                taken |= _claim(m, z)
+                metrics.inc("jamswap_round_late_landed_total", {"market": str(m)})
+                print(f"round m{m}: released round ({z['why']}) SETTLED LATE at slot {slot} — "
+                      f"claimed its {len(z['sealed']) + len(z['public'])} order(s)")
+            elif _confirmed(z["ok_since"], now) and not _rival_landed(m, z):
+                try: _finalize_round(m, z)
+                except Exception as e: print("late round finalize failed", m, e)
+                continue                                 # done: stop watching it
+        elif z.get("ok_since") is not None:
+            z["ok_since"] = None                         # a re-org erased the late landing
+            _unclaim(m, z)
+            metrics.inc("jamswap_settle_reverted_total", {"market": str(m)})
+            for o in z["sealed"] + z["public"]:
+                order_telemetry.reverted(m, o["account"], o["oid"])
+            print(f"round m{m}: late landing of a released round REVERTED by re-org — orders freed")
+        keep.append(z)
+    if keep:
+        _zombies[m] = keep
+    else:
+        _zombies.pop(m, None)
+    return taken
+
+def _rival_landed(m, fr):
+    # another tracked round sharing an order with fr ALSO reads as landed. Both can't have (the
+    # shared order's seq floor / commit admits only one), so the reads straddled a re-org:
+    # finalize neither until one view remains, rather than receipt an order twice
+    mine = _keys(fr)
+    return any(other is not fr and _keys(other) & mine and _landed_slot(other["rid"]) is not None
+               for other in _records(m))
+
+def _resolve_inflight(m, fr, now):
+    """The round in flight: landed and held -> finalize (receipts + carries); landed then
+    erased -> keep waiting; can't settle (dead, confirmed for DEAD_CONFIRM_SECS) or overdue
+    -> release it, re-queueing its orders with NO receipts."""
+    try:
+        why = _round_dead(m, fr)                  # the preconditions FIRST ...
+        slot = _landed_slot(fr["rid"])            # ... then the marker (see _round_dead)
+    except Exception:
+        return                                    # reader hiccup: retry next sweep
+    if slot is not None:
+        fr.pop("dead_since", None)
+        if fr.get("ok_since") is None:
+            fr["ok_since"] = now                  # first sighting on-chain: start the hold
+        elif _confirmed(fr["ok_since"], now) and not _rival_landed(m, fr):
+            _inflight.pop(m, None)                # survived the hold window: durable
+            try: _finalize_round(m, fr)
+            except Exception as e: print("round finalize failed", m, e)
+    elif fr.get("ok_since") is not None:
+        # the round left the chain: the settling branch lost fork choice — a re-org ate
+        # the round. Keep waiting (the guarantor re-queues and re-guarantees its
+        # work-item); count it so the dashboard shows it.
+        fr["ok_since"] = None
+        metrics.inc("jamswap_settle_reverted_total", {"market": str(m)})
+        for o in fr["sealed"] + fr["public"]:
+            order_telemetry.reverted(m, o["account"], o["oid"])
+        print(f"round m{m}: settlement REVERTED by re-org — holding for re-settle")
+    elif why:
+        # dead — but a re-org could still restore what it needs, so it must stay dead
+        # for DEAD_CONFIRM_SECS before its orders are re-batched
+        if now - fr.setdefault("dead_since", now) >= DEAD_CONFIRM_SECS:
+            _inflight.pop(m, None)
+            _abandon(m, fr, why, now)
+    else:
+        fr.pop("dead_since", None)
+        if now - fr["t"] > ROUND_GATE_SECS:
+            _inflight.pop(m, None)
+            _abandon(m, fr, "timeout", now)
 
 def _resolve_rounds_once(now=None):
-    """One sweep over in-flight rounds: settled -> finalize (receipts + carries);
-    overdue -> re-queue its orders with NO receipts (the round never happened
-    on-chain; its orders batch into the next auction). Runs on the resolver
-    thread every 2 s; tests call it directly."""
+    """One sweep: fresh-account registrations and queued re-seals; then, per market, its
+    released rounds (late landings first, so their claims are known before the live round
+    is judged) and its round in flight; then signed cancels. Runs on the resolver thread
+    every 2 s; tests call it directly. A market whose next round is being built right now
+    is skipped until the next sweep (see _market_lock)."""
     now = now or time.time()
     _resolve_registrations_once(now)   # confirm-or-retry fresh-account registrations
     _drain_carry_retry(now)            # retry any re-seals the chain was too busy to accept
-    for m, fr in list(_inflight.items()):
-        try: done = fr["check"]()
-        except Exception: continue                    # reader hiccup: retry next sweep
-        if done:
-            if fr.get("ok_since") is None:
-                fr["ok_since"] = now                  # first sighting on-chain: start the hold
-            elif now - fr["ok_since"] >= SETTLE_HOLD_SECS:
-                _inflight.pop(m, None)                # survived the hold window: durable
-                try: _finalize_round(m, fr)
-                except Exception as e: print("round finalize failed", m, e)
-        elif fr.get("ok_since") is not None:
-            # the predicate FLIPPED BACK: the settling branch lost fork choice —
-            # a re-org ate the round. Keep waiting (the guarantor re-queues and
-            # re-guarantees its work-item); count it so the dashboard shows it.
-            fr["ok_since"] = None
-            metrics.inc("jamswap_settle_reverted_total", {"market": str(m)})
-            for o in fr["sealed"] + fr["public"]:
-                order_telemetry.reverted(m, o["account"], o["oid"])
-            print(f"round m{m}: settlement REVERTED by re-org — holding for re-settle")
-        elif now - fr["t"] > ROUND_GATE_SECS:
-            _inflight.pop(m, None)
-            with _lock:
-                pending.setdefault(m, []).extend(fr["sealed"] + fr["public"])
-            _round_gate[m] = {"check": None, "t": now}
-            for o in fr["sealed"] + fr["public"]:
-                order_telemetry.requeued(m, o["account"], o["oid"])
-            print(f"round m{m}: never settled — re-queued "
-                  f"{len(fr['sealed']) + len(fr['public'])} order(s), no receipts")
+    for m in sorted(set(_inflight) | set(_zombies)):
+        lk = _market_lock(m)
+        if not lk.acquire(blocking=False):
+            continue
+        try:
+            _resolve_zombies(now, m)
+            fr = _inflight.get(m)
+            if fr:
+                _resolve_inflight(m, fr, now)
+        finally:
+            lk.release()
+    _resolve_cancels(now)
 
 def _round_resolver():
     while True:
@@ -953,6 +1337,8 @@ metrics.describe("jamswap_book_depth", "resting on-chain book quantity per marke
 metrics.describe("jamswap_mempool_orders", "orders waiting in the off-chain mempool per market")
 metrics.describe("jamswap_inflight_orders", "orders inside a round awaiting durable settlement per market")
 metrics.describe("jamswap_settle_reverted_total", "settlements observed on-chain then ERASED by a re-org before the hold window passed")
+metrics.describe("jamswap_round_abandoned_total", "rounds released without settling, by reason (book-moved / commit-gone / seq-floor = dead; timeout = never included)")
+metrics.describe("jamswap_round_late_landed_total", "released rounds that settled after all (seen by their landed-round marker, then finalized)")
 
 def _stats_poller():
     while True:
@@ -989,8 +1375,9 @@ _commit_seen = {}
 def _sealed_ready_predicate(m, commit_entries, fin):
     """Return a predicate `o -> bool`: may this sealed order be REVEALED this round?
 
-    Phase 1 — its owner-signed commit must be on the best chain (`commit_entries`), so
-    the reveal round's consume_set won't miss it.
+    Phase 1 — its owner-signed commit must be on the best chain (`commit_entries`: the
+    commit set, or the encset in encrypt-until-batch mode), so the round's consume_set
+    won't miss it.
 
     Phase 2 — on a FINALIZING chain, the commit must also be β-FINALIZED. A finalized
     commit can never re-org out, so the reveal round can't be rolled back for a vanished
@@ -1012,7 +1399,7 @@ def _sealed_ready_predicate(m, commit_entries, fin):
             del seen[e]
     fh = fin.get("finalized_height") if fin.get("available") else None
     def ready(o):
-        e = commitment(o["reveal"]) + struct.pack("<I", o["account"])
+        e = _consumed_entry(o)
         if e not in commit_entries:
             return False                     # not on-chain yet — defer
         if fh is None:
@@ -1023,6 +1410,10 @@ def _sealed_ready_predicate(m, commit_entries, fin):
 
 def api_round(b):
     m, base, quote = int(b["market"]), int(b["base"]), int(b["quote"])
+    with _market_lock(m):              # one builder per market, never mid-resolve (see above)
+        return _build_round(m, base, quote)
+
+def _build_round(m, base, quote):
     if m in _inflight:
         return {"ok": True, "gated": True, "reason": "previous round still settling"}
     g = _round_gate.get(m)
@@ -1030,6 +1421,10 @@ def api_round(b):
         if time.time() - g["t"] < ROUND_ZEROFILL_SECS:
             return {"ok": True, "gated": True, "reason": "previous round cooling down"}
         _round_gate.pop(m, None)
+    if _zombies.get(m):
+        # a released round of this market that settled after all claims its orders OUT of
+        # the mempool (they are receipted when it is finalized) before we batch them again
+        _resolve_zombies(time.time(), m)
     now = time.time()
     hdr = struct.pack("<III", m, base, quote)
     raw = storage(b"book" + struct.pack("<I", m))        # the market's on-chain resting book
@@ -1046,23 +1441,22 @@ def api_round(b):
     # entirely — it can neither reveal nor make another order appear to cross against
     # liquidity that won't be submitted. That keeps the crossing decision and the batch
     # membership consistent, so a revealed order always has its counterparty in the same
-    # round (fixes the "revealed alone → leaked + dropped" bug). ENC_MODE (encrypt-until-
-    # batch) isn't gated yet — the committee path is still in simulation.
-    if ENC_MODE:
-        sealed_ready = lambda o: True
-    else:
-        onchain = storage(b"commits" + struct.pack("<I", m))
-        commit_entries = {onchain[i:i + SET_ENTRY_LEN]
-                          for i in range(0, max(0, len(onchain) - SET_ENTRY_LEN + 1), SET_ENTRY_LEN)}
-        sealed_ready = _sealed_ready_predicate(m, commit_entries, _read_finality())
+    # round (fixes the "revealed alone → leaked + dropped" bug). Encrypt-until-batch gates
+    # the same way on its encset: ungated, a round revealing a ciphertext whose ENC_COMMIT
+    # hadn't landed was judged dead ("commit-gone"), released and rebuilt — re-running the
+    # committee and re-submitting — every auction until the commit landed.
+    set_key = b"encset" if ENC_MODE else b"commits"
+    commit_entries = _set_entries(storage(set_key + struct.pack("<I", m)))
+    sealed_ready = _sealed_ready_predicate(m, commit_entries, _read_finality())
     with _lock:                        # snapshot + re-queue atomically so a concurrent
         pend_all = pending.get(m, [])  # api_order during submit isn't dropped
         # Cap the batch: a round refines one in-PVM ed25519 verify per signed order
         # (~5.29M gas each), so an unbounded batch eventually exceeds any refine
         # budget and the round becomes a poison pill that can never settle — while
         # re-queued failures keep GROWING it (observed live: 116-order batches,
-        # volume pinned at 0). Oldest orders go first; the overflow waits its turn.
-        pend, overflow = pend_all[:MAX_ROUND_ORDERS], pend_all[MAX_ROUND_ORDERS:]
+        # volume pinned at 0). Oldest orders go first; the overflow waits its turn —
+        # and never holds an account's older order back behind its newer one (_cap_batch).
+        pend, overflow = _cap_batch(pend_all, MAX_ROUND_ORDERS)
         for o in pend:                 # attach current GTT expiry for the planner
             o["expiry"] = order_expiry.get((m, o["account"], o["oid"]))
         # Decide which orders clear now. Sealed orders that DON'T cross current liquidity
@@ -1079,41 +1473,61 @@ def api_round(b):
             order_telemetry.terminal(m, o["account"], o["oid"], "expired")
     if plan.deferred:                  # observable, non-terminal: waiting for the commit
         for o in plan.deferred:        # distinguish "not on-chain yet" from "on-chain, awaiting β"
-            onch = (not ENC_MODE) and (
-                (commitment(o["reveal"]) + struct.pack("<I", o["account"])) in commit_entries)
+            onch = _consumed_entry(o) in commit_entries
             order_telemetry.deferred(m, o["account"], o["oid"],
                                      "awaiting-finality" if onch else "commit-not-onchain")
         print(f"round m{m}: deferred {len(plan.deferred)} sealed reveal(s) — commit not final yet")
     sealed, public = plan.reveal, plan.public
-    # SEQ DISCIPLINE (service lib.rs check_orders): every signed order's seq must
+    # SEQ DISCIPLINE (service floors::check_bindings): every signed order's seq must
     # STRICTLY beat its account's on-chain floor, and the service raises the floor to
     # each order's seq IN ROUND ORDER — so one order at/below the floor rejects the
-    # WHOLE round untouched (fail-closed). Two failure modes this guards:
+    # WHOLE round untouched (fail-closed). Three failure modes this guards:
     #   (1) a re-queued order whose account settled a higher seq meanwhile is now
     #       permanently stale (seq <= floor) — it can NEVER settle; drop it (don't
     #       re-queue it to poison every future round);
     #   (2) two live orders from one account in one round out of seq order — the
-    #       higher raises the floor and rejects the lower. Sort ascending per account.
+    #       higher raises the floor and rejects the lower. Sort ascending per account;
+    #   (3) two orders carrying the SAME seq (a re-posted signed order) — the second
+    #       can never settle; drop it.
+    # A market order also can't ride at a price outside the band the service checks, so
+    # it is re-priced at the current last price first (or dropped when there is none).
     # Without this the first round timeout cascades into a permanent cv stall (found
     # live on the all-lasair net 2026-07-09: chain coherent + accumulating, cv frozen).
-    public, dead = _seq_sanitize(m, public)
-    for o in dead:
+    public, dead = _price_market_orders(m, public)
+    public, stale, floors = _seq_sanitize(m, public)
+    dead += stale
+    if _zombies.get(m):
+        # an order may be stale because its OWN released round landed a moment ago, after
+        # the zombie check above but before the floor reads: look again (now after the
+        # floors) so such orders are finalized as the fills they are, not rejected. Nothing
+        # else can claim them while we hold the market lock.
+        taken = _resolve_zombies(now, m)
+        if taken:
+            sealed = [o for o in sealed if _okey(o) not in taken]
+            public = [o for o in public if _okey(o) not in taken]
+            dead = [(o, why) for o, why in dead if _okey(o) not in taken]
+    for o, why in dead:
+        # truly unsettleable (a newer order of the account settled first — e.g. on another
+        # market: floors are per account — or a repeated seq): end it with a receipt that
+        # says why, instead of letting it vanish from the trader's view
         order_expiry.pop((m, o["account"], o["oid"]), None)
-        order_telemetry.terminal(m, o["account"], o["oid"], "rejected")
+        _record_exec(dict(o, market=m, _outcome="rejected", _reason=why), 0, o["price"], False, now)
+    if dead:
+        _save_execs()
+    if not (sealed or public or shrank):
+        # nothing to submit (every sealed order is carried hidden or deferred): no round
+        return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
+                "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
+                "resting_hidden": len(plan.carry), "carried_remainder": 0,
+                "expired": len(plan.expired)}}
     # every round type carries the same signed public section: new orders WITH their
     # signatures (verified in refine), the explicit prune list, and the on-chain book
     # byte-exact (the service hash-checks it — a fabricated book rejects the round).
     section = public_section_bytes(public, pruned, raw)
-    # Pre-compute this round's clearing (pure; mirrors refine) so the submit below can
-    # carry a real settle predicate: a filling round settles when the market's on-chain
-    # CUMULATIVE volume reaches cv_before + volume. Zero-fill rounds (book rewrite only)
-    # have no distinguishable on-chain marker — counted, not tracked.
+    # Pre-compute this round's clearing (pure; mirrors refine): the per-order fill
+    # receipts and sealed-remainder carries handed out once the round settles.
     combined = resting_orders + sealed + public
     clearing = clear(combined) if combined else {"price": 0, "volume": 0, "fills": {}}
-    cv_before = mstate(b"cv", m)
-    round_check = ((lambda want=cv_before + clearing["volume"]: mstate(b"cv", m) >= want)
-                   if clearing["volume"] else None)
-    round_detail = f"market {m}: {len(sealed)} sealed + {len(public)} public, vol {disp(clearing['volume'])}"
     try:
         if sealed and ENC_MODE:
             # encrypt-until-batch round: the committee decrypts each sealed ciphertext (proving it
@@ -1124,8 +1538,7 @@ def api_round(b):
             # remainder of a revealed order is immediate-or-cancel (never rests publicly exposed).
             # No reveal round — traders needn't be online at match time.
             cts = ",".join(o["ciphertext"] for o in sealed)
-            d = committee_run("round", m, base, quote, section.hex(), cts)
-            submit(bytes.fromhex(d["round"]), check=round_check, detail=round_detail)
+            payload = bytes.fromhex(committee_run("round", m, base, quote, section.hex(), cts)["round"])
         elif sealed:
             # UNIFIED sealed round (commit–reveal): the resting book + this round's public orders +
             # the revealed sealed orders all clear together at ONE uniform price (so a sealed order
@@ -1135,54 +1548,72 @@ def api_round(b):
             # immediate-or-cancel (never rests publicly exposed).
             commits = b"".join(commitment(o["reveal"]) for o in sealed)
             reveals = b"".join(o["reveal"] for o in sealed)
-            submit(bytes([TAG_REVEAL]) + hdr
-                   + struct.pack("<I", len(commits)) + commits
-                   + struct.pack("<I", len(reveals)) + reveals
-                   + section, check=round_check, detail=round_detail)
-        elif public or shrank:
+            payload = (bytes([TAG_REVEAL]) + hdr + struct.pack("<I", len(commits)) + commits
+                       + struct.pack("<I", len(reveals)) + reveals + section)
+        else:
             # signed public round: the section carries the new signed orders + prune list + the
             # on-chain book. Also runs on `shrank` (an order expired) with no new orders, to
             # rewrite the book without the expired one — an empty cross conserves value and
             # leaves the last price untouched (apply_settlement only updates lp on real fills).
-            submit(bytes([TAG_SMATCH]) + hdr + section, check=round_check, detail=round_detail)
+            payload = bytes([TAG_SMATCH]) + hdr + section
+    except Exception:
+        # the round was never submitted (the committee sidecar failed): nothing is lost —
+        # its orders go back to the front and the market cools down
+        with _lock:
+            pending[m] = sealed + public + pending.get(m, [])
+        _round_gate[m] = {"check": None, "t": time.time()}
+        raise
+    # This round's identity — the id refine derives from these exact bytes — and the
+    # preconditions accumulate will re-check (for early dead-round detection).
+    rid = round_id(payload)
+    minseq = {}
+    for o in public:
+        minseq[o["account"]] = min(minseq.get(o["account"], o["seq"]), o["seq"])
+    # IN FLIGHT from before the submit: nothing is receipted or carried until the resolver
+    # sees its id marked landed — a round that can't or doesn't settle re-queues these exact
+    # orders instead (no phantom fills, nothing silently lost), and a released round seen
+    # landing from here on claims its orders from this record. A revealed sealed order that
+    # crossed nothing is carried at finalize, not dropped.
+    _inflight[m] = {"t": time.time(), "sealed": sealed, "public": public,
+                    "resting": resting_orders, "clearing": clearing, "pruned": pruned,
+                    "rid": rid, "book_hash": commitment(raw),
+                    "consumed": [_consumed_entry(o) for o in sealed],
+                    "set_key": set_key, "minseq": minseq}
+    detail = f"market {m}: {len(sealed)} sealed + {len(public)} public, vol {disp(clearing['volume'])}"
+    try:
+        submit(payload, check=lambda: _landed_slot(rid) is not None, detail=detail)
     except ChainBusy:
         # BACKPRESSURE: every lm node's CE-133 queue is at cap (lasair --wp-queue-cap),
         # so the round never left the builder. Nothing cleared — put its orders back in
         # the mempool (they BATCH into the retry, same as gate-held orders) and cool the
-        # market down like a zero-fill round so retries don't re-flood the fleet. No
-        # receipts, no carry, no gate predicate: the round simply never happened.
-        with _lock:
-            pending.setdefault(m, []).extend(sealed + public)
+        # market down so retries don't re-flood the fleet. No receipts, no carry, nothing
+        # in flight: the round simply never happened.
+        _inflight.pop(m, None)
+        with _lock:                    # FRONT: they are still the oldest orders of their accounts
+            pending[m] = sealed + public + pending.get(m, [])
         _round_gate[m] = {"check": None, "t": time.time()}
         print(f"round m{m}: chain busy — re-queued {len(sealed) + len(public)} order(s), cooling down")
         return {"ok": False, "backpressure": True, "requeued": len(sealed) + len(public)}
-    if round_check:
-        # FILLING round: it is now IN FLIGHT on the chain. Nothing is receipted
-        # or carried until the resolver sees its cv predicate fire — a round that
-        # never settles re-queues these exact orders instead (no phantom fills).
-        _inflight[m] = {"check": round_check, "t": time.time(), "sealed": sealed,
-                        "public": public, "resting": resting_orders, "clearing": clearing}
-        for o in sealed + public:
-            order_telemetry.rounded(m, o["account"], o["oid"])
-        return {"ok": True, "queued": True,
-                "cleared": {"sealed": len(sealed), "public": len(public),
-                            "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
-    if sealed or public or shrank:     # zero-fill round (book rewrite only): cooldown
-        _round_gate[m] = {"check": None, "t": time.time()}
-    # Safety net: with gate-then-plan a revealed sealed order always crosses (volume>0,
-    # so it took the in-flight path above), but if any revealed sealed order lands here
-    # with a zero fill, carry its remainder rather than IOC-dropping it — a revealed
-    # sealed order is NEVER silently cancelled just because it didn't clear this tick.
-    if sealed:
-        _carry_sealed_remainders(m, sealed, clearing["fills"], now)
-    # Zero-fill receipts stay immediate: nothing crossed, so these only record
-    # rested/carry/cancel dispositions (no balance movement to contradict).
-    try: record_executions(m, resting_orders, sealed, public, clearing)
-    except Exception as e: print("exec record failed", m, e)
-    return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
-            "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
-            "resting_hidden": len(plan.carry), "carried_remainder": 0,
-            "expired": len(plan.expired)}}
+    except Exception as e:
+        # outcome UNKNOWN (builder timeout, connection reset): the payload may still have been
+        # relayed, so the round stays in flight — its marker says if it landed, and dead
+        # detection or the gate releases it otherwise. Re-queueing now could put the same
+        # orders in two rounds; the old path dropped them instead (in neither the mempool nor
+        # a round, never receipted).
+        print(f"round m{m}: submit outcome unknown ({type(e).__name__}: {e}) — tracking it in flight")
+    # one record per round id: an unchanged rebuild of a released round IS that round, and
+    # two records would each finalize it (duplicate receipts, a second carry of each
+    # sealed remainder). Dropped only now that this record is on its way to the chain.
+    zs = [z for z in _zombies.get(m, []) if z["rid"] != rid or z.get("ok_since") is not None]
+    if zs:
+        _zombies[m] = zs
+    else:
+        _zombies.pop(m, None)
+    for o in sealed + public:
+        order_telemetry.rounded(m, o["account"], o["oid"])
+    return {"ok": True, "queued": True,
+            "cleared": {"sealed": len(sealed), "public": len(public),
+                        "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
 def short(a):
     return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a
 def mempool_entry(o, owner=False):
@@ -1237,7 +1668,11 @@ def api_mine(q):
                 out.append(tag(mempool_entry(o, owner=True), mid, "settling"
                                if o.get("_outcome", "").endswith("carried") else "mempool"))
                 seen.add((mid, o["oid"]))
-    for mid, fr in _inflight.items():                   # 2) in a round, settling on-chain
+    # 2) in a round, settling on-chain — the round in flight, or a released round that
+    #    landed late and is in its settle hold (its orders already left the mempool)
+    settling = [(mid, fr) for mid, fr in list(_inflight.items())]
+    settling += [(mid, z) for mid, zs in list(_zombies.items()) for z in zs if z.get("ok_since")]
+    for mid, fr in settling:
         for o in fr["sealed"] + fr["public"]:
             if o["account"] == acct and (mid, o["oid"]) not in seen:
                 out.append(tag(mempool_entry(o, owner=True), mid, "settling"))
@@ -1254,12 +1689,38 @@ def api_mine(q):
 def api_cancel_pending(b):
     # remove an un-processed (not yet cleared) order from the mempool, owner-checked
     acct, oid = int(b["account"]), int(b["order_id"])
-    removed = 0
-    with _lock:
-        for mid, orders in pending.items():
-            keep = [o for o in orders if not (o["account"] == acct and o["oid"] == oid)]
-            removed += len(orders) - len(keep); pending[mid] = keep
-    return {"ok": True, "removed": removed}
+    removed = []
+    for mid in list(pending):
+        # under the market lock: a round being built from this mempool can't resurrect the
+        # order afterwards, and the released rounds checked below can't change meanwhile
+        with _market_lock(mid):
+            with _lock:
+                hits = [o for o in pending.get(mid, []) if o["account"] == acct and o["oid"] == oid]
+            if not hits:
+                continue
+            keys = {_okey(o) for o in hits}
+            for z in _zombies.get(mid, []):
+                # the order is back in the mempool because its round was released — but if that
+                # round can still land, the order may trade there (then it gets THAT receipt and
+                # a "cancelled" one would be false). Refuse until it can't: that takes a few
+                # seconds after the round's book / floors / commits move on.
+                if keys & _keys(z) and (z.get("ok_since") is not None or _round_dead(mid, z) is None):
+                    raise ValueError(f"order {oid} is in a round that may still settle on-chain — "
+                                     f"try the cancel again shortly")
+            with _lock:
+                pending[mid] = [o for o in pending.get(mid, [])
+                                if not (o["account"] == acct and o["oid"] == oid)]
+            removed += [(mid, o) for o in hits]
+    now = time.time()
+    for mid, o in removed:
+        # end its lifecycle with a receipt, or it stays "open" in the order telemetry forever
+        order_expiry.pop((mid, acct, oid), None)
+        _record_exec(dict(o, market=mid, _outcome="cancelled",
+                          _reason="cancelled by owner (removed from the mempool)"),
+                     0, o["price"], bool(o.get("sealed")), now)
+    if removed:
+        _save_execs()
+    return {"ok": True, "removed": len(removed)}
 def api_balance(q):
     return {"balance": disp(bal(int(q["asset"]), int(q["account"])))}
 def api_footprint(q):
@@ -1451,7 +1912,8 @@ def _record_exec(o, filled, price, sealed, now):
                # head height at settle time; the fill is β-final once finalized_height reaches it
                "settle_height": _sh})
     if disp_ in _TERMINAL_DISP:
-        order_telemetry.terminal(o["market"], o["account"], o["oid"], disp_, filled=filled)
+        order_telemetry.terminal(o["market"], o["account"], o["oid"], disp_, filled=filled,
+                                 reason=reason)
 def record_executions(m, resting, reveal, public, clearing=None):
     # write a per-order receipt for the trader-submitted orders (reveal=sealed, public=rests) and
     # any resting maker that filled, from this round's clearing. `clearing` may be passed in (api_round

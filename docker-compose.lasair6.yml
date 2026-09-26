@@ -112,9 +112,10 @@ services:
     environment: { <<: *mesh-env, OWN: "5", IDENTITY: "105", PORT: "40065" }
     networks: { lasnet: { ipv4_address: 172.29.0.15 } }
 
-  # CE-133 submit bridge: fan work-items to ALL six validators' builder endpoints
-  # (each node's builder ALPN port = its PORT+1). Whichever authors on the winning
-  # branch reports the package.
+  # CE-133 submit bridge: each work-item goes to ONE validator's builder endpoint
+  # (blake2b(payload) mod 6; each node's builder ALPN port = its PORT+1), failing over
+  # around the ring on a CE-133 error. Fanning every item to all six made up to six
+  # copies accumulate (the deposit double-credit). LASAIR_BUILDER_FANOUT=all restores it.
   builder:
     image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
@@ -173,7 +174,11 @@ services:
       # timer. jamswap_settle_reverted_total still watches — a revert now means
       # a finality violation, i.e. a chain bug by definition.
       SETTLE_HOLD_SECS: "0"
-      ROUND_GATE_SECS: "60"
+      # only rounds the chain never included wait this long: a round that CAN'T settle any
+      # more (book moved / floor passed / commit gone) is released in seconds, and one that
+      # settles after release is still finalized from its landed-round marker. At 60 s healthy
+      # rounds cut it close (57-58 s seen in the 2026-09-24 soak; refine alone is 15-60 s).
+      ROUND_GATE_SECS: "180"
       MAX_ROUND_ORDERS: "48"       # small rounds settle fast; a giant round wedges the market gate
     volumes:
       - "./offchain:/app:ro"

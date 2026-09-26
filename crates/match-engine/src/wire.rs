@@ -184,6 +184,47 @@ pub fn decode_bindings(data: &[u8]) -> Vec<Binding> {
     out
 }
 
+/// The verification trailer every round output (SMATCH / REVEAL / ENC_ROUND) ends with, so
+/// accumulate can finish the checks refine couldn't do statelessly:
+///   `[nb:u16][bindings BINDING_LEN×nb][book_hash 32][round_id 32][book]`
+/// `book_hash` = H(the input book refine matched against), `round_id` = `round_id::round_id`
+/// of the work-item payload, `book` = the new resting book. Encoder and parser live together
+/// here so the layout is host-tested once (the service only supplies the offset).
+pub struct AuthTrailer<'a> {
+    pub bindings: &'a [u8],
+    pub book_hash: &'a [u8],
+    pub round_id: [u8; 32],
+    pub book: &'a [u8],
+}
+
+pub fn push_auth_trailer(
+    out: &mut Vec<u8>,
+    bindings: &[Binding],
+    book_hash: &[u8; 32],
+    round_id: &[u8; 32],
+    book: &[u8],
+) {
+    out.extend_from_slice(&(bindings.len() as u16).to_le_bytes());
+    out.extend_from_slice(&encode_bindings(bindings));
+    out.extend_from_slice(book_hash);
+    out.extend_from_slice(round_id);
+    out.extend_from_slice(book);
+}
+
+/// The trailer starting at `off` (the offset of its nb field); None if truncated anywhere.
+pub fn parse_auth_trailer(out: &[u8], off: usize) -> Option<AuthTrailer<'_>> {
+    let nb = out.get(off..off + 2).map(|b| u16::from_le_bytes([b[0], b[1]]))? as usize;
+    let h_off = off + 2 + nb * BINDING_LEN;
+    let mut round_id = [0u8; 32];
+    round_id.copy_from_slice(out.get(h_off + 32..h_off + 64)?);
+    Some(AuthTrailer {
+        bindings: out.get(off + 2..h_off)?,
+        book_hash: out.get(h_off..h_off + 32)?,
+        round_id,
+        book: out.get(h_off + 64..)?,
+    })
+}
+
 /// One fill resolved to its trader + side, at the uniform clearing price — what
 /// settlement (`accumulate`) needs to debit/credit balances.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -328,6 +369,25 @@ mod tests {
         let enc = encode_bindings(core::slice::from_ref(&b));
         assert_eq!(enc.len(), BINDING_LEN);
         assert_eq!(decode_bindings(&enc), alloc::vec![b]);
+    }
+
+    #[test]
+    fn auth_trailer_roundtrip_at_an_offset_and_truncation() {
+        // a REVEAL / ENC_ROUND output puts the trailer after its own sections, so parse from
+        // a non-zero offset, with and without bindings
+        let b = |seq| Binding { account: 7, seq, pubkey: [0xEF; 32], flags: 0, price: 100 };
+        for bindings in [alloc::vec![], alloc::vec![b(1), b(2)]] {
+            let mut out = alloc::vec![0xAA; 13]; // preceding sections
+            push_auth_trailer(&mut out, &bindings, &[1; 32], &[2; 32], b"BOOK");
+            let t = parse_auth_trailer(&out, 13).expect("parses");
+            assert_eq!(decode_bindings(t.bindings), bindings);
+            assert_eq!((t.book_hash, t.round_id, t.book), (&[1u8; 32][..], [2u8; 32], &b"BOOK"[..]));
+            // an empty book is a valid (fully crossed) book; one byte short of the id is not
+            let bare = out.len() - 4;
+            assert_eq!(parse_auth_trailer(&out[..bare], 13).map(|t| t.book.len()), Some(0));
+            assert!(parse_auth_trailer(&out[..bare - 1], 13).is_none());
+            assert!(parse_auth_trailer(&out[..14], 13).is_none(), "nb itself truncated");
+        }
     }
 
     #[test]

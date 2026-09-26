@@ -25,6 +25,7 @@ class SealedCarry(unittest.TestCase):
         server.pending.clear(); server.order_expiry.clear(); server.executions.clear()
         server._round_gate.clear()      # gate/in-flight state must not leak between tests
         server._inflight.clear()
+        server._zombies.clear()
         server._carry_retry.clear()
         server.JAMKB_BACKPRESSURE = False
         server.REQUIRE_ORDER_SIG = False
@@ -41,9 +42,12 @@ class SealedCarry(unittest.TestCase):
         # every order this test placed (self.commits).
         self.book = server.order_bytes(20, 1, SELL, 1 * S, 10 * S)
         self.commits = bytearray()
+        # landed-round markers (b"rl"‖round id → slot): a round has settled once it is marked
+        self.marks = {}
         server.storage = (lambda k:
                           self.book if k.startswith(b"book")
                           else bytes(self.commits) if k.startswith(b"commits")
+                          else self.marks.get(bytes(k), b"") if k.startswith(b"rl")
                           else b"")
 
     def _place_sealed_buy(self, qty, price, ttl=3600):
@@ -58,11 +62,15 @@ class SealedCarry(unittest.TestCase):
         server.pending.setdefault(1, []).append(o)
         return oid
 
-    def _settle(self, vol):
+    def _land(self, rid=None):
+        # the in-flight round accumulates: the service marks its id landed
+        self.marks[b"rl" + (rid or server._inflight[1]["rid"])] = struct.pack("<I", 1)
+
+    def _settle(self):
         # simulate the round accumulating on-chain AND SURVIVING the durability
-        # hold: cv reaches the clearing volume, one sweep starts the hold window,
+        # hold: its id is marked landed, one sweep starts the hold window,
         # a second sweep past SETTLE_HOLD_SECS confirms (receipts + carry)
-        server.mstate = lambda p, m, v=vol * S: (v if p == b"cv" else 0)
+        self._land()
         t = time.time()
         server._resolve_rounds_once(now=t)
         server._resolve_rounds_once(now=t + server.SETTLE_HOLD_SECS + 1)
@@ -80,7 +88,7 @@ class SealedCarry(unittest.TestCase):
     def test_big_sealed_buy_carries_unfilled_remainder(self):
         oid = self._place_sealed_buy(250, 1)                 # buy 250 @1.0 vs one sell 10 @1.0
         server.api_round({"market": 1, "base": 1, "quote": 0})
-        self._settle(vol=10)
+        self._settle()
         # 240 of the 250 carries forward as a fresh sealed pending order under the SAME oid.
         carried = [o for o in server.pending.get(1, []) if o["oid"] == oid]
         self.assertEqual(len(carried), 1, "remainder carried forward, not cancelled")
@@ -96,7 +104,7 @@ class SealedCarry(unittest.TestCase):
     def test_expired_remainder_is_not_carried(self):
         oid = self._place_sealed_buy(250, 1, ttl=-1)         # already past its good-till-time
         server.api_round({"market": 1, "base": 1, "quote": 0})
-        self._settle(vol=10)
+        self._settle()
         self.assertFalse([o for o in server.pending.get(1, []) if o["oid"] == oid],
                          "an expired order's remainder is dropped, not carried")
         rec = server.api_executions({"account": 7})["executions"][0]
@@ -105,26 +113,27 @@ class SealedCarry(unittest.TestCase):
     def test_fully_filled_sealed_order_is_not_carried(self):
         oid = self._place_sealed_buy(10, 1)                  # exactly matches the 10-lot sell
         server.api_round({"market": 1, "base": 1, "quote": 0})
-        self._settle(vol=10)
+        self._settle()
         self.assertFalse([o for o in server.pending.get(1, []) if o["oid"] == oid])
         rec = server.api_executions({"account": 7})["executions"][0]
         self.assertEqual(rec["disposition"], "filled")
 
     def test_reorg_revert_holds_and_resettles(self):
-        # the cv predicate fires, then a RE-ORG erases it before the hold window
+        # the round's id is marked landed, then a RE-ORG erases it before the hold window
         # passes: no receipts may be issued for the vanished settlement, and when
         # the chain re-applies it, the full hold restarts before confirming.
         oid = self._place_sealed_buy(250, 1)
         server.api_round({"market": 1, "base": 1, "quote": 0})
         t = time.time()
-        server.mstate = lambda p, m: (10 * S if p == b"cv" else 0)   # settled...
+        rid = server._inflight[1]["rid"]
+        self._land(rid)                                              # settled...
         server._resolve_rounds_once(now=t)
-        server.mstate = lambda p, m: 0                               # ...re-org erased it
+        self.marks.clear()                                           # ...re-org erased it
         server._resolve_rounds_once(now=t + 10)
         self.assertEqual(server.api_executions({"account": 7})["executions"], [],
                          "no receipts for a settlement a re-org erased")
         self.assertIn(1, server._inflight, "round stays in flight awaiting re-settle")
-        server.mstate = lambda p, m: (10 * S if p == b"cv" else 0)   # re-applied
+        self._land(rid)                                              # re-applied
         server._resolve_rounds_once(now=t + 20)                      # hold restarts here
         server._resolve_rounds_once(now=t + 20 + server.SETTLE_HOLD_SECS + 1)
         rec = server.api_executions({"account": 7})["executions"][0]
@@ -145,7 +154,7 @@ class SealedCarry(unittest.TestCase):
                 raise server.ChainBusy("CE-133 queues full")
             self.sent.append(payload)
         server.submit = submit_busy
-        self._settle(vol=10)
+        self._settle()
         self.assertIn(1, server._carry_retry, "remainder queued for retry, not dropped")
         self.assertEqual(len(server._carry_retry[1]), 1)
         self.assertFalse([o for o in server.pending.get(1, []) if o["oid"] == oid],
@@ -171,7 +180,7 @@ class SealedCarry(unittest.TestCase):
                          (_ for _ in ()).throw(server.ChainBusy("busy"))
                          if payload[0] == server.TAG_CARRY_COMMIT
                          else self.sent.append(payload))
-        self._settle(vol=10)
+        self._settle()
         self.assertIn(1, server._carry_retry)
         server.order_expiry[(1, 7, oid)] = time.time() - 1     # GTT now in the past
         server._resolve_rounds_once(now=time.time())

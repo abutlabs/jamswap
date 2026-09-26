@@ -16,7 +16,26 @@ per item. On the all-lasair net, sealed orders pass the zero-loss check, and the
 register / withdraw / cancel / commit paths pass `offchain/test_sealed_resting_e2e.py` and
 `offchain/test_signed_ops_e2e.py`. **Known issue:** in a 20-minute soak, PUBLIC rounds of
 ~15–37 orders never settled ("never settled — re-queued N order(s)"), and clearing SLO was
-0.49 against 0.9999. Small rounds settle. Under investigation.
+0.49 against 0.9999. Small rounds settle.
+
+**Root cause (2026-09-25):** sealed commits raised the same per-account seq floor as public
+orders, and the UI/loadgen draw both seqs from one counter. A trader's commit (a small
+standalone work-item) usually landed first, so the round carrying that trader's older public
+orders failed accumulate's floor check whole; the builder waited out the 60 s gate,
+re-queued the round to the tail, and later recorded the stale orders "rejected" with no
+receipt. **Fix:** a separate commit floor (`b"sc"`); a refine-computed round id over the
+exact work-item payload, marked landed per round (`b"rl"‖id → slot`, expired only by age —
+a first cut used a per-market ring of the newest 32, which anyone could flush by landing 32
+cheap rounds) so the builder knows exactly which rounds settled; rounds that would change
+nothing refused on-chain; dead rounds released in seconds, to the front of the mempool;
+late-landing released rounds finalized after a second sighting, their orders claimed from any
+round still carrying copies (and handed back if a re-org erases the landing); one record per
+round id; the round builder and the resolver serialized per market (no double terminals);
+no same-account overtaking under the batch cap; repeated seqs and out-of-band market prices
+dropped before they sink a round; truthful receipts for superseded and cancelled orders
+(`offchain/tests/test_round_poison.py`, `crates/match-engine/src/{floors,round_id}.rs`).
+Service rebuilt (new genesis). The lasair6 soak re-run is pending, together with lasair's
+Phase 7 guarantor fixes (block rate, orphaning).
 
 ## Done
 

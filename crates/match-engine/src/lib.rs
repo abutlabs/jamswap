@@ -21,6 +21,8 @@
 //!   (`clearing_maximizes_volume`, `invariants` — conservation/determinism/settlement).
 //! - multi-round sequence scenarios: `tests/scenarios.rs`.
 //! - signature/auth: `src/auth.rs`.
+//! - replay floors (order vs sealed-commit seq floors): `src/floors.rs`.
+//! - round ids + landed-round markers: `src/round_id.rs`; the round-output auth trailer: `src/wire.rs`.
 //! Full test map across the whole project: `docs/TESTING.md`.
 
 #![cfg_attr(not(test), no_std)]
@@ -29,6 +31,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 pub mod auth;
+pub mod floors;
+pub mod round_id;
 pub mod wire;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

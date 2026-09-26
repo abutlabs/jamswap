@@ -37,13 +37,13 @@ books, sharing one global balance ledger.
 |---|---|---|---|---|
 | 0 | — | **RETIRED** (was unsigned `MATCH` — deleted so there is no unsigned downgrade path) | — | — |
 | 1 | `DEPOSIT` | account ‖ asset_id ‖ amount(u64) | echo | credit `(asset_id, account)` (Phase-2 faucet; real custody = Phase 3) |
-| 2 | `COMMIT` | market ‖ account ‖ commitment(32) ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature + seq floor, then append `commitment‖account` to the market's set |
+| 2 | `COMMIT` | market ‖ account ‖ commitment(32) ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature + the account's **commit** seq floor (`b"sc"`, separate from the order floor), then append `commitment‖account` to the market's set |
 | 3 | `REVEAL` | `market‖base‖quote` ‖ commits ‖ reveals(order‖nonce) ‖ *public section* | admit only orders whose `H(order‖nonce)` ∈ commits, verify the public section, then clear | auth-trailer checks (below) **and** consume-or-reject the commitments, then settle |
 | 4 | `CANCEL` | market ‖ account ‖ order_id | echo | remove the owner's matching order from the market's book |
 | 5 | `WITHDRAW` | account ‖ asset_id ‖ amount(u64) | echo | debit balance + custody, **only if funded** (no overdraft) |
 | 6 | `LIST` | market ‖ base ‖ quote | echo | register a market's canonical assets (+ index it). A round for an unlisted or asset-mismatched market is **rejected**. |
 | 9 | `ENC_SETUP` | n ‖ committee_pks(n·32) ‖ nonce(8) ‖ sig(64) | echo | **gov-signed**: commit the encrypt-until-batch committee keys on-chain (nonce-protected) |
-| 10 | `ENC_COMMIT` | market ‖ C1(32) ‖ body(17) ‖ account ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature (over `id = H(C1‖body)`) + seq floor, then append `id‖account` to the encset |
+| 10 | `ENC_COMMIT` | market ‖ C1(32) ‖ body(17) ‖ account ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature (over `id = H(C1‖body)`) + the commit seq floor, then append `id‖account` to the encset |
 | 11 | `ENC_ROUND` | committee keys ‖ ciphertexts ‖ proven partials ‖ *public section* | verify every partial's proof against the committee keys, decrypt each order, verify the public section, clear | verify committee-hash == on-chain committee, auth-trailer checks, consume-or-reject the ciphertext ids, then settle |
 | 12 | `SMATCH` | `market‖base‖quote` ‖ *public section* | **verify each order's ed25519 sig** (and limit price == signed price), then clear | auth-trailer checks (below), then settle + store the book |
 | 13 | `CARRY_COMMIT` | market ‖ account ‖ commitment(32) | echo | **allowance-gated** re-seal of a partially-filled sealed order's remainder (one credit per genuine partial fill, minted by the settling round) |
@@ -53,11 +53,19 @@ books, sharing one global balance ledger.
 orders travel as `order(17) ‖ flags ‖ signed_price ‖ seq(8) ‖ pubkey(32) ‖ sig(64)`; the
 section is `[ns][signed orders][np][pruned (account,oid) pairs][on-chain book, byte-exact]`.
 `refine` verifies each signature statelessly against the carried pubkey; the round's output
-ends with an **auth trailer** (`bindings ‖ H(input book)`) that `accumulate` — which can
+ends with an **auth trailer** (`bindings ‖ H(input book) ‖ round_id`) that `accumulate` — which can
 read state — checks: pubkey == the account's registered key, `seq` strictly above the
-account's monotonic floor (replay-proof), market-order price within ±10% of the on-chain
-last price, and the input-book hash == the on-chain book (no fabricated resting orders).
-Any failure rejects the round fail-closed. Cost: ~5.29M gas/order (measured, GP 0.8.0) → a
+account's monotonic order floor (`b"sq"`; replay-proof — sealed commits keep their own
+`b"sc"` floor, so a trader's commit can never strand their older orders), market-order price
+within ±10% of the on-chain last price, and the input-book hash == the on-chain book (no
+fabricated resting orders). Any failure rejects the round fail-closed, and a round that
+would change nothing (no new orders, nothing consumed, the book byte-identical) is refused
+too. An accepted round's `round_id` — refine-computed as `blake2s("jamswap:v1:round" ‖ the
+work-item payload)`, so it binds every byte of the round, prune list included
+(`crates/match-engine/src/round_id.rs`) — is marked landed: `b"rl"‖round_id → slot`, removed
+only once ~600 slots old by a bounded garbage collector, so no stream of other rounds can
+evict it. The builder hashes the payload it submits and reads that marker to know exactly
+which of its rounds settled. Cost: ~5.29M gas/order (measured, GP 0.8.0) → a
 signed batch is gas-bound at ~945 orders; the ZK matcher folds all signatures into one proof.
 
 **Encrypt-until-batch (option 2, sealed orders with no reveal round).** Orders are

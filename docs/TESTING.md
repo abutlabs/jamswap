@@ -8,6 +8,7 @@ every push.
 |-------|-------|----------------|-------|
 | **1. Matching engine** | `crates/match-engine/src/lib.rs` (unit + property) | clearing optimality, conservation, determinism, per-order bounds | Rust |
 | **2. Engine scenarios** | `crates/match-engine/tests/scenarios.rs` | order **sequences** across rounds — the continuous book (rest → later cross → fill) | Rust |
+| **2b. Replay floors + round ids** | `crates/match-engine/src/floors.rs`, `src/round_id.rs` | accumulate's state-side rules, host-tested: sealed commits and public orders have **separate seq floors** (a commit at seq 20 never rejects an order at seq 15), replays of both refused, round checks fail-closed; the round id (shared fixture with the Python builder, binds every payload byte), landed-round markers that no number of later rounds evicts and that expire by age with bounded work per accept, and the round-output auth trailer (`src/wire.rs`) | Rust |
 | **3. Round lifecycle** | `offchain/tests/test_round_lifecycle.py` | the **sealed-order lifecycle** — which orders clear now, rest hidden, or expire | Python (stdlib) |
 | **3b. Treasury** | `offchain/tests/test_treasury.py` | the **self-funding treasury** — fees cover JAMKB rent first, only surplus is withdrawable profit | Python (stdlib) |
 | **3c. Trade tape** | `offchain/tests/test_trade_tape.py` | the **recent-trades feed** — clearing prints recorded from cumulative-volume deltas, metrics, tick direction | Python (stdlib) |
@@ -16,7 +17,8 @@ every push.
 | **3f. JAMKB standard** | `offchain/tests/test_jamkb_standard.py` | **solvency backpressure** (refuse new state while under-reserved) + beneficiary reserve top-up | Python (stdlib) |
 | **3g. Order lifetime** | `offchain/tests/test_order_lifetime.py` | **anti-bloat** — rent-funded expiry (sealed sooner than public, hard-capped), GTC never infinite, per-account open-order cap | Python (stdlib) |
 | **3h. Sealed carry** | `offchain/tests/test_sealed_carry.py` | a **large sealed order accumulates fills across auctions** — its partial-fill remainder is re-sealed and carried forward (not cancelled), unless expired | Python (stdlib) |
-| **4. End-to-end** | `offchain/test_enc_round.py`, `offchain/test_sealed_resting_e2e.py` | the real service on a live node: honest settles, tampered/injected rejected, sealed orders rest & cross across rounds | Docker + node |
+| **3i. Round poisoning + late settlement** | `offchain/tests/test_round_poison.py` | a trader's own sealed commit no longer sinks their round; a round that can't settle is **released in seconds** to the front of the mempool; a released round that settles late is **finalized, not re-submitted** (after a second sighting; a re-org on either side of a two-fork flip hands the orders to the round that won); one record per round id; a build and the resolver never interleave on a market; submit timeouts and carry-post failures lose nothing; no same-account overtaking under the batch cap; repeated seqs / out-of-band market prices never sink a round; truthful receipts for superseded and cancelled orders; the builder's round id equals the service's (SMATCH and encrypt-until-batch) | Python (stdlib) |
+| **4. End-to-end** | `offchain/test_enc_round.py`, `offchain/test_sealed_resting_e2e.py` | the real service on a live node: honest settles, tampered/injected rejected, sealed orders rest & cross across rounds, a public order followed by the same account's sealed order still fills | Docker + node |
 
 ## Why layer 3 exists (the bug it caught)
 

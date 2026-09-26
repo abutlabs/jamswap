@@ -65,7 +65,11 @@ carries the asterisk noted here.
   `canon(commit, market, account, commit_id, seq)`. It was verified in `accumulate` against
   the account's registered key until GP 0.8.0 made that too expensive. It is now verified
   in `refine`, and accumulate binds the signer's key to the account's registered key.
-  The same monotonic per-account seq floor as orders applies. Nobody can seal an order onto someone else's account.
+  A monotonic per-account **commit** seq floor (`b"sc"`) refuses a replayed commit; since
+  2026-09-25 it is separate from the order floor (`b"sq"`), because a trader's fast-landing
+  commit raising the shared floor stranded their older public orders and sank whole rounds.
+  Commit and order signatures are domain-separated (`canon(commit…)` vs `canon(order…)`), so
+  neither can be replayed as the other. Nobody can seal an order onto someone else's account.
 - **Commit/enc set entries are `hash(32) ‖ account(4)`**, and round consumption must match
   BOTH — refine reports the revealed/decrypted order's account alongside its hash, so a
   sealed order can only ever settle for the account that signed its commitment.
@@ -76,6 +80,23 @@ carries the asterisk noted here.
   unsigned commits are rejected; a genuine partial fill carries and later clears.
 - Placement is two-phase (`/api/seal_prepare` → the browser signs the 32-byte commit id →
   `/api/order`), so the hiding material never goes on-chain unsigned.
+
+## Fixed (2026-09-25): round settlement can't be spoofed or flushed by outsiders
+
+- **Landed-round markers are keyed by round id and expire only by age.** The builder learns
+  which of its rounds settled from a marker accumulate writes per accepted round
+  (`b"rl"‖round_id → slot`). A first cut kept a per-market ring of the newest 32 ids; a no-op
+  round needs no signature and left the book byte-identical, so anyone could land 32 of them
+  and push a round the builder was still confirming out of the ring — the builder then read
+  a settled round as reverted, re-batched its filled orders and receipted them "rejected".
+  Markers are now removed only once ~600 slots old, by a collector bounded per accept.
+- **Rounds that change nothing are refused** (no new orders, nothing consumed, book
+  byte-identical): no free landings, and every marker stands for a round that moved a
+  floor, the commit set or the book.
+- **The round id covers the whole work-item payload.** It used to cover only the book hash,
+  bindings and consumed commits, so a prune-only round shared its id with anyone's no-op on
+  the same book, and a copy of a round with a different prune list (which clears
+  differently) shared its id too.
 
 ## Accepted / documented (production hardening needed)
 

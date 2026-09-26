@@ -596,6 +596,7 @@ checksum = "670fdfda89751bc4a84ac13eaa63e205cf0fd22b4c9a5fbfa085b63c1f1d3a30"
 name = "match-engine"
 version = "0.1.0"
 dependencies = [
+ "blake2",
  "ed25519-compact",
  "proptest",
 ]
