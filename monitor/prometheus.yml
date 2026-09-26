@@ -3,6 +3,16 @@ global:
   evaluation_interval: 5s
 
 scrape_configs:
+  # Client-neutral node telemetry (offchain/netwatch.py serve, issue #15): every node's
+  # best/finalized slot, head and finality agreement by hash (JIP-2 nodes) or by slot and
+  # height (lasair, via its metrics until lasair#68), and the on-chain validator statistics
+  # (jam_pi_*). The chain dashboards read these; lasair_* below is an optional overlay.
+  # The `netwatch` service runs the monitor image with NETWATCH_NODES set (docs/NETS.md).
+  - job_name: netwatch
+    static_configs:
+      - targets: ["netwatch:9106"]
+        labels: { component: netwatch }
+
   # PolkaJam is a black box: the exporter derives its metrics from container
   # logs + the bestBlock RPC (see monitor/exporter.py).
   - job_name: jam-mixed

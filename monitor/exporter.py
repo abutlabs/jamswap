@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Prometheus exporter for the PolkaJam side of the mixed network.
 
+LEGACY: superseded by offchain/netwatch.py (issue #15), which reads every client
+through its public RPC/metrics instead of scraping container logs, and exports the
+client-neutral jam_* series the dashboards now draw (the jam_pi_* names are shared, so
+the pi panels read either). The monitor image runs netwatch when NETWATCH_NODES is set
+and falls back to this exporter otherwise; drop it once every monitor overlay sets it.
+
 lasair >=1.6.4 serves /metrics natively (prometheus.yml's `lasair` job);
 PolkaJam is a black box with no Prometheus endpoint (probed: no --prometheus
 flag, only the RPC listens). This exporter derives its metrics from what IS

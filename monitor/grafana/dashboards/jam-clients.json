@@ -10,14 +10,14 @@
   "editable": true,
   "panels": [
     {
-      "type": "stat",
-      "title": "lasair \u2014 blocks/min (avg per validator)",
-      "id": 20,
+      "type": "bargauge",
+      "title": "\u03c0 blocks credited \u2014 cumulative, avg per validator",
+      "id": 29,
       "gridPos": {
         "x": 0,
         "y": 0,
-        "w": 6,
-        "h": 4
+        "w": 8,
+        "h": 6
       },
       "datasource": {
         "type": "prometheus",
@@ -25,36 +25,105 @@
       },
       "targets": [
         {
-          "expr": "avg(rate(lasair_blocks_authored_total[5m])) * 60",
-          "instant": true,
-          "refId": "A"
+          "expr": "avg by (client) (jam_pi_blocks_cumulative_total)",
+          "legendFormat": "{{client}}",
+          "refId": "A",
+          "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
+          "min": 0,
           "color": {
             "mode": "fixed",
-            "fixedColor": "#c98500"
+            "fixedColor": "text"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "polkajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lasair"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "textMode": "value"
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
       }
     },
     {
-      "type": "stat",
-      "title": "polkajam \u2014 blocks/min (avg per validator)",
-      "id": 21,
+      "type": "bargauge",
+      "title": "Head lag now \u2014 max per client (slots)",
+      "id": 30,
       "gridPos": {
-        "x": 6,
+        "x": 8,
         "y": 0,
-        "w": 6,
-        "h": 4
+        "w": 8,
+        "h": 6
       },
       "datasource": {
         "type": "prometheus",
@@ -62,36 +131,105 @@
       },
       "targets": [
         {
-          "expr": "avg(rate(jam_authored_total{client=\"polkajam\"}[5m])) * 60",
-          "instant": true,
-          "refId": "A"
+          "expr": "max by (client) (jam_head_lag_slots)",
+          "legendFormat": "{{client}}",
+          "refId": "A",
+          "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
+          "min": 0,
           "color": {
             "mode": "fixed",
-            "fixedColor": "#3987e5"
+            "fixedColor": "text"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "polkajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lasair"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "textMode": "value"
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        }
       }
     },
     {
-      "type": "stat",
-      "title": "lasair \u2014 \u03c0 blocks cumulative (avg)",
-      "id": 22,
+      "type": "bargauge",
+      "title": "Nodes up per client",
+      "id": 31,
       "gridPos": {
-        "x": 12,
+        "x": 16,
         "y": 0,
-        "w": 6,
-        "h": 4
+        "w": 8,
+        "h": 6
       },
       "datasource": {
         "type": "prometheus",
@@ -99,71 +237,103 @@
       },
       "targets": [
         {
-          "expr": "avg(jam_pi_blocks_cumulative_total{client=\"lasair\"})",
-          "instant": true,
-          "refId": "A"
+          "expr": "sum by (client) (jam_node_up)",
+          "legendFormat": "{{client}}",
+          "refId": "A",
+          "instant": true
         }
       ],
       "fieldConfig": {
         "defaults": {
           "decimals": 0,
+          "min": 0,
           "color": {
             "mode": "fixed",
-            "fixedColor": "#c98500"
+            "fixedColor": "text"
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "polkajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lasair"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "textMode": "value"
-      }
-    },
-    {
-      "type": "stat",
-      "title": "polkajam \u2014 \u03c0 blocks cumulative (avg)",
-      "id": 23,
-      "gridPos": {
-        "x": 18,
-        "y": 0,
-        "w": 6,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "avg(jam_pi_blocks_cumulative_total{client=\"polkajam\"})",
-          "instant": true,
-          "refId": "A"
+        "orientation": "horizontal",
+        "displayMode": "basic",
+        "showUnfilled": true,
+        "namePlacement": "left",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
         }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "#3987e5"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "textMode": "value"
       }
     },
     {
       "type": "timeseries",
-      "title": "Authoring rate \u2014 avg per validator (blocks/min)",
-      "id": 24,
+      "title": "Head lag \u2014 avg per client (slots behind the newest)",
+      "id": 32,
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 6,
         "w": 12,
         "h": 8
       },
@@ -173,14 +343,9 @@
       },
       "targets": [
         {
-          "expr": "avg(rate(lasair_blocks_authored_total[2m])) * 60",
-          "legendFormat": "lasair",
+          "expr": "avg by (client) (jam_head_lag_slots)",
+          "legendFormat": "{{client}}",
           "refId": "A"
-        },
-        {
-          "expr": "avg(rate(jam_authored_total{client=\"polkajam\"}[2m])) * 60",
-          "legendFormat": "polkajam",
-          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -226,6 +391,145 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Finality lag \u2014 avg per client (slots)",
+      "id": 33,
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "avg by (client) (jam_finality_lag_slots)",
+          "legendFormat": "{{client}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 4,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "polkajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "lasair"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
           }
         ]
       },
@@ -244,11 +548,11 @@
     {
       "type": "timeseries",
       "title": "\u03c0 blocks credited \u2014 cumulative, avg per validator",
-      "id": 25,
+      "id": 34,
       "gridPos": {
-        "x": 12,
-        "y": 4,
-        "w": 12,
+        "x": 0,
+        "y": 14,
+        "w": 8,
         "h": 8
       },
       "datasource": {
@@ -305,6 +609,36 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
           }
         ]
       },
@@ -323,11 +657,11 @@
     {
       "type": "timeseries",
       "title": "\u03c0 guarantees \u2014 cumulative, avg per validator",
-      "id": 26,
+      "id": 35,
       "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 12,
+        "x": 8,
+        "y": 14,
+        "w": 8,
         "h": 8
       },
       "datasource": {
@@ -384,6 +718,36 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
           }
         ]
       },
@@ -402,11 +766,11 @@
     {
       "type": "timeseries",
       "title": "\u03c0 tickets on-chain \u2014 cumulative, avg per validator",
-      "id": 27,
+      "id": 36,
       "gridPos": {
-        "x": 12,
-        "y": 12,
-        "w": 12,
+        "x": 16,
+        "y": 14,
+        "w": 8,
         "h": 8
       },
       "datasource": {
@@ -463,6 +827,36 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
           }
         ]
       },
@@ -480,11 +874,11 @@
     },
     {
       "type": "timeseries",
-      "title": "Peers connected \u2014 avg per node",
-      "id": 28,
+      "title": "Peers \u2014 avg per client (JIP-2 syncState)",
+      "id": 37,
       "gridPos": {
         "x": 0,
-        "y": 20,
+        "y": 22,
         "w": 12,
         "h": 8
       },
@@ -494,14 +888,9 @@
       },
       "targets": [
         {
-          "expr": "avg(lasair_peers_connected)",
-          "legendFormat": "lasair",
+          "expr": "avg by (client) (jam_peers)",
+          "legendFormat": "{{client}}",
           "refId": "A"
-        },
-        {
-          "expr": "avg(jam_pj_peers)",
-          "legendFormat": "polkajam",
-          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -544,6 +933,36 @@
                 "value": {
                   "mode": "fixed",
                   "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
                 }
               }
             ]
@@ -564,11 +983,11 @@
     },
     {
       "type": "timeseries",
-      "title": "Blocks imported/min \u2014 avg per node (native-instrumented clients only)",
-      "id": 29,
+      "title": "Head agreement \u2014 min per client (1 = every node on the majority block)",
+      "id": 38,
       "gridPos": {
         "x": 12,
-        "y": 20,
+        "y": 22,
         "w": 12,
         "h": 8
       },
@@ -578,8 +997,8 @@
       },
       "targets": [
         {
-          "expr": "avg(rate(lasair_blocks_imported_total[2m])) * 60",
-          "legendFormat": "lasair",
+          "expr": "min by (client) (jam_head_agree)",
+          "legendFormat": "{{client}}",
           "refId": "A"
         }
       ],
@@ -626,6 +1045,36 @@
                 }
               }
             ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "javajam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "pbnjam"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
           }
         ]
       },
@@ -640,6 +1089,238 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "type": "row",
+      "title": "lasair overlay \u2014 lasair's native lasair_* metrics (empty on a net without lasair)",
+      "id": 41,
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "lasair authoring rate \u2014 avg per validator (blocks/min)",
+          "id": 39,
+          "gridPos": {
+            "x": 0,
+            "y": 31,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "avg(rate(lasair_blocks_authored_total[2m])) * 60",
+              "legendFormat": "lasair",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "polkajam"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#3987e5"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lasair"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#c98500"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "javajam"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#199e70"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "pbnjam"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "lasair blocks imported/min \u2014 avg per node",
+          "id": 40,
+          "gridPos": {
+            "x": 12,
+            "y": 31,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "avg(rate(lasair_blocks_imported_total[2m])) * 60",
+              "legendFormat": "lasair",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "polkajam"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#3987e5"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lasair"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#c98500"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "javajam"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#199e70"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "pbnjam"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        }
+      ]
     }
   ],
   "schemaVersion": 39,

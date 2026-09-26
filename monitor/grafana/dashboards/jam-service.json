@@ -12,7 +12,7 @@
     {
       "type": "stat",
       "title": "Settle success (15m)",
-      "id": 45,
+      "id": 79,
       "gridPos": {
         "x": 0,
         "y": 0,
@@ -66,7 +66,7 @@
     {
       "type": "stat",
       "title": "Settle p95 (15m)",
-      "id": 46,
+      "id": 80,
       "gridPos": {
         "x": 4,
         "y": 0,
@@ -120,7 +120,7 @@
     {
       "type": "stat",
       "title": "Ops in flight",
-      "id": 47,
+      "id": 81,
       "gridPos": {
         "x": 8,
         "y": 0,
@@ -173,7 +173,7 @@
     {
       "type": "stat",
       "title": "Settle timeouts (1h)",
-      "id": 48,
+      "id": 82,
       "gridPos": {
         "x": 12,
         "y": 0,
@@ -222,7 +222,7 @@
     {
       "type": "stat",
       "title": "Canary last pass age",
-      "id": 49,
+      "id": 83,
       "gridPos": {
         "x": 16,
         "y": 0,
@@ -276,7 +276,7 @@
     {
       "type": "stat",
       "title": "Accounts on-chain",
-      "id": 50,
+      "id": 84,
       "gridPos": {
         "x": 20,
         "y": 0,
@@ -312,8 +312,8 @@
     },
     {
       "type": "timeseries",
-      "title": "Order funnel (per 5m) \u2014 dex submits once; node-side stages count all 3 lm nodes",
-      "id": 51,
+      "title": "Order funnel (per 5m) \u2014 dex submits/settles; queued/guaranteed/accumulated: lasair overlay",
+      "id": 85,
       "gridPos": {
         "x": 0,
         "y": 4,
@@ -457,7 +457,7 @@
     {
       "type": "timeseries",
       "title": "Settle latency \u2014 percentiles (10m) + canary e2e",
-      "id": 52,
+      "id": 86,
       "gridPos": {
         "x": 12,
         "y": 4,
@@ -561,293 +561,11 @@
     },
     {
       "type": "timeseries",
-      "title": "Guarantee outcomes, all lm nodes (per 5m) \u2014 requeued = lost fork race or timeout",
-      "id": 53,
-      "gridPos": {
-        "x": 0,
-        "y": 12,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "sum(increase(lasair_ce133_guaranteed_total[5m]))",
-          "legendFormat": "guaranteed",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(increase(lasair_ce133_requeued_total[5m]))",
-          "legendFormat": "requeued",
-          "refId": "B"
-        },
-        {
-          "expr": "sum(increase(lasair_ce133_dropped_total[5m]))",
-          "legendFormat": "dropped (duplicate)",
-          "refId": "C"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "guaranteed"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#199e70"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "requeued"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#c98500"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "dropped (duplicate)"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#e66767"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "CE-133 queue depth per lm node \u2014 sustained growth = settlement can't keep up",
-      "id": 54,
-      "gridPos": {
-        "x": 8,
-        "y": 12,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "lasair_ce133_queue_depth",
-          "legendFormat": "{{node}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm3"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#008300"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm4"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm5"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#e66767"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Availability work (per 5m): cores assured / items accumulated",
-      "id": 55,
-      "gridPos": {
-        "x": 16,
-        "y": 12,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "sum(increase(lasair_ce133_assured_cores_total[5m]))",
-          "legendFormat": "cores assured",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(increase(lasair_ce133_accumulated_total[5m]))",
-          "legendFormat": "accumulated",
-          "refId": "B"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "cores assured"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "accumulated"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#199e70"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
       "title": "Settle latency by op (avg, 10m)",
-      "id": 56,
+      "id": 87,
       "gridPos": {
         "x": 0,
-        "y": 20,
+        "y": 12,
         "w": 12,
         "h": 8
       },
@@ -954,10 +672,10 @@
     {
       "type": "timeseries",
       "title": "Service state: accounts + resting orders",
-      "id": 57,
+      "id": 88,
       "gridPos": {
         "x": 12,
-        "y": 20,
+        "y": 12,
         "w": 6,
         "h": 8
       },
@@ -1038,10 +756,10 @@
     {
       "type": "timeseries",
       "title": "Treasury JAMKB: held vs reserve target (atomic)",
-      "id": 58,
+      "id": 89,
       "gridPos": {
         "x": 18,
-        "y": 20,
+        "y": 12,
         "w": 6,
         "h": 8
       },
@@ -1122,10 +840,10 @@
     {
       "type": "timeseries",
       "title": "API requests by route (per 5m)",
-      "id": 59,
+      "id": 90,
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 20,
         "w": 8,
         "h": 8
       },
@@ -1170,10 +888,10 @@
     {
       "type": "timeseries",
       "title": "Errors: API handlers + builder per-target submit failures (per 5m)",
-      "id": 60,
+      "id": 91,
       "gridPos": {
         "x": 8,
-        "y": 28,
+        "y": 20,
         "w": 8,
         "h": 8
       },
@@ -1223,10 +941,10 @@
     {
       "type": "timeseries",
       "title": "Canary cycles (per 30m)",
-      "id": 61,
+      "id": 92,
       "gridPos": {
         "x": 16,
-        "y": 28,
+        "y": 20,
         "w": 8,
         "h": 8
       },
@@ -1288,19 +1006,315 @@
           "sort": "desc"
         }
       }
+    },
+    {
+      "type": "row",
+      "title": "lasair overlay \u2014 lasair's native lasair_* metrics (empty on a net without lasair)",
+      "id": 96,
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Guarantee outcomes, all lm nodes (per 5m) \u2014 requeued = lost fork race or timeout",
+          "id": 93,
+          "gridPos": {
+            "x": 0,
+            "y": 29,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum(increase(lasair_ce133_guaranteed_total[5m]))",
+              "legendFormat": "guaranteed",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(increase(lasair_ce133_requeued_total[5m]))",
+              "legendFormat": "requeued",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(increase(lasair_ce133_dropped_total[5m]))",
+              "legendFormat": "dropped (duplicate)",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "guaranteed"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#199e70"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "requeued"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#c98500"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "dropped (duplicate)"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "CE-133 queue depth per lm node \u2014 sustained growth = settlement can't keep up",
+          "id": 94,
+          "gridPos": {
+            "x": 8,
+            "y": 29,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "lasair_ce133_queue_depth",
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm3"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#008300"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm4"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm5"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Availability work (per 5m): cores assured / items accumulated",
+          "id": 95,
+          "gridPos": {
+            "x": 16,
+            "y": 29,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum(increase(lasair_ce133_assured_cores_total[5m]))",
+              "legendFormat": "cores assured",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(increase(lasair_ce133_accumulated_total[5m]))",
+              "legendFormat": "accumulated",
+              "refId": "B"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "cores assured"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "accumulated"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#199e70"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
   "version": 1,
   "links": [
     {
-      "title": "JAM mixed network",
+      "title": "JAM network",
       "type": "link",
       "url": "/d/jam-mixed",
       "targetBlank": false
     },
     {
-      "title": "JAM node (lasair)",
+      "title": "JAM node",
       "type": "link",
       "url": "/d/jam-node",
       "targetBlank": false

@@ -1,6 +1,6 @@
 {
   "uid": "jam-mixed",
-  "title": "JAM mixed network",
+  "title": "JAM network",
   "timezone": "browser",
   "refresh": "5s",
   "time": {
@@ -11,7 +11,7 @@
   "panels": [
     {
       "type": "stat",
-      "title": "Current block (slot)",
+      "title": "Head (newest slot)",
       "id": 1,
       "gridPos": {
         "x": 0,
@@ -25,7 +25,7 @@
       },
       "targets": [
         {
-          "expr": "max(jam_head_slot)",
+          "expr": "max(jam_net_head_slot)",
           "instant": true,
           "refId": "A"
         }
@@ -48,7 +48,7 @@
     },
     {
       "type": "stat",
-      "title": "Chain height",
+      "title": "One head (this sample)",
       "id": 2,
       "gridPos": {
         "x": 4,
@@ -62,7 +62,7 @@
       },
       "targets": [
         {
-          "expr": "max(lasair_block_height)",
+          "expr": "min(jam_net_one_head)",
           "instant": true,
           "refId": "A"
         }
@@ -71,9 +71,36 @@
         "defaults": {
           "decimals": 0,
           "color": {
-            "mode": "fixed",
-            "fixedColor": "text"
-          }
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DIVERGED",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "ONE HEAD",
+                  "color": "green"
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
@@ -85,7 +112,7 @@
     },
     {
       "type": "stat",
-      "title": "Finality lag (slots)",
+      "title": "Distinct heads at the common slot",
       "id": 3,
       "gridPos": {
         "x": 8,
@@ -99,7 +126,56 @@
       },
       "targets": [
         {
-          "expr": "max(jam_head_slot) - max(jam_finalized_slot)",
+          "expr": "max(jam_net_heads)",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 2
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "graphMode": "none",
+        "colorMode": "value",
+        "textMode": "value"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Finality lag (slots)",
+      "id": 4,
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 4,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max(jam_net_head_slot) - max(jam_net_finalized_slot)",
           "instant": true,
           "refId": "A"
         }
@@ -138,44 +214,7 @@
     },
     {
       "type": "stat",
-      "title": "Blocks / min",
-      "id": 4,
-      "gridPos": {
-        "x": 12,
-        "y": 0,
-        "w": 4,
-        "h": 4
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "(sum(rate(lasair_blocks_authored_total[2m])) + sum(rate(jam_authored_total[2m]))) * 60",
-          "instant": true,
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "decimals": 0,
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "text"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "graphMode": "none",
-        "colorMode": "value",
-        "textMode": "value"
-      }
-    },
-    {
-      "type": "stat",
-      "title": "Validator peers (pj view)",
+      "title": "Nodes down",
       "id": 5,
       "gridPos": {
         "x": 16,
@@ -189,7 +228,7 @@
       },
       "targets": [
         {
-          "expr": "min(jam_pj_vals)",
+          "expr": "max(jam_net_nodes) - max(jam_net_nodes_up)",
           "instant": true,
           "refId": "A"
         }
@@ -204,12 +243,12 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "red",
+                "color": "green",
                 "value": null
               },
               {
-                "color": "green",
-                "value": 5
+                "color": "red",
+                "value": 1
               }
             ]
           }
@@ -224,7 +263,7 @@
     },
     {
       "type": "stat",
-      "title": "Stalled lasair nodes (no import >30s)",
+      "title": "Finality conflicts (same slot, two hashes)",
       "id": 6,
       "gridPos": {
         "x": 20,
@@ -238,7 +277,7 @@
       },
       "targets": [
         {
-          "expr": "sum((time() - lasair_last_import_time) > bool 30)",
+          "expr": "max(jam_finality_conflicts_total) or vector(0)",
           "instant": true,
           "refId": "A"
         }
@@ -273,7 +312,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Authoring rate per validator (blocks/min) \u2014 rotation, live",
+      "title": "Head lag per node (slots behind the newest best block)",
       "id": 7,
       "gridPos": {
         "x": 0,
@@ -287,14 +326,9 @@
       },
       "targets": [
         {
-          "expr": "sum by (node) (rate(lasair_blocks_authored_total[2m])) * 60",
-          "legendFormat": "{{node}}",
+          "expr": "jam_head_lag_slots",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
           "refId": "A"
-        },
-        {
-          "expr": "sum by (node) (rate(jam_authored_total{client=\"polkajam\"}[2m])) * 60",
-          "legendFormat": "{{node}}",
-          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -313,8 +347,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj0"
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
             },
             "properties": [
               {
@@ -328,8 +362,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj1"
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
             },
             "properties": [
               {
@@ -343,8 +377,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj2"
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
             },
             "properties": [
               {
@@ -358,8 +392,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm3"
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
             },
             "properties": [
               {
@@ -373,8 +407,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm4"
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
             },
             "properties": [
               {
@@ -388,8 +422,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
             },
             "properties": [
               {
@@ -417,7 +451,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Chain height per lasair node \u2014 diverging lines = a fork",
+      "title": "Finality lag per node (best - finalized, slots)",
       "id": 8,
       "gridPos": {
         "x": 12,
@@ -431,8 +465,8 @@
       },
       "targets": [
         {
-          "expr": "lasair_block_height",
-          "legendFormat": "{{node}}",
+          "expr": "jam_finality_lag_slots",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
           "refId": "A"
         }
       ],
@@ -452,8 +486,53 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm3"
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
             },
             "properties": [
               {
@@ -467,8 +546,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm4"
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
             },
             "properties": [
               {
@@ -482,8 +561,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
             },
             "properties": [
               {
@@ -510,8 +589,8 @@
       }
     },
     {
-      "type": "bargauge",
-      "title": "Blocks authored (dashboard time range, restart-proof)",
+      "type": "timeseries",
+      "title": "Head agreement (1 = holds the block most nodes hold at the common slot)",
       "id": 9,
       "gridPos": {
         "x": 0,
@@ -525,32 +604,29 @@
       },
       "targets": [
         {
-          "expr": "sum by (node) (increase(lasair_blocks_authored_total[$__range]))",
-          "legendFormat": "{{node}}",
-          "refId": "A",
-          "instant": true
-        },
-        {
-          "expr": "sum by (node) (increase(jam_authored_total{client=\"polkajam\"}[$__range]))",
-          "legendFormat": "{{node}}",
-          "refId": "B",
-          "instant": true
+          "expr": "jam_head_agree",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
+          "refId": "A"
         }
       ],
       "fieldConfig": {
         "defaults": {
-          "decimals": 0,
-          "min": 0,
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 4,
+            "showPoints": "never"
+          },
           "color": {
-            "mode": "fixed",
-            "fixedColor": "text"
-          }
+            "mode": "palette-classic"
+          },
+          "min": 0
         },
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj0"
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
             },
             "properties": [
               {
@@ -564,8 +640,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj1"
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
             },
             "properties": [
               {
@@ -579,8 +655,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj2"
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
             },
             "properties": [
               {
@@ -594,8 +670,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm3"
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
             },
             "properties": [
               {
@@ -609,8 +685,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm4"
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
             },
             "properties": [
               {
@@ -624,8 +700,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
             },
             "properties": [
               {
@@ -640,20 +716,20 @@
         ]
       },
       "options": {
-        "orientation": "horizontal",
-        "displayMode": "basic",
-        "showUnfilled": true,
-        "namePlacement": "left",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
         }
       }
     },
     {
       "type": "timeseries",
-      "title": "Blocks imported per lasair node (blocks/min)",
+      "title": "Divergence: distinct heads and the current episode (slots)",
       "id": 10,
       "gridPos": {
         "x": 8,
@@ -667,171 +743,19 @@
       },
       "targets": [
         {
-          "expr": "sum by (node) (rate(lasair_blocks_imported_total[2m])) * 60",
-          "legendFormat": "{{node}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm3"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#008300"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm4"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm5"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#e66767"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Faults (increase, 5m)",
-      "id": 11,
-      "gridPos": {
-        "x": 16,
-        "y": 12,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "sum by (reason) (increase(lasair_block_rejects_total[5m]))",
-          "legendFormat": "reject: {{reason}}",
+          "expr": "max(jam_net_heads)",
+          "legendFormat": "heads at the common slot",
           "refId": "A"
         },
         {
-          "expr": "sum(increase(lasair_accept_errors_total[5m]))",
-          "legendFormat": "QUIC accept errors",
+          "expr": "max(jam_net_final_heads)",
+          "legendFormat": "finalized heads",
           "refId": "B"
         },
         {
-          "expr": "sum(increase(lasair_ring_key_failures_total[5m]))",
-          "legendFormat": "ring-key failures",
+          "expr": "max(jam_net_divergence_slots)",
+          "legendFormat": "divergence episode (slots)",
           "refId": "C"
-        },
-        {
-          "expr": "sum(increase(lasair_authored_rejected_total[5m]))",
-          "legendFormat": "own blocks rejected",
-          "refId": "D"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Peers connected",
-      "id": 12,
-      "gridPos": {
-        "x": 0,
-        "y": 20,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "lasair_peers_connected",
-          "legendFormat": "{{node}}",
-          "refId": "A"
-        },
-        {
-          "expr": "jam_pj_peers",
-          "legendFormat": "{{node}}",
-          "refId": "B"
         }
       ],
       "fieldConfig": {
@@ -851,7 +775,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "pj0"
+              "options": "heads at the common slot"
             },
             "properties": [
               {
@@ -866,7 +790,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "pj1"
+              "options": "finalized heads"
             },
             "properties": [
               {
@@ -881,52 +805,7 @@
           {
             "matcher": {
               "id": "byName",
-              "options": "pj2"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#c98500"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm3"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#008300"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm4"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "options": "divergence episode (slots)"
             },
             "properties": [
               {
@@ -954,105 +833,11 @@
     },
     {
       "type": "timeseries",
-      "title": "Safrole ticket pool per lasair node",
-      "id": 13,
-      "gridPos": {
-        "x": 8,
-        "y": 20,
-        "w": 8,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "lasair_ticket_pool",
-          "legendFormat": "{{node}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm3"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#008300"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm4"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm5"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#e66767"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "CE-133 pipeline (items/min, all lasair nodes)",
-      "id": 14,
+      "title": "Peers per node (JIP-2 syncState)",
+      "id": 11,
       "gridPos": {
         "x": 16,
-        "y": 20,
+        "y": 12,
         "w": 8,
         "h": 8
       },
@@ -1062,19 +847,9 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(lasair_ce133_queued_total[2m])) * 60",
-          "legendFormat": "queued",
+          "expr": "jam_peers",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
           "refId": "A"
-        },
-        {
-          "expr": "sum(rate(lasair_ce133_guaranteed_total[2m])) * 60",
-          "legendFormat": "guaranteed",
-          "refId": "B"
-        },
-        {
-          "expr": "sum(rate(lasair_ce133_dropped_total[2m])) * 60",
-          "legendFormat": "dropped",
-          "refId": "C"
         }
       ],
       "fieldConfig": {
@@ -1093,23 +868,23 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "queued"
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#c98500"
+                  "fixedColor": "#3987e5"
                 }
               }
             ]
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "guaranteed"
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
             },
             "properties": [
               {
@@ -1123,73 +898,23 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "dropped"
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
             },
             "properties": [
               {
                 "id": "color",
                 "value": {
                   "mode": "fixed",
-                  "fixedColor": "#e66767"
+                  "fixedColor": "#c98500"
                 }
               }
             ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Seconds since last import \u2014 flat climb = frozen node",
-      "id": 15,
-      "gridPos": {
-        "x": 0,
-        "y": 36,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "time() - lasair_last_import_time",
-          "legendFormat": "{{node}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
           },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "s",
-          "min": 0
-        },
-        "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm3"
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
             },
             "properties": [
               {
@@ -1203,8 +928,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm4"
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
             },
             "properties": [
               {
@@ -1218,103 +943,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm5"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#e66767"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Status-thread heartbeat age (s)",
-      "id": 16,
-      "gridPos": {
-        "x": 12,
-        "y": 36,
-        "w": 12,
-        "h": 8
-      },
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "targets": [
-        {
-          "expr": "time() - lasair_status_alive_time",
-          "legendFormat": "{{node}}",
-          "refId": "A"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "pointSize": 4,
-            "showPoints": "never"
-          },
-          "color": {
-            "mode": "palette-classic"
-          },
-          "unit": "s",
-          "min": 0
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm3"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#008300"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm4"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#9085e9"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
             },
             "properties": [
               {
@@ -1343,10 +973,10 @@
     {
       "type": "bargauge",
       "title": "\u03c0 blocks credited by consensus \u2014 cumulative",
-      "id": 17,
+      "id": 12,
       "gridPos": {
         "x": 0,
-        "y": 28,
+        "y": 20,
         "w": 8,
         "h": 8
       },
@@ -1356,8 +986,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (node) (jam_pi_blocks_cumulative_total)",
-          "legendFormat": "{{node}}",
+          "expr": "sum by (node, client) (jam_pi_blocks_cumulative_total)",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
           "refId": "A",
           "instant": true
         }
@@ -1374,8 +1004,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj0"
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
             },
             "properties": [
               {
@@ -1389,8 +1019,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj1"
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
             },
             "properties": [
               {
@@ -1404,8 +1034,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj2"
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
             },
             "properties": [
               {
@@ -1419,8 +1049,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm3"
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
             },
             "properties": [
               {
@@ -1434,8 +1064,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm4"
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
             },
             "properties": [
               {
@@ -1449,8 +1079,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
             },
             "properties": [
               {
@@ -1479,10 +1109,10 @@
     {
       "type": "bargauge",
       "title": "\u03c0 guarantees (acted as guarantor) \u2014 cumulative",
-      "id": 18,
+      "id": 13,
       "gridPos": {
         "x": 8,
-        "y": 28,
+        "y": 20,
         "w": 8,
         "h": 8
       },
@@ -1492,8 +1122,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (node) (jam_pi_guarantees_cumulative_total)",
-          "legendFormat": "{{node}}",
+          "expr": "sum by (node, client) (jam_pi_guarantees_cumulative_total)",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
           "refId": "A",
           "instant": true
         }
@@ -1510,8 +1140,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj0"
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
             },
             "properties": [
               {
@@ -1525,8 +1155,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj1"
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
             },
             "properties": [
               {
@@ -1540,8 +1170,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj2"
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
             },
             "properties": [
               {
@@ -1555,8 +1185,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm3"
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
             },
             "properties": [
               {
@@ -1570,8 +1200,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm4"
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
             },
             "properties": [
               {
@@ -1585,8 +1215,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
             },
             "properties": [
               {
@@ -1615,10 +1245,10 @@
     {
       "type": "bargauge",
       "title": "\u03c0 tickets landed on-chain \u2014 cumulative",
-      "id": 19,
+      "id": 14,
       "gridPos": {
         "x": 16,
-        "y": 28,
+        "y": 20,
         "w": 8,
         "h": 8
       },
@@ -1628,8 +1258,8 @@
       },
       "targets": [
         {
-          "expr": "sum by (node) (jam_pi_tickets_cumulative_total)",
-          "legendFormat": "{{node}}",
+          "expr": "sum by (node, client) (jam_pi_tickets_cumulative_total)",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
           "refId": "A",
           "instant": true
         }
@@ -1646,8 +1276,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj0"
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
             },
             "properties": [
               {
@@ -1661,8 +1291,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj1"
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
             },
             "properties": [
               {
@@ -1676,8 +1306,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "pj2"
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
             },
             "properties": [
               {
@@ -1691,8 +1321,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm3"
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
             },
             "properties": [
               {
@@ -1706,8 +1336,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm4"
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
             },
             "properties": [
               {
@@ -1721,8 +1351,8 @@
           },
           {
             "matcher": {
-              "id": "byName",
-              "options": "lm5"
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
             },
             "properties": [
               {
@@ -1747,6 +1377,1154 @@
           ]
         }
       }
+    },
+    {
+      "type": "timeseries",
+      "title": "\u03c0 blocks per validator, last full epoch \u2014 rotation",
+      "id": 15,
+      "gridPos": {
+        "x": 0,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "max by (node, client) (jam_pi_blocks{epoch=\"last\"})",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 4,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Finalized slots per minute per node (0 = finality stalled)",
+      "id": 16,
+      "gridPos": {
+        "x": 12,
+        "y": 28,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "expr": "rate(jam_finalized_slot[2m]) * 60",
+          "legendFormat": "{{node}} \u00b7 {{client}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "pointSize": 4,
+            "showPoints": "never"
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "min": 0
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj0( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#3987e5"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj1( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#199e70"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^pj2( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#c98500"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^lm3( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#008300"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^lm4( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#9085e9"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": "^lm5( |$)"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#e66767"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "lasair overlay \u2014 lasair's native lasair_* metrics (empty on a net without lasair)",
+      "id": 28,
+      "collapsed": true,
+      "gridPos": {
+        "x": 0,
+        "y": 36,
+        "w": 24,
+        "h": 1
+      },
+      "panels": [
+        {
+          "type": "stat",
+          "title": "Stalled lasair nodes (no import >30s)",
+          "id": 17,
+          "gridPos": {
+            "x": 0,
+            "y": 37,
+            "w": 6,
+            "h": 4
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum((time() - lasair_last_import_time) > bool 30)",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "green",
+                    "value": null
+                  },
+                  {
+                    "color": "red",
+                    "value": 1
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "textMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "lasair blocks / min",
+          "id": 18,
+          "gridPos": {
+            "x": 6,
+            "y": 37,
+            "w": 6,
+            "h": 4
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(lasair_blocks_authored_total[2m])) * 60",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "textMode": "value"
+          }
+        },
+        {
+          "type": "stat",
+          "title": "lasair chain height",
+          "id": 19,
+          "gridPos": {
+            "x": 12,
+            "y": 37,
+            "w": 6,
+            "h": 4
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "max(lasair_block_height)",
+              "instant": true,
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "decimals": 0,
+              "color": {
+                "mode": "fixed",
+                "fixedColor": "text"
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "graphMode": "none",
+            "colorMode": "value",
+            "textMode": "value"
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Authoring rate per lasair validator (blocks/min)",
+          "id": 20,
+          "gridPos": {
+            "x": 0,
+            "y": 41,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum by (node) (rate(lasair_blocks_authored_total[2m])) * 60",
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm3"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#008300"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm4"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm5"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Chain height per lasair node \u2014 diverging lines = a fork",
+          "id": 21,
+          "gridPos": {
+            "x": 12,
+            "y": 41,
+            "w": 12,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "lasair_block_height",
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm3"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#008300"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm4"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm5"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Blocks imported per lasair node (blocks/min)",
+          "id": 22,
+          "gridPos": {
+            "x": 0,
+            "y": 49,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum by (node) (rate(lasair_blocks_imported_total[2m])) * 60",
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm3"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#008300"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm4"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm5"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "lasair faults (increase, 5m)",
+          "id": 23,
+          "gridPos": {
+            "x": 8,
+            "y": 49,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum by (reason) (increase(lasair_block_rejects_total[5m]))",
+              "legendFormat": "reject: {{reason}}",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(increase(lasair_accept_errors_total[5m]))",
+              "legendFormat": "QUIC accept errors",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(increase(lasair_ring_key_failures_total[5m]))",
+              "legendFormat": "ring-key failures",
+              "refId": "C"
+            },
+            {
+              "expr": "sum(increase(lasair_authored_rejected_total[5m]))",
+              "legendFormat": "own blocks rejected",
+              "refId": "D"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Safrole ticket pool per lasair node",
+          "id": 24,
+          "gridPos": {
+            "x": 16,
+            "y": 49,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "lasair_ticket_pool",
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm3"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#008300"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm4"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm5"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "CE-133 pipeline (items/min, all lasair nodes)",
+          "id": 25,
+          "gridPos": {
+            "x": 0,
+            "y": 57,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "sum(rate(lasair_ce133_queued_total[2m])) * 60",
+              "legendFormat": "queued",
+              "refId": "A"
+            },
+            {
+              "expr": "sum(rate(lasair_ce133_guaranteed_total[2m])) * 60",
+              "legendFormat": "guaranteed",
+              "refId": "B"
+            },
+            {
+              "expr": "sum(rate(lasair_ce133_dropped_total[2m])) * 60",
+              "legendFormat": "dropped",
+              "refId": "C"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "queued"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#c98500"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "guaranteed"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#199e70"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "dropped"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Seconds since last import \u2014 flat climb = frozen node",
+          "id": 26,
+          "gridPos": {
+            "x": 8,
+            "y": 57,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "time() - lasair_last_import_time",
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "unit": "s",
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm3"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#008300"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm4"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm5"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Status-thread heartbeat age (s)",
+          "id": 27,
+          "gridPos": {
+            "x": 16,
+            "y": 57,
+            "w": 8,
+            "h": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "targets": [
+            {
+              "expr": "time() - lasair_status_alive_time",
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "lineWidth": 2,
+                "fillOpacity": 0,
+                "pointSize": 4,
+                "showPoints": "never"
+              },
+              "color": {
+                "mode": "palette-classic"
+              },
+              "unit": "s",
+              "min": 0
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm3"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#008300"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm4"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#9085e9"
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "lm5"
+                },
+                "properties": [
+                  {
+                    "id": "color",
+                    "value": {
+                      "mode": "fixed",
+                      "fixedColor": "#e66767"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          }
+        }
+      ]
     }
   ],
   "schemaVersion": 39,
