@@ -247,5 +247,73 @@ class ReserveBeforeTrading(unittest.TestCase):
         self.assertFalse(self.run_wait(boom, timeout=4)[0])
 
 
+class ReserveKeeper(unittest.TestCase):
+    """server.reserve_keeper_tick (RESERVE_TOPUP=1): the JAMKB reserve follows the footprint."""
+    def setUp(self):
+        import server
+        self.s = server
+        self.held, self.target, self.landed, self.sent = [100 * 10_000], [100 * 10_000], set(), []
+        self.busy = False
+
+        def submit(payload):
+            if self.busy:
+                raise chain.ChainBusy("every core refused")
+            self.sent.append(payload)
+        self.saved = (server.bal, server.reserve_target_atomic, server.submit,
+                      dex_setup.deposit_landed, dict(server._topup))
+        server.bal = lambda asset, acct: self.held[0]
+        server.reserve_target_atomic = lambda: self.target[0]
+        server.submit = submit
+        dex_setup.deposit_landed = lambda ch, acct, nonce: nonce in self.landed
+        server._topup.update(payload=None, nonce=None, sent=None)
+
+    def tearDown(self):
+        (self.s.bal, self.s.reserve_target_atomic, self.s.submit, dex_setup.deposit_landed,
+         topup) = self.saved
+        self.s._topup.clear()
+        self.s._topup.update(topup)
+
+    def decode(self, payload):
+        tag, acct, asset, amount, nonce = struct.unpack("<BIIQQ", payload)
+        return tag, acct, asset, amount, nonce
+
+    def test_tops_up_to_the_target_once_half_a_buffer_short(self):
+        tick = self.s.reserve_keeper_tick
+        self.target[0] = self.held[0] + 3 * 10_000            # 3 KB short of an 8 KB buffer
+        self.assertIsNone(tick(0.0))
+        self.target[0] = self.held[0] + 4 * 10_000
+        self.assertEqual(tick(15.0), "sent")
+        tag, acct, asset, amount, nonce = self.decode(self.sent[0])
+        self.assertEqual((tag, acct, asset, amount),
+                         (self.s.TAG_DEPOSIT, self.s.FEE_ACCOUNT, self.s.JAMKB, 4 * 10_000))
+        self.assertGreater(nonce, 0)
+
+    def test_one_in_flight_resent_unchanged_until_it_lands(self):
+        tick = self.s.reserve_keeper_tick
+        self.target[0] = self.held[0] + 10 * 10_000
+        self.assertEqual(tick(0.0), "sent")
+        self.assertEqual(tick(30.0), "waiting")             # no second top-up meanwhile
+        self.assertEqual(tick(61.0), "resent")
+        self.assertEqual(self.sent[0], self.sent[1])        # same nonce: it credits once
+        nonce = self.decode(self.sent[0])[4]
+        self.landed.add(nonce)
+        self.held[0] = self.target[0]
+        self.assertIsNone(tick(75.0))                       # landed, at target: nothing due
+        self.assertEqual(len(self.sent), 2)
+        self.target[0] += 5 * 10_000                        # the footprint grew again
+        self.assertEqual(tick(90.0), "sent")
+        self.assertNotEqual(self.decode(self.sent[2])[4], nonce)
+
+    def test_a_refused_top_up_is_resent_at_the_next_look(self):
+        tick = self.s.reserve_keeper_tick
+        self.target[0] = self.held[0] + 10 * 10_000
+        self.busy = True
+        self.assertEqual(tick(0.0), "sent")                 # refused by every core: not sent
+        self.assertEqual(self.sent, [])
+        self.busy = False
+        self.assertEqual(tick(15.0), "resent")
+        self.assertEqual(len(self.sent), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

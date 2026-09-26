@@ -100,6 +100,18 @@ def reserve_target(obligation, buffer_kb, supply=JAMKB_SUPPLY):
     return min(int(obligation) + max(0, int(buffer_kb)), supply)
 
 
+def topup_due(held, target, buffer):
+    """The reserve keeper's rule (server.py, RESERVE_TOPUP=1): how much JAMKB to acquire now.
+
+    Once the reserve has fallen half a buffer below its target (obligation + buffer), top it
+    up to the target; otherwise nothing. The reserve so stays above the obligation while the
+    footprint grows (backpressure never trips as long as top-ups land), with one top-up per
+    half-buffer of growth rather than one per round, and never above the target (no hoard).
+    All three in the same unit (the server passes atomic units)."""
+    short = int(target) - int(held)
+    return short if short >= max(1, int(buffer) // 2) else 0
+
+
 def solvency(jamkb_held, rent_reserve):
     """Is the service's state footprint backed? Returns (solvent, shortfall) — the
     JAMKB-standard invariant `held ≥ obligation`. When under-reserved the service should

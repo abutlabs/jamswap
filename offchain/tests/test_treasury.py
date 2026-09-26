@@ -14,7 +14,7 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from treasury import (jamkb_rent, profit_split, max_withdrawable, reserve_target,  # noqa: E402
-                      JAMKB_SUPPLY, USDC, DOT, JAMKB)
+                      topup_due, JAMKB_SUPPLY, USDC, DOT, JAMKB)
 
 
 class Rent(unittest.TestCase):
@@ -79,6 +79,24 @@ class ReserveTarget(unittest.TestCase):
 
     def test_zero_obligation_is_just_the_buffer(self):
         self.assertEqual(reserve_target(obligation=0, buffer_kb=8), 8)
+
+
+class TopupDue(unittest.TestCase):
+    """The reserve keeper tops up to the target once half a buffer short, never above it."""
+    def test_nothing_due_within_half_a_buffer(self):
+        self.assertEqual(topup_due(held=100, target=103, buffer=8), 0)
+
+    def test_half_a_buffer_short_tops_up_to_the_target(self):
+        self.assertEqual(topup_due(held=100, target=104, buffer=8), 4)
+        self.assertEqual(topup_due(held=90, target=108, buffer=8), 18)   # insolvent: obligation 100
+
+    def test_never_above_the_target(self):
+        self.assertEqual(topup_due(held=110, target=108, buffer=8), 0)
+        self.assertEqual(topup_due(held=108, target=108, buffer=8), 0)
+
+    def test_no_buffer_tops_up_any_shortfall(self):
+        self.assertEqual(topup_due(held=99, target=100, buffer=0), 1)
+        self.assertEqual(topup_due(held=100, target=100, buffer=0), 0)
 
 
 class MaxWithdrawable(unittest.TestCase):

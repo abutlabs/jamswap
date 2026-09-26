@@ -28,7 +28,7 @@ import order_telemetry            # per-order lifecycle SLO (placement -> durabl
 from round import plan_batch, plan_round   # pure round planner (sealed carry-forward, batch cap); tests/test_round_lifecycle.py
 from clearing import clear        # builder-side clearing (mirrors refine); for per-order fill receipts
 from treasury import (jamkb_rent, profit_split, max_withdrawable, solvency, reserve_target,
-                      JAMKB_SUPPLY, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN)
+                      topup_due, JAMKB_SUPPLY, PROFIT_BENEFICIARY, PROFIT_BENEFICIARY_CHAIN)
 
 # service payload tags (must match service/src/lib.rs)
 TAG_MATCH, TAG_DEPOSIT, TAG_COMMIT, TAG_REVEAL, TAG_CANCEL, TAG_WITHDRAW, TAG_LIST, TAG_REGISTER, TAG_TREASURY = range(9)
@@ -1994,6 +1994,64 @@ def ensure_reserve():
     except Exception as e:
         print("reserve seeding skipped:", e)
 
+# ---- reserve keeper (RESERVE_TOPUP=1) ----------------------------------------
+# The beneficiary's capped top-up (docs/JAMKB_STANDARD.md, inflow 3), automated for an
+# operator who is also the beneficiary, as on every test net. Where the footprint is
+# readable (jip2) it grows with use — a landed-round marker lives LANDED_TTL_SLOTS (1 h)
+# — so a reserve seeded once at startup (obligation + RESERVE_BUFFER_KB) is outgrown after
+# ~15 min of steady trading, and backpressure then refuses every new order. The keeper
+# tops the reserve up to its target whenever it has fallen half a buffer below it
+# (treasury.topup_due). Off by default: the standard's own answer to an under-reserved
+# service is backpressure until someone funds it, or auctions free state.
+RESERVE_TOPUP = os.environ.get("RESERVE_TOPUP", "0") == "1"
+RESERVE_TOPUP_SECS = float(os.environ.get("RESERVE_TOPUP_SECS", "15"))   # how often it looks
+TOPUP_RESEND_SECS = 60.0            # a top-up not landed by then is resent (same nonce)
+_topup = {"payload": None, "nonce": None, "sent": None}   # sent: when; None = refused, resend
+metrics.describe("jamswap_reserve_topups_total", "JAMKB reserve top-ups the keeper sent (RESERVE_TOPUP=1)")
+
+def reserve_keeper_tick(now):
+    """One look by the keeper. A top-up in flight is watched until the service has admitted
+    its nonce, and resent unchanged after TOPUP_RESEND_SECS (a deposit credits once per
+    nonce, so a late original and its resend credit once between them); only then is a new
+    one considered. Returns "sent", "resent", "waiting" or None (nothing due)."""
+    t = _topup
+    if t["nonce"] is not None:
+        if dex_setup.deposit_landed(CHAIN, FEE_ACCOUNT, t["nonce"]):
+            t.update(payload=None, nonce=None)
+        elif t["sent"] is not None and now - t["sent"] < TOPUP_RESEND_SECS:
+            return "waiting"
+        else:
+            t["sent"] = now
+            _send_topup(t["payload"])
+            return "resent"
+    held, target = bal(JAMKB, FEE_ACCOUNT), reserve_target_atomic()
+    amount = topup_due(held, target, RESERVE_BUFFER_KB * SCALE)
+    if not amount:
+        return None
+    nonce = deposit_nonce()
+    t.update(payload=deposit_payload(FEE_ACCOUNT, JAMKB, amount, nonce), nonce=nonce, sent=now)
+    print(f"reserve top-up: +{disp(amount)} JAMKB (held {disp(held)}, target {disp(target)})")
+    metrics.inc("jamswap_reserve_topups_total")
+    _send_topup(t["payload"])
+    return "sent"
+
+def _send_topup(payload):
+    try:
+        submit(payload)
+    except ChainBusy as e:              # never sent: due for a resend at the next look
+        _topup["sent"] = None
+        print("reserve top-up not sent:", e)
+    except ChainError as e:             # outcome unknown: watched, resent if it never lands
+        print("reserve top-up outcome unknown:", e)
+
+def _reserve_keeper():
+    while True:
+        time.sleep(RESERVE_TOPUP_SECS)
+        try:
+            reserve_keeper_tick(time.time())
+        except Exception as e:
+            print("reserve keeper:", e)
+
 RESERVE_WAIT_SECS = float(os.environ.get("RESERVE_WAIT_SECS", "120"))
 def wait_reserved(timeout=None, poll=2.0, sleep=time.sleep, clock=time.monotonic):
     # Under JAMKB_BACKPRESSURE a new order is refused while the treasury holds less JAMKB
@@ -2434,6 +2492,10 @@ if __name__ == "__main__":
     threading.Thread(target=auction_loop, daemon=True).start()
     threading.Thread(target=_round_resolver, daemon=True).start()
     threading.Thread(target=_stats_poller, daemon=True).start()
+    if RESERVE_TOPUP:
+        threading.Thread(target=_reserve_keeper, daemon=True).start()
+        print(f"reserve keeper: JAMKB reserve topped up to obligation + {RESERVE_BUFFER_KB} KB "
+              f"whenever it falls {RESERVE_BUFFER_KB / 2:g} KB short (RESERVE_TOPUP=1)")
     print(f"auction loop running every {AUCTION_SECS}s (like JAM block production); "
           f"round resolver confirming settlements every 2s")
     print("settle hold: " + (f"{SETTLE_HOLD_SECS:g}s (SETTLE_HOLD_SECS)" if SETTLE_HOLD_SECS is not None

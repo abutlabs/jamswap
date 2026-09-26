@@ -12,13 +12,16 @@ whose DEX runs on JIP-2 (the dex, loadgen and netwatch services nets/netgen.py a
   4. `netwatch parity` at the common finalized head: A3, the service state (books,
      balances, custody, registry, landed-round markers) identical on every node;
   5. `soak_verdict.py` over the dex's order event log with --chain and --parity: A4,
-     clearing SLO >= 0.9999, sealed zero-loss, and the chain half folded in.
+     clearing SLO >= 0.9999, sealed zero-loss, and the chain half folded in;
+  6. the offered load, as the load generator counted it just before it stopped: the SLO
+     judges only orders the DEX accepted, so a DEX that turned the load away (a 4xx/5xx
+     to every order) would otherwise pass. At most 1 - target of it may be refused.
 
 Run it on a freshly started net (`./dex up`): the verdict judges the dex's whole order
 event log. Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>):
 poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl, verdict.txt,
-verdict.json, soak.log, and DONE (written last: each step's exit status). Exit 0 iff
-the poll, the parity probe and the soak verdict all pass.
+verdict.json, loadgen.txt, soak.log, and DONE (written last: each step's result). Exit 0
+iff the poll, the parity probe, the soak verdict and the offered load all pass.
 """
 import argparse
 import json
@@ -68,6 +71,32 @@ class Soak:
             r = subprocess.run(cmd, cwd=REPO, stdout=fh, stderr=subprocess.STDOUT, text=True,
                                timeout=timeout)
         return r.returncode
+
+
+LOADGEN_METRICS = ("import urllib.request; print(urllib.request.urlopen("
+                   "'http://localhost:9111/metrics', timeout=10).read().decode())")
+
+
+def load_counts(metrics_text):
+    """{offered, refused, busy} from the load generator's /metrics: ops it offered, API
+    calls the DEX refused or failed (loadgen_op_errors_total), and 503s (the chain was
+    busy: loadgen_ops_busy_total). Every one of them is an order that never entered."""
+    tot = {"loadgen_ops_total": 0, "loadgen_op_errors_total": 0, "loadgen_ops_busy_total": 0}
+    for line in metrics_text.splitlines():
+        name = line.split("{")[0].split(" ")[0]
+        if name in tot and not line.startswith("#"):
+            tot[name] += float(line.rsplit(" ", 1)[1])
+    return {"offered": int(tot["loadgen_ops_total"]), "refused": int(tot["loadgen_op_errors_total"]),
+            "busy": int(tot["loadgen_ops_busy_total"])}
+
+
+def judge_load(counts, target):
+    """The offered load passes iff it was offered and at most 1 - target of it was turned
+    away (refused or busy)."""
+    turned = counts["refused"] + counts["busy"]
+    out = dict(counts, turned_away=turned)
+    out["pass"] = counts["offered"] > 0 and turned <= (1.0 - target) * counts["offered"]
+    return out
 
 
 def wait_dex(url, timeout):
@@ -136,8 +165,15 @@ def main(argv=None):
                     break
                 s.log("  %d s of load left" % max(0, t_end - time.time()))
         finally:
+            r = s.dc("exec", "-T", "loadgen", "python3", "-c", LOADGEN_METRICS, timeout=60,
+                     check=False)
+            with open(s.path("loadgen.txt"), "w") as fh:
+                fh.write(r.stdout)
+            load = judge_load(load_counts(r.stdout), float(a.target))
+            done["load"] = load
             s.dc("stop", "loadgen", timeout=60, check=False)
-            s.log("loadgen off; draining")
+            s.log("loadgen off; draining. offered %(offered)d, refused %(refused)d, busy %(busy)d"
+                  % load)
         try:
             done["poll"] = poll.wait(timeout=a.drain + 300)
         except subprocess.TimeoutExpired:
@@ -162,13 +198,18 @@ def main(argv=None):
     s.run_to("verdict.json", verdict + ["--json"], timeout=300)
     s.log("soak_verdict: exit %s" % done["verdict"])
 
-    done["pass"] = done["poll"] == 0 and done["parity"] == 0 and done["verdict"] == 0
+    done["pass"] = (done["poll"] == 0 and done["parity"] == 0 and done["verdict"] == 0
+                    and done["load"]["pass"])
     done["finished"] = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     for f in ("poll.txt", "parity.txt", "verdict.txt"):
         print("\n==> %s" % f)
         with open(s.path(f)) as fh:
             lines = fh.read().splitlines()
         print("\n".join(lines[-40:] if f == "poll.txt" else lines))
+    ld = done["load"]
+    print("\n==> offered load   : %s  (%d orders offered, %d refused, %d busy; at most %g%% may "
+          "be turned away)" % ("PASS" if ld["pass"] else "FAIL", ld["offered"], ld["refused"],
+                               ld["busy"], 100 * (1 - float(a.target))))
     with open(s.path("DONE"), "w") as fh:
         json.dump(done, fh, indent=2)
     s.log("DONE %s: %s" % ("PASS" if done["pass"] else "FAIL", json.dumps(done)))

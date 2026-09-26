@@ -13,6 +13,7 @@ import devkeys  # noqa: E402
 import genesis  # noqa: E402
 import netgen  # noqa: E402
 import profiles  # noqa: E402
+import soak  # noqa: E402
 
 try:
     import yaml
@@ -151,6 +152,7 @@ class Netgen(unittest.TestCase):
         self.assertEqual((env["CHAIN_BACKEND"], env["CHAIN_RPC"], env["CHAIN_SPEC"]),
                          ("jip2", "ws://rpc:42150", "/shared/spec.json"))
         self.assertEqual(env["SERVICE_CODE"], "/work/jamswap-service.jam")
+        self.assertEqual(env["RESERVE_TOPUP"], "1")                       # the footprint is real
         self.assertIn("../../service/jamswap-service.jam:/work/jamswap-service.jam:ro",
                       doc["dex"]["volumes"])
         self.assertEqual(doc["dex"]["depends_on"]["rpc"], {"condition": "service_started"})
@@ -191,6 +193,27 @@ class Netgen(unittest.TestCase):
     def test_yaml_round_trip(self):
         for n in GENERATED:
             self.assertEqual(yaml.safe_load(netgen.render(n)), netgen.compose(n), n)
+
+
+class SoakLoad(unittest.TestCase):
+    """nets/soak.py: offered load the DEX turned away fails the soak (the SLO cannot see it)."""
+    METRICS = "\n".join([
+        "# HELP loadgen_ops_total operations offered to the dex API, by op",
+        "# TYPE loadgen_ops_total counter",
+        'loadgen_ops_total{op="buy"} 700', 'loadgen_ops_total{op="sealed_sell"} 140',
+        'loadgen_ops_total{op="sell"} 560', 'loadgen_op_errors_total{op="buy"} 3',
+        'loadgen_ops_busy_total{op="sell"} 1'])
+
+    def test_counts(self):
+        self.assertEqual(soak.load_counts(self.METRICS), {"offered": 1400, "refused": 3, "busy": 1})
+        self.assertEqual(soak.load_counts(""), {"offered": 0, "refused": 0, "busy": 0})
+
+    def test_turned_away_within_one_minus_target(self):
+        c = soak.load_counts(self.METRICS)
+        self.assertFalse(soak.judge_load(c, 0.9999)["pass"])     # 4 of 1400 > 0.14
+        self.assertTrue(soak.judge_load(c, 0.99)["pass"])        # 4 of 1400 <= 14
+        self.assertTrue(soak.judge_load(dict(c, refused=0, busy=0), 0.9999)["pass"])
+        self.assertFalse(soak.judge_load({"offered": 0, "refused": 0, "busy": 0}, 0.9)["pass"])
 
 
 if __name__ == "__main__":

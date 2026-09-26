@@ -286,6 +286,10 @@ def dex_services_jip2(p, ns, ctx):
                             "CHAIN_SPEC": "/shared/spec.json",
                             "SERVICE_CODE": "/work/jamswap-service.jam",
                             "DEPLOY_STATE": "/shared/jamswap_deploy.json",
+                            # the footprint is readable here and grows with use: keep the
+                            # JAMKB reserve at its target, or backpressure refuses every
+                            # order after ~15 min (server.py, reserve keeper)
+                            "RESERVE_TOPUP": "1",
                             "PORT": "8080", "PYTHONUNBUFFERED": "1",
                             "ORDER_EVENTS_FILE": "/shared/order_events.jsonl"},
             "volumes": [offchain, blob, "shared:/shared"],

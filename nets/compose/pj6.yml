@@ -211,6 +211,7 @@ services:
       CHAIN_SPEC: "/shared/spec.json"
       SERVICE_CODE: "/work/jamswap-service.jam"
       DEPLOY_STATE: "/shared/jamswap_deploy.json"
+      RESERVE_TOPUP: "1"
       PORT: "8080"
       PYTHONUNBUFFERED: "1"
       ORDER_EVENTS_FILE: "/shared/order_events.jsonl"
