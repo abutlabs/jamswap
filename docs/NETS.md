@@ -174,6 +174,54 @@ a finalizing net finality advanced on every node with no conflicting finalized b
 `./dex` just wraps the one you want 95% of the time so you don't have to remember
 `-p lasair6 -f docker-compose.lasair6.yml`.
 
+## Watching any net: `netwatch` (one head, finality, state parity)
+
+Every net is judged by the same client-neutral tool, `offchain/netwatch.py` (issue #15).
+It reads each node through its public interface only — JIP-2 (`ws://…`) where the node
+serves it, lasair's Prometheus gauges (`http://…/metrics`) until lasair does (lasair#68)
+— and answers the epic's shared acceptance: **A1** one head (best blocks agree by hash
+within `--max-lag` slots; no fork, lag or outage longer than one epoch) and liveness,
+**A2** the finalized head advances on every node with one hash per slot, **A3** the
+service state digests the same on every node at the common finalized head (`parity`).
+
+A node is `NAME,CLIENT,URL[,READER]`; `CLIENT` is a label (dashboards and verdicts group
+by it), the URL scheme picks the reader, and `READER` is lasair's CE-129 bridge for
+`parity` (it reads at its own head, so lasair parity is best-effort until lasair#70; a
+lasair node without a reader of its own is skipped and listed — lasair6's one reader
+follows lm0, so name it on lm0 only).
+
+```bash
+# all-lasair (lasair6): by slot/height, parity through the one reader (follows lm0)
+NETWATCH_NODES="lm0,lasair,http://lm0:9615/metrics,http://reader:19990 lm1,lasair,http://lm1:9615/metrics …"
+# all-PolkaJam / JavaJAM / pbnjam: JIP-2 on each node's RPC port
+NETWATCH_NODES="pj0,polkajam,ws://pj0:19800 pj1,polkajam,ws://pj1:19800 jj0,javajam,ws://jj0:19800 …"
+
+python3 offchain/netwatch.py poll --duration 600 --samples /shared/chain.jsonl \
+    --validators pj0,pj1,…  --require-finality       # A1/A2: exit 0 iff the verdict passes
+python3 offchain/netwatch.py parity --service 100 --dex-url http://dex:8080 \
+    --json --out /shared/parity.json                 # A3: book, balances, custody, cv/lp,
+                                                     #     registry, landed-round markers
+python3 offchain/soak_verdict.py /shared/order_events.jsonl --target 0.9999 \
+    --chain /shared/chain.jsonl --parity /shared/parity.json   # A4 with the chain folded in
+```
+
+`netwatch.py serve` is the same sampler as a Prometheus exporter (`:9106/metrics`,
+`/verdict`); the monitor image runs it when `NETWATCH_NODES` is set, and both
+`monitor/prometheus*.yml` scrape `netwatch:9106`. A net's monitor overlay adds it as
+
+```yaml
+  netwatch:
+    build: { context: ., dockerfile: monitor/Dockerfile }
+    environment:
+      NETWATCH_NODES: "pj0,polkajam,ws://pj0:19800 lm3,lasair,http://lm3:9615/metrics …"
+      NETWATCH_VALIDATORS: "pj0,pj1,pj2,lm3,lm4,lm5"   # node behind each validator index
+      NETWATCH_SAMPLES: /shared/chain.jsonl           # optional: the soak's --chain input
+    networks: { <the net>: {} }
+```
+
+(replacing the mixed overlay's log-scraping `exporter` service, whose `jam_pi_*` series
+would otherwise be counted twice). `make verify-mixed` runs `netwatch poll` too.
+
 ## Why the DEX needs the all-lasair net (the finality story)
 
 Settlement is durable only under **finality**: once a block is β-finalized it can't be

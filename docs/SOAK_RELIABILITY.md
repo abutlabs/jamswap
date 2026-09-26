@@ -44,6 +44,40 @@ Grafana: the **JAMswap accounts & trading** dashboard gained an SLO row — the
 headline gauge, cleared/missed, clear-latency p50/p99, outcomes-per-minute, retries
 (reverts + timeouts), and open-orders-by-phase.
 
+### The chain half of the verdict (netwatch, issue #15)
+
+The order log says whether each order cleared; it cannot say whether the chain under
+it was sound. `offchain/netwatch.py` watches every node of the net (JIP-2 where served,
+lasair's metrics until lasair#68) and `soak_verdict.py` folds its judgement into the exit
+code when asked:
+
+    python3 netwatch.py poll --duration 3600 --samples /shared/chain.jsonl --require-finality
+    python3 netwatch.py parity --service 100 --dex-url http://dex:8080 --json --out /shared/parity.json
+    python3 soak_verdict.py /shared/order_events.jsonl --target 0.9999 \
+        --chain /shared/chain.jsonl --parity /shared/parity.json --require-finality
+
+- **one head** — at each sample the JIP-2 nodes' blocks at the common slot (each
+  node's newest block at or below the lowest best slot, walked back with `parent`)
+  must be one hash, every node within `--max-lag` slots (default 3) and up; a
+  divergence episode (a fork, a lag, an outage) may last at most one epoch.
+  Nodes without JIP-2 are held to their slot, and to one height per shared slot.
+- **liveness** — every node's best slot advanced over the run.
+- **finality** — where the net finalizes: every node's finalized slot advances, never
+  goes back (except across a restart), never stands still longer than one epoch
+  (`--final-stall-slots`), and every finalized slot seen carries one hash (one height
+  for nodes read by gauges). A net that does not finalize passes unless
+  `--require-finality`; `netwatch --finality report` reports finality without judging
+  it (a mixed net whose clients do not share finality: `make verify-mixed` does this).
+- **state parity** — the service's keys (registry, per-market listing/book/`cv`/`lp`/
+  sealed sets, custody, the dev accounts' and the treasury's balances, keys, nonces
+  and seq floors, the landed-round markers the DEX's receipts name) read on every JIP-2
+  node at the common finalized block, digested (blake2b-256 over key ‖ value-or-absent);
+  one digest or FAIL, with the differing keys named.
+
+Without `--chain`/`--parity` the report and exit code are exactly the order verdict.
+`gate3a_soak.py` is now `netwatch poll` at the Gate-3a cadence (every 300 s, 160
+samples).
+
 ## Why the mixed net cannot hit 99.99% (measured, not asserted)
 
 The 5-of-6 availability threshold means a work-report needs 5 assurances. lasair
