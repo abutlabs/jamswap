@@ -48,7 +48,7 @@
 //! drains (each accept reaps more than it adds). The slot also lets the builder tell how deep
 //! a landing is (it can compare it with the finalized slot).
 
-use alloc::vec::Vec;
+use crate::Kv;
 use blake2::{Blake2s256, Digest};
 
 pub const ROUND_ID_DOMAIN: &[u8] = b"jamswap:v1:round";
@@ -61,14 +61,6 @@ pub const GC_STEPS: usize = 4;
 const ID_LEN: usize = 32;
 const Q_ENTRY_LEN: usize = ID_LEN + 4;
 const HEAD_KEY: &[u8] = b"rlh";
-
-/// Byte-valued service storage (the service implements it over get/set/remove_storage; tests
-/// over a map). A removed or missing key reads as `None`.
-pub trait Kv {
-    fn get(&self, key: &[u8]) -> Option<Vec<u8>>;
-    fn set(&mut self, key: &[u8], value: &[u8]);
-    fn remove(&mut self, key: &[u8]);
-}
 
 /// The id of a round: blake2s-256 over the domain and its work-item payload (module docs).
 pub fn round_id(payload: &[u8]) -> [u8; 32] {

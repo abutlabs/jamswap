@@ -46,8 +46,8 @@ books, sharing one global balance ledger.
 | 10 | `ENC_COMMIT` | market ‖ C1(32) ‖ body(17) ‖ account ‖ seq(8) ‖ **owner sig(64)** | echo | verify the owner's signature (over `id = H(C1‖body)`) + the commit seq floor, then append `id‖account` to the encset |
 | 11 | `ENC_ROUND` | committee keys ‖ ciphertexts ‖ proven partials ‖ *public section* | verify every partial's proof against the committee keys, decrypt each order, verify the public section, clear | verify committee-hash == on-chain committee, auth-trailer checks, consume-or-reject the ciphertext ids, then settle |
 | 12 | `SMATCH` | `market‖base‖quote` ‖ *public section* | **verify each order's ed25519 sig** (and limit price == signed price), then clear | auth-trailer checks (below), then settle + store the book |
-| 13 | `CARRY_COMMIT` | market ‖ account ‖ commitment(32) | echo | **allowance-gated** re-seal of a partially-filled sealed order's remainder (one credit per genuine partial fill, minted by the settling round) |
-| 14 | `CARRY_ENC_COMMIT` | market ‖ C1(32) ‖ body(17) ‖ account | echo | same allowance gate, encrypt-until-batch mode |
+| 13 | `CARRY_COMMIT` | market ‖ account ‖ commitment(32) | echo | **allowance-gated** re-seal of a partially-filled sealed order's remainder: spends one of the account's credits (`b"cw"`; one per genuine partial fill, minted by the settling round) and appends `commitment‖account`. Refused **without spending a credit** when the account has none or that entry is already in the set (a duplicate) |
+| 14 | `CARRY_ENC_COMMIT` | market ‖ C1(32) ‖ body(17) ‖ account | echo | same allowance gate and duplicate rule, on the encset entry `H(C1‖body)‖account` (encrypt-until-batch mode) |
 
 **The signed public section (trustless orders — every round type carries it).** New public
 orders travel as `order(17) ‖ flags ‖ signed_price ‖ seq(8) ‖ pubkey(32) ‖ sig(64)`; the
@@ -109,7 +109,8 @@ scales on ingest and de-scales on read, so the UI speaks plain decimals end-to-e
 |---|---|---|
 | `b` ‖ asset_id(4) ‖ account(4) | u64 | balance of an asset for an account (global, cross-market) |
 | `book` ‖ market(4) | orders blob | that market's resting order book |
-| `commits` ‖ market(4) | 32 B × n | that market's pending commitments (cleared on settlement) |
+| `commits` ‖ market(4) | 36 B × n | that market's pending commitments, `commitment(32) ‖ account(4)` (each consumed by the round that reveals it, or expired by the `cage` age index) |
+| `cw` ‖ market(4) ‖ account(4) | u32 | the account's carry credits in that market (`crates/match-engine/src/carry.rs`) |
 | `lp` ‖ market(4), `cv` ‖ market(4) | u64 | that market's last price, cumulative volume |
 | `cust` ‖ asset_id(4) | u64 | custodied total of an asset (deposits +, withdrawals −) |
 | `mkt` ‖ market(4) | base(4) ‖ quote(4) | a listed market's canonical assets |

@@ -23,6 +23,7 @@
 //! - signature/auth: `src/auth.rs`.
 //! - replay floors (order vs sealed-commit seq floors): `src/floors.rs`.
 //! - round ids + landed-round markers: `src/round_id.rs`; the round-output auth trailer: `src/wire.rs`.
+//! - sealed carry-forward credits + re-seal admission: `src/carry.rs`.
 //! Full test map across the whole project: `docs/TESTING.md`.
 
 #![cfg_attr(not(test), no_std)]
@@ -31,9 +32,19 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 pub mod auth;
+pub mod carry;
 pub mod floors;
 pub mod round_id;
 pub mod wire;
+
+/// Byte-valued service storage: the service implements it over get/set/remove_storage, tests
+/// over a map. A removed or missing key reads as `None`. The state-side rules that need more
+/// than a u64 floor (`round_id`, `carry`) run against it.
+pub trait Kv {
+    fn get(&self, key: &[u8]) -> Option<Vec<u8>>;
+    fn set(&mut self, key: &[u8], value: &[u8]);
+    fn remove(&mut self, key: &[u8]);
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Side {

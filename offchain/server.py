@@ -610,8 +610,10 @@ def _post_carry_seal(m, o):
     # only against the carry allowance the settling round just minted for this account.
     # The seal is made ONCE per remainder: a retry (chain busy, or a submit whose outcome is
     # unknown) re-posts the same commitment, so if an earlier attempt did land, the retry is
-    # refused harmlessly — a fresh nonce would leave the remainder holding a commitment that
-    # never went on-chain (deferred until it expired).
+    # refused without spending a credit (the service refuses a re-seal already in the set, so
+    # it can't eat the credit of this account's other remainder, jamswap#5) — a fresh nonce
+    # would leave the remainder holding a commitment that never went on-chain (deferred until
+    # it expired).
     if "commit" not in o:
         o["commit"] = _seal_material(m, o)
     cid = o["commit"]
@@ -1024,7 +1026,7 @@ def _carry_sealed_remainders(m, sealed_orders, fills, now):
             # retry it each sweep. The order stays live; its receipt is a carry note.
             # Any failure, not just ChainBusy: a builder timeout used to escape here and
             # abort the round's finalize before a single receipt was written. (A retry
-            # re-posts the same commitment, so one that did land is refused harmlessly.)
+            # re-posts the same commitment, so one that did land is refused, spending no credit.)
             _carry_retry.setdefault(m, []).append(r)
             o["_outcome"] = "partial-carried" if filled > 0 else "carried"
             o["_reason"] = ("re-seal queued (chain busy)" if isinstance(e, ChainBusy)

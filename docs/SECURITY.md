@@ -77,7 +77,8 @@ carries the asterisk noted here.
   order mints exactly one carry credit (reported by refine, which is audited); the builder
   spends it to post the re-sealed remainder (`TAG_CARRY_COMMIT`/`TAG_CARRY_ENC_COMMIT`,
   unsigned — the trader is offline by design). Verified e2e: no-allowance carries and
-  unsigned commits are rejected; a genuine partial fill carries and later clears.
+  unsigned commits are rejected; a genuine partial fill carries and later clears. A re-seal
+  already in the set is refused without spending a credit (2026-09-26, below).
 - Placement is two-phase (`/api/seal_prepare` → the browser signs the 32-byte commit id →
   `/api/order`), so the hiding material never goes on-chain unsigned.
 
@@ -98,8 +99,28 @@ carries the asterisk noted here.
   the same book, and a copy of a round with a different prune list (which clears
   differently) shared its id too.
 
+## Fixed (2026-09-26): a duplicated carry-commit can't eat another remainder's credit
+
+Builders deliver work items at least once: lasair's routes each payload to one guarantor
+and fails over around the ring on an error, other clients' builders promise nothing, and
+the DEX server re-posts a payload whose submit had an unknown outcome.
+
+- **Carry credits (jamswap#5).** Credits are per (market, account), and a carry-commit was
+  appended without checking the set. When one account had two partial fills in a round, a
+  copy of remainder 1's re-seal spent remainder 2's credit; remainder 2 then waited as
+  "commit-not-onchain" until it expired and never traded, and the stray copy sat in the set
+  for the commit TTL. A re-seal whose `id ‖ account` entry is already in the set is now
+  refused before anything is written: no credit spent, the set unchanged
+  (`crates/match-engine/src/carry.rs`).
+
 ## Accepted / documented (production hardening needed)
 
+- **A late carry-commit copy can still spend a credit.** The duplicate check sees only the
+  live set, so a copy that lands after its original was revealed and consumed (or expired)
+  is admitted and spends one of the account's credits, if it holds any. The builder reveals
+  a carried remainder only once its commit is on-chain, so this needs a copy delayed past a
+  whole later round. Closing it needs a record of consumed carries (with its own expiry), or
+  credits bound to the specific round and order that minted them.
 - **A carried remainder's *terms* are builder-attested.** The allowance proves the account
   really had a partially-filled sealed order this round, and settlement still binds to that
   account — but the re-sealed commitment's price/qty are the builder's claim until reveal

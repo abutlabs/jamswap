@@ -12,8 +12,8 @@ use jam_pvm_common::{declare_service, Service};
 use blake2::{Blake2s256, Digest};
 use match_engine::auth::{canon, commit_msg, order_msg, verify_signed};
 use match_engine::floors::{self, FloorStore};
-use match_engine::round_id;
-use match_engine::{clear, resting, wire, Order, Side};
+use match_engine::{carry, round_id};
+use match_engine::{clear, resting, wire, Kv, Order, Side};
 
 declare_service!(Jamswap);
 struct Jamswap;
@@ -51,7 +51,7 @@ const TAG_SMATCH: u8 = 12; // signed public round — see parse_public_section()
 const TAG_CARRY_COMMIT: u8 = 13; // [tag][market][account][commitment(32)] — allowance-gated re-seal
 const TAG_CARRY_ENC_COMMIT: u8 = 14; // [tag][market][C1][body][account] — allowance-gated re-seal
 // commit/enc set entries are hash(32) ‖ account(4): consumption must match BOTH.
-const SET_ENTRY_LEN: usize = 36;
+const SET_ENTRY_LEN: usize = carry::ENTRY_LEN;
 // Commit time-to-live. A sealed commitment that is never revealed (the trader lost the
 // nonce or went offline) would otherwise sit in b"commits" forever — state growing without
 // bound. Each commitment is mirrored in a parallel age index (b"cage"‖market) carrying its
@@ -203,8 +203,9 @@ impl FloorStore for Store {
         set_storage(key, &v.to_le_bytes()).ok();
     }
 }
-// ... and the landed-round markers (match_engine::round_id; host-tested there).
-impl round_id::Kv for Store {
+// ... and the byte-valued state rules: landed-round markers (match_engine::round_id) and carry
+// credits (match_engine::carry), each host-tested in its module.
+impl Kv for Store {
     fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
         get_storage(key)
     }
@@ -676,25 +677,20 @@ fn gc_commits(market: u32, slot: u32) -> usize {
     reaped.len() / SET_ENTRY_LEN
 }
 
-// Carry-forward allowance (b"cw"‖market‖account → u32): a sealed order that PARTIALLY fills
-// mints one credit for its account (refine reports it; consumption above proves the account
-// really had a sealed order in the round), and the builder spends one credit to post the
-// re-sealed remainder WITHOUT an owner signature (the trader is offline — that's the whole
-// point of fire-and-forget sealing). Bounded builder trust: at most one unauthorized-looking
-// commit per genuine partial fill, and its settlement still binds to the same account. The
-// full fix (proving the remainder's terms) is the rung-1 ZK linkage — documented.
-fn cw_key(market: u32, account: u32) -> Vec<u8> {
-    let mut k = Vec::with_capacity(10);
-    k.extend_from_slice(b"cw");
-    k.extend_from_slice(&market.to_le_bytes());
-    k.extend_from_slice(&account.to_le_bytes());
-    k
-}
-fn carry_allowance(market: u32, account: u32) -> u32 {
-    get_storage(&cw_key(market, account)).filter(|v| v.len() >= 4).map(|v| ru32(&v, 0)).unwrap_or(0)
-}
-fn set_carry_allowance(market: u32, account: u32, v: u32) {
-    set_storage(&cw_key(market, account), &v.to_le_bytes()).ok();
+// Carry-forward allowance (b"cw"‖market‖account → u32; match_engine::carry, host-tested): a
+// sealed order that PARTIALLY fills mints one credit for its account (refine reports it;
+// consumption proves the account really had a sealed order in the round), and the builder
+// spends one credit to post the re-sealed remainder WITHOUT an owner signature (the trader
+// is offline — that's the whole point of fire-and-forget sealing). A re-seal already in the
+// set is refused without spending a credit, so a duplicated work item can't eat the credit
+// of the account's other remainder (jamswap#5). Bounded builder trust: at most one
+// unauthorized-looking commit per genuine partial fill, and its settlement still binds to
+// the same account. The full fix (proving the remainder's terms) is the rung-1 ZK linkage.
+fn carry_entry(id: &[u8], account: u32) -> [u8; SET_ENTRY_LEN] {
+    let mut e = [0u8; SET_ENTRY_LEN];
+    e[..32].copy_from_slice(&id[..32]);
+    e[32..].copy_from_slice(&account.to_le_bytes());
+    e
 }
 
 // Read a big-endian... no: little-endian u16 (all jamswap wire ints are LE).
@@ -845,7 +841,8 @@ impl Service for Jamswap {
             // signed ops: the signature is verified HERE; accumulate binds the key to state
             TAG_COMMIT | TAG_CANCEL | TAG_WITHDRAW | TAG_REGISTER | TAG_TREASURY | TAG_ENC_SETUP
             | TAG_ENC_COMMIT => authenticate(&data).map(Into::into).unwrap_or_else(|| Vec::new().into()),
-            // unsigned ops: echoed for accumulate (state changes happen there, where storage lives)
+            // unsigned ops: echoed for accumulate (state changes happen there, where storage
+            // lives; a carry's credit is checked there too)
             TAG_DEPOSIT | TAG_LIST | TAG_CARRY_COMMIT | TAG_CARRY_ENC_COMMIT => data.into(),
             // Sealed-encrypted round (encrypt-until-batch): the committee has decrypted, so
             // refine verifies each partial against the builder-supplied committee keys,
@@ -974,21 +971,19 @@ impl Service for Jamswap {
                 // builder-posted re-seal of a partially-filled sealed order's remainder:
                 // [tag][market(4)][account(4)][commitment(32)] — ALLOWANCE-GATED: spends one
                 // carry credit minted by a round that genuinely partially filled this
-                // account's sealed order. No credit → rejected.
+                // account's sealed order. No credit, or a commitment already in the set (a
+                // duplicate), → refused without spending one (carry::admit).
                 TAG_CARRY_COMMIT if out.len() >= 1 + 4 + 4 + 32 => {
                     let market = ru32(&out, 1);
                     let account = ru32(&out, 5);
-                    let cw = carry_allowance(market, account);
-                    if cw == 0 {
+                    let entry = carry_entry(&out[9..41], account);
+                    if !carry::admit(&mut Store, &mkey(b"commits", market), market, &entry) {
                         continue;
                     }
-                    set_carry_allowance(market, account, cw - 1);
-                    gc_commits(market, slot); // reap expired commits before re-seal grows the set
-                    let key = mkey(b"commits", market);
-                    let mut commits = get_storage(&key).unwrap_or_default();
-                    commits.extend_from_slice(&out[9..41]);
-                    commits.extend_from_slice(&account.to_le_bytes());
-                    set_storage(&key, &commits).ok();
+                    // reap this market's expired commits. After the admit, so a refused copy
+                    // writes nothing; the set comes out the same as reaping first, because the
+                    // entry just admitted was not in the set and so has no expired index entry.
+                    gc_commits(market, slot);
                     cage_add(market, &out[9..41], account, slot); // index it for TTL
                 }
                 // cancel, signature verified in refine: [tag][handle(4)][market(4)][order_id(4)]
@@ -1099,10 +1094,7 @@ impl Service for Jamswap {
                     accept_round(&floors, &t.round_id, slot);
                     // mint carry credits: one per genuinely partially-filled sealed order, so
                     // the builder can re-seal each remainder (TAG_CARRY_COMMIT) for its owner.
-                    for i in 0..ncar {
-                        let a = ru32(carry, i * 4);
-                        set_carry_allowance(market, a, carry_allowance(market, a).saturating_add(1));
-                    }
+                    carry::mint(&mut Store, market, carry);
                     set_storage(&mkey(b"book", market), t.book).ok();
                     apply_settlement(base, quote, market, settle, t.bindings);
                 }
@@ -1180,24 +1172,15 @@ impl Service for Jamswap {
                     set_storage(&key, &set).ok();
                 }
                 // builder-posted re-seal (encrypt-until-batch): [tag][market(4)][C1(32)]
-                // [body(ORDER_LEN)][account(4)] — allowance-gated, same as TAG_CARRY_COMMIT.
+                // [body(ORDER_LEN)][account(4)] — allowance-gated, same as TAG_CARRY_COMMIT
+                // (a ciphertext id already in the encset is a duplicate: refused, no credit).
                 TAG_CARRY_ENC_COMMIT
                     if out.len() >= 1 + 4 + vdec::POINT_LEN + wire::ORDER_LEN + 4 =>
                 {
                     let market = ru32(&out, 1);
                     let ct_end = 5 + vdec::POINT_LEN + wire::ORDER_LEN;
-                    let id = commitment(&out[5..ct_end]);
-                    let account = ru32(&out, ct_end);
-                    let cw = carry_allowance(market, account);
-                    if cw == 0 {
-                        continue;
-                    }
-                    set_carry_allowance(market, account, cw - 1);
-                    let key = mkey(b"encset", market);
-                    let mut set = get_storage(&key).unwrap_or_default();
-                    set.extend_from_slice(&id);
-                    set.extend_from_slice(&account.to_le_bytes());
-                    set_storage(&key, &set).ok();
+                    let entry = carry_entry(&commitment(&out[5..ct_end]), ru32(&out, ct_end));
+                    carry::admit(&mut Store, &mkey(b"encset", market), market, &entry);
                 }
                 // sealed-encrypted round: [tag][market][base][quote][settle_len][settle]
                 //   [consumed_len][consumed][committee_hash(32)][ncar][carry]
@@ -1250,10 +1233,7 @@ impl Service for Jamswap {
                         continue;
                     }
                     accept_round(&floors, &t.round_id, slot);
-                    for i in 0..ncar {
-                        let a = ru32(carry, i * 4);
-                        set_carry_allowance(market, a, carry_allowance(market, a).saturating_add(1));
-                    }
+                    carry::mint(&mut Store, market, carry);
                     set_storage(&mkey(b"book", market), t.book).ok();
                     apply_settlement(base, quote, market, settle, t.bindings);
                 }
