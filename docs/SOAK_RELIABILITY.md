@@ -21,17 +21,24 @@ Short answers:
 Each order walks a small state machine, and every transition is a Prometheus
 counter update **and** a JSONL line (`ORDER_EVENTS_FILE`):
 
-    placed ─┬─► rested ───────────────► (terminal: never crossed — not an SLO input)
-            └─► rounded ─┬─► settled ──► (terminal: filled / partial-carried — SLO hit)
-                         ├─► reverted ─► rounded   (a re-org ate the settling branch)
-                         ├─► requeued ─► placed    (round never landed in time)
-                         └─► expired ──► (terminal: marketable & unfilled — SLO MISS)
+    placed ──► rounded ─┬─► settled ──► (terminal: filled — SLO hit)
+                        ├─► rested ───► on the book ─┬─► (terminal: filled — SLO hit)
+                        │                            └─► (terminal: expired / cancelled)
+                        ├─► reverted ─► rounded   (a re-org ate the settling branch)
+                        ├─► requeued ─► placed    (round never landed in time)
+                        └─► expired ──► (terminal: marketable & unfilled — SLO MISS)
 
 `jamswap_order_clearing_slo = cleared / (cleared + missed)` over **marketable**
-orders — the ones a correct chain was obliged to fill (they crossed standing
-liquidity at placement). A resting order that never found a counterparty is not
-counted against the chain. `soak_verdict.py <events.jsonl> --target 0.9999` exits 0
-iff the SLO clears the bar and no order is stuck open past a grace window.
+orders — the ones a correct chain was obliged to fill. Placement gives the first
+guess (the order crossed standing liquidity when it arrived); once a settled auction
+leaves the order `rested` on the book, the auction has decided it: outbid, or rationed
+at the clearing price by price-time priority (the `rested` event carries that price and
+`crossed`; the engine's tie-break can ration even orders better than the clearing
+price). A rested order is not counted against the chain while it rests, nor if it
+expires unfilled; it counts as cleared if it later fills. Clearing correctness itself
+(who fills) is covered by the engine's property tests and the cross-client differential. `soak_verdict.py <events.jsonl> --target 0.9999` exits 0 iff the
+SLO clears the bar and no order is stuck open past a grace window (a resting order:
+past its own expiry plus the grace).
 
 Grafana: the **JAMswap accounts & trading** dashboard gained an SLO row — the
 headline gauge, cleared/missed, clear-latency p50/p99, outcomes-per-minute, retries

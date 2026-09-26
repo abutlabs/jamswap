@@ -7,16 +7,23 @@ die?" That is the production SLO, and it is measured per order, not per round.
 
 Each order is followed through a small state machine:
 
-    placed ─┬─► rested ────────────────► (terminal: rested, never crossed)
-            └─► rounded ─┬─► settled ───► (terminal: filled / partial-carried)
-                         ├─► reverted ──► back to rounded (a re-org ate it; retry)
-                         ├─► requeued ──► back to placed (round never landed; retry)
-                         └─► expired ───► (terminal: expired — the failure the SLO counts)
+    placed ──► rounded ─┬─► settled ──► (terminal: filled)
+                        ├─► rested ───► live on the book ─┬─► (terminal: filled)
+                        │                                 └─► (terminal: expired / cancelled)
+                        ├─► reverted ─► back to rounded (a re-org ate it; retry)
+                        ├─► requeued ─► back to placed (round never landed; retry)
+                        └─► expired ──► (terminal: expired — the failure the SLO counts)
 
 An order tagged `marketable` at placement (it crossed the resting book / opposing
 mempool, so it SHOULD trade) that ends `expired` or `lost` is an SLO miss. One that
-ends `filled`/`partial-carried` is an SLO hit. A `rested` order that never crossed is
-neither — it correctly sat on the book.
+ends `filled` is an SLO hit. Placement is only a guess, though: a settled auction that
+leaves a public order `rested` on the book (non-terminal) also says whether the order's
+limit reached that auction's uniform clearing price (`crossed`, recorded for reporting).
+From then on the auction, not the placement guess, has decided the order: outbid, or
+rationed at the clearing price by price-time priority (the engine's tie-break can ration
+even orders better than the clearing price), it correctly sits on the book. A rested
+order is therefore never an SLO miss; one that later fills still counts as cleared, and
+one that stays live long past its own expiry is caught as a leak by the verdict.
 
 Two outputs:
   * Prometheus: `jamswap_order_placed_total`, `jamswap_order_terminal_total{outcome}`,
@@ -39,7 +46,7 @@ ORDER_EVENTS_FILE = os.environ.get("ORDER_EVENTS_FILE", "/tmp/jamswap_order_even
 # outcomes that END an order's life (it will not transition again). A CARRIED remainder
 # is NOT here: re-sealing keeps the order working under the same oid, so it resolves to
 # exactly one terminal later (filled / expired). Only genuine end states appear.
-TERMINAL = {"filled", "partial-cancelled", "rested",
+TERMINAL = {"filled", "partial-cancelled",
             "cancelled", "expired", "rejected", "lost"}
 # terminal outcomes that count as the order having CLEARED (made durable progress)
 CLEARED = {"filled"}
@@ -142,6 +149,26 @@ def deferred(market, account, oid, reason):
         _log(rec, "deferred", reason=reason)
 
 
+def rested(market, account, oid, clearing, crossed, filled=0, expires_at=None):
+    """Non-terminal: a settled auction left this public order (or what remains of it) resting
+    on the on-chain book. `clearing` is that auction's uniform price (0 = nothing traded);
+    `crossed` = the order's limit reached it (a buy at or above, a sell at or below): it was
+    eligible to trade, and rationing left it (part-)unfilled; `filled` = what it traded here.
+    The auction supersedes the placement-time guess: the order is no longer counted as
+    marketable (an auction outcome is not a system miss). It stays live until it fills, is cancelled,
+    or expires (`expires_at`, unix time, lets the verdict flag a prune that never lands)."""
+    key = (int(market), int(account), int(oid))
+    with _lock:
+        rec = _orders.get(key)
+        if rec and rec["phase"] not in TERMINAL:
+            rec["phase"] = "rested"
+            rec["crossed"] = rec.get("crossed", False) or bool(crossed)
+            rec["marketable"] = False     # the auction decided it (see the module docstring)
+    if rec:
+        _log(rec, "rested", clearing=int(clearing), crossed=bool(crossed), filled=int(filled),
+             expires_at=round(expires_at, 3) if expires_at else None)
+
+
 def terminal(market, account, oid, outcome, filled=0, reason=None):
     """The order reached a terminal state. `outcome` in TERMINAL; `filled` is the
     durably-settled quantity (atomic); `reason` (optional) says why, in the event log —
@@ -193,7 +220,7 @@ def snapshot():
         for rec in _orders.values():
             phases[rec["phase"]] = phases.get(rec["phase"], 0) + 1
         open_n = len(_orders)
-    for ph in ("placed", "rounded", "deferred"):
+    for ph in ("placed", "rounded", "deferred", "rested"):
         metrics.set_gauge("jamswap_order_open", {"phase": ph}, phases.get(ph, 0))
     total = c + mi
     return {"cleared": c, "missed": mi, "open": open_n, "phases": phases,

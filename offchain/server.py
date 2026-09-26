@@ -1426,7 +1426,6 @@ def _build_round(m, base, quote):
         # the mempool (they are receipted when it is finalized) before we batch them again
         _resolve_zombies(time.time(), m)
     now = time.time()
-    hdr = struct.pack("<III", m, base, quote)
     raw = storage(b"book" + struct.pack("<I", m))        # the market's on-chain resting book
     pruned = expired_pairs(m, raw)                        # good-till-time entries past expiry
     shrank = bool(pruned)                                 # some resting order expired this round
@@ -1468,9 +1467,96 @@ def _build_round(m, base, quote):
         plan = plan_round(pend, resting_orders, now, sealed_ready=sealed_ready)
         # hidden non-crossing sealed + not-yet-committed (deferred) + over-cap tail all wait
         pending[m] = plan.carry + plan.deferred + overflow
+    # From here this round's orders (the batch, plus the GTT-expired sealed ones) are OUT of the
+    # mempool. Each is ended with a terminal, or registered in flight with the round — or, on
+    # ANY exception before the round is registered (a reader timeout in the price / seq-floor
+    # reads below, a committee failure), put back at the front in mempool order
+    # (_requeue_unsent). Such an exception used to lose the whole batch: in neither the mempool
+    # nor _inflight, never submitted, and "open" in the order telemetry forever.
+    out = {_okey(o) for o in plan.reveal + plan.public + plan.expired}
+    taken = [o for o in pend if _okey(o) in out]
+    ended = set()                      # keys of taken orders already ended with a terminal
+    try:
         for o in plan.expired:         # GTT-expired sealed orders that never found a counterparty
-            order_expiry.pop((m, o["account"], o["oid"]), None)
             order_telemetry.terminal(m, o["account"], o["oid"], "expired")
+            order_expiry.pop((m, o["account"], o["oid"]), None)
+            ended.add(_okey(o))
+        rec, payload, detail, reply = _assemble_round(
+            m, base, quote, now, raw, pruned, shrank, plan, resting_orders, commit_entries,
+            set_key, ended)
+    except BaseException:
+        back = _requeue_unsent(m, taken, ended)
+        print(f"round m{m}: build failed before submit — re-queued {len(back)} order(s) to the front")
+        raise
+    if reply is not None:
+        return reply                   # nothing to submit
+    sealed, public, rid = rec["sealed"], rec["public"], rec["rid"]
+    # IN FLIGHT from before the submit: nothing is receipted or carried until the resolver
+    # sees its id marked landed — a round that can't or doesn't settle re-queues these exact
+    # orders instead (no phantom fills, nothing silently lost), and a released round seen
+    # landing from here on claims its orders from this record. A revealed sealed order that
+    # crossed nothing is carried at finalize, not dropped.
+    _inflight[m] = rec
+    try:
+        submit(payload, check=lambda: _landed_slot(rid) is not None, detail=detail)
+    except ChainBusy:
+        # BACKPRESSURE: every lm node's CE-133 queue is at cap (lasair --wp-queue-cap),
+        # so the round never left the builder. Nothing cleared — put its orders back in
+        # the mempool (they BATCH into the retry, same as gate-held orders) and cool the
+        # market down so retries don't re-flood the fleet. No receipts, no carry, nothing
+        # in flight: the round simply never happened.
+        _inflight.pop(m, None)
+        with _lock:                    # FRONT: they are still the oldest orders of their accounts
+            pending[m] = sealed + public + pending.get(m, [])
+        _round_gate[m] = {"check": None, "t": time.time()}
+        print(f"round m{m}: chain busy — re-queued {len(sealed) + len(public)} order(s), cooling down")
+        return {"ok": False, "backpressure": True, "requeued": len(sealed) + len(public)}
+    except Exception as e:
+        # outcome UNKNOWN (builder timeout, connection reset): the payload may still have been
+        # relayed, so the round stays in flight — its marker says if it landed, and dead
+        # detection or the gate releases it otherwise. Re-queueing now could put the same
+        # orders in two rounds; the old path dropped them instead (in neither the mempool nor
+        # a round, never receipted).
+        print(f"round m{m}: submit outcome unknown ({type(e).__name__}: {e}) — tracking it in flight")
+    # one record per round id: an unchanged rebuild of a released round IS that round, and
+    # two records would each finalize it (duplicate receipts, a second carry of each
+    # sealed remainder). Dropped only now that this record is on its way to the chain.
+    zs = [z for z in _zombies.get(m, []) if z["rid"] != rid or z.get("ok_since") is not None]
+    if zs:
+        _zombies[m] = zs
+    else:
+        _zombies.pop(m, None)
+    for o in sealed + public:
+        order_telemetry.rounded(m, o["account"], o["oid"])
+    return {"ok": True, "queued": True,
+            "cleared": {"sealed": len(sealed), "public": len(public),
+                        "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
+
+def _requeue_unsent(m, taken, ended):
+    """A build failed after taking its orders out of the mempool, before registering the
+    round: put back every one it still owns, at the FRONT in the order they were taken —
+    not those it ended (a terminal was recorded), not those a released round that landed
+    holds (they are that round's to receipt, see _claim), not any already queued (nothing
+    is queued twice). Runs under the market lock, so the resolver can't interleave.
+    Returns the orders re-queued."""
+    skip = set(ended)
+    for z in _zombies.get(m, []):
+        if z.get("ok_since") is not None:
+            skip |= _keys(z)
+    with _lock:
+        skip |= {_okey(o) for o in pending.get(m, [])}
+        back = [o for o in taken if _okey(o) not in skip]
+        pending[m] = back + pending.get(m, [])
+    return back
+
+def _assemble_round(m, base, quote, now, raw, pruned, shrank, plan, resting_orders,
+                    commit_entries, set_key, ended):
+    """The rest of a build, once its orders are out of the mempool: price market orders,
+    enforce the seq discipline (both read the chain), end the orders that can never settle,
+    clear, and build the payload + the in-flight record. Adds the key of every order it ends
+    to `ended`. Returns (record, payload, detail, None), or (None, None, None, reply) when
+    there is nothing to submit. Any exception propagates to _build_round, which re-queues
+    whatever the build still owns."""
     if plan.deferred:                  # observable, non-terminal: waiting for the commit
         for o in plan.deferred:        # distinguish "not on-chain yet" from "on-chain, awaiting β"
             onch = _consumed_entry(o) in commit_entries
@@ -1501,25 +1587,28 @@ def _build_round(m, base, quote):
         # the zombie check above but before the floor reads: look again (now after the
         # floors) so such orders are finalized as the fills they are, not rejected. Nothing
         # else can claim them while we hold the market lock.
-        taken = _resolve_zombies(now, m)
-        if taken:
-            sealed = [o for o in sealed if _okey(o) not in taken]
-            public = [o for o in public if _okey(o) not in taken]
-            dead = [(o, why) for o, why in dead if _okey(o) not in taken]
+        claimed = _resolve_zombies(now, m)
+        if claimed:
+            sealed = [o for o in sealed if _okey(o) not in claimed]
+            public = [o for o in public if _okey(o) not in claimed]
+            dead = [(o, why) for o, why in dead if _okey(o) not in claimed]
     for o, why in dead:
         # truly unsettleable (a newer order of the account settled first — e.g. on another
         # market: floors are per account — or a repeated seq): end it with a receipt that
         # says why, instead of letting it vanish from the trader's view
-        order_expiry.pop((m, o["account"], o["oid"]), None)
         _record_exec(dict(o, market=m, _outcome="rejected", _reason=why), 0, o["price"], False, now)
+        order_expiry.pop((m, o["account"], o["oid"]), None)
+        ended.add(_okey(o))
     if dead:
         _save_execs()
     if not (sealed or public or shrank):
         # nothing to submit (every sealed order is carried hidden or deferred): no round
-        return {"ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
-                "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
-                "resting_hidden": len(plan.carry), "carried_remainder": 0,
-                "expired": len(plan.expired)}}
+        return None, None, None, {
+            "ok": True, "price": disp(mstate(b"lp", m)), "volume": disp(mstate(b"cv", m)),
+            "book": book_of(m), "cleared": {"sealed": len(sealed), "public": len(public),
+            "resting_hidden": len(plan.carry), "carried_remainder": 0,
+            "expired": len(plan.expired)}}
+    hdr = struct.pack("<III", m, base, quote)
     # every round type carries the same signed public section: new orders WITH their
     # signatures (verified in refine), the explicit prune list, and the on-chain book
     # byte-exact (the service hash-checks it — a fabricated book rejects the round).
@@ -1558,9 +1647,7 @@ def _build_round(m, base, quote):
             payload = bytes([TAG_SMATCH]) + hdr + section
     except Exception:
         # the round was never submitted (the committee sidecar failed): nothing is lost —
-        # its orders go back to the front and the market cools down
-        with _lock:
-            pending[m] = sealed + public + pending.get(m, [])
+        # _build_round puts its orders back at the front; the market cools down
         _round_gate[m] = {"check": None, "t": time.time()}
         raise
     # This round's identity — the id refine derives from these exact bytes — and the
@@ -1569,51 +1656,13 @@ def _build_round(m, base, quote):
     minseq = {}
     for o in public:
         minseq[o["account"]] = min(minseq.get(o["account"], o["seq"]), o["seq"])
-    # IN FLIGHT from before the submit: nothing is receipted or carried until the resolver
-    # sees its id marked landed — a round that can't or doesn't settle re-queues these exact
-    # orders instead (no phantom fills, nothing silently lost), and a released round seen
-    # landing from here on claims its orders from this record. A revealed sealed order that
-    # crossed nothing is carried at finalize, not dropped.
-    _inflight[m] = {"t": time.time(), "sealed": sealed, "public": public,
-                    "resting": resting_orders, "clearing": clearing, "pruned": pruned,
-                    "rid": rid, "book_hash": commitment(raw),
-                    "consumed": [_consumed_entry(o) for o in sealed],
-                    "set_key": set_key, "minseq": minseq}
+    rec = {"t": time.time(), "sealed": sealed, "public": public,
+           "resting": resting_orders, "clearing": clearing, "pruned": pruned,
+           "rid": rid, "book_hash": commitment(raw),
+           "consumed": [_consumed_entry(o) for o in sealed],
+           "set_key": set_key, "minseq": minseq}
     detail = f"market {m}: {len(sealed)} sealed + {len(public)} public, vol {disp(clearing['volume'])}"
-    try:
-        submit(payload, check=lambda: _landed_slot(rid) is not None, detail=detail)
-    except ChainBusy:
-        # BACKPRESSURE: every lm node's CE-133 queue is at cap (lasair --wp-queue-cap),
-        # so the round never left the builder. Nothing cleared — put its orders back in
-        # the mempool (they BATCH into the retry, same as gate-held orders) and cool the
-        # market down so retries don't re-flood the fleet. No receipts, no carry, nothing
-        # in flight: the round simply never happened.
-        _inflight.pop(m, None)
-        with _lock:                    # FRONT: they are still the oldest orders of their accounts
-            pending[m] = sealed + public + pending.get(m, [])
-        _round_gate[m] = {"check": None, "t": time.time()}
-        print(f"round m{m}: chain busy — re-queued {len(sealed) + len(public)} order(s), cooling down")
-        return {"ok": False, "backpressure": True, "requeued": len(sealed) + len(public)}
-    except Exception as e:
-        # outcome UNKNOWN (builder timeout, connection reset): the payload may still have been
-        # relayed, so the round stays in flight — its marker says if it landed, and dead
-        # detection or the gate releases it otherwise. Re-queueing now could put the same
-        # orders in two rounds; the old path dropped them instead (in neither the mempool nor
-        # a round, never receipted).
-        print(f"round m{m}: submit outcome unknown ({type(e).__name__}: {e}) — tracking it in flight")
-    # one record per round id: an unchanged rebuild of a released round IS that round, and
-    # two records would each finalize it (duplicate receipts, a second carry of each
-    # sealed remainder). Dropped only now that this record is on its way to the chain.
-    zs = [z for z in _zombies.get(m, []) if z["rid"] != rid or z.get("ok_since") is not None]
-    if zs:
-        _zombies[m] = zs
-    else:
-        _zombies.pop(m, None)
-    for o in sealed + public:
-        order_telemetry.rounded(m, o["account"], o["oid"])
-    return {"ok": True, "queued": True,
-            "cleared": {"sealed": len(sealed), "public": len(public),
-                        "resting_hidden": len(plan.carry), "expired": len(plan.expired)}}
+    return rec, payload, detail, None
 def short(a):
     return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a
 def mempool_entry(o, owner=False):
@@ -1918,7 +1967,9 @@ def record_executions(m, resting, reveal, public, clearing=None):
     # write a per-order receipt for the trader-submitted orders (reveal=sealed, public=rests) and
     # any resting maker that filled, from this round's clearing. `clearing` may be passed in (api_round
     # computes it once, for both the receipt and the sealed-remainder carry); recomputed if omitted.
-    # No-op when nothing crossed.
+    # No receipts when nothing crossed. Every public order the round leaves on the book (unfilled,
+    # part-filled, or a resting maker the price reached but rationing passed over) is also marked
+    # `rested` in the order telemetry, with the clearing price it met (soak_verdict judges by it).
     combined = list(resting) + list(reveal) + list(public)
     if not combined:
         return
@@ -1927,15 +1978,34 @@ def record_executions(m, resting, reveal, public, clearing=None):
     reveal_ids = {o["oid"] for o in reveal}
     now = time.time()
     touched = False
+
+    def crossed(o):
+        # did the order's limit reach this auction's uniform price (eligible to trade at it)?
+        if not c["volume"]:
+            return False
+        return o["price"] >= price if o["side"] == BUY else o["price"] <= price
+
+    def rests(o, filled):
+        # the order (or its remainder) stays on the book: say so in the order telemetry, with
+        # the price it met, so an order outbid in its auction is not later judged a miss
+        order_telemetry.rested(m, o["account"], o["oid"], price, crossed(o), filled=filled,
+                               expires_at=order_expiry.get((m, o["account"], o["oid"])))
+
     for o in reveal + public:                       # this round's own submissions
         o = dict(o, market=m)
         filled = fills.get(o["oid"], 0)
-        if filled == 0 and o["oid"] not in reveal_ids:
-            continue                                # a fully-unfilled public order just rests — no receipt
+        if o["oid"] not in reveal_ids and filled < o["qty"]:
+            rests(o, filled)                        # a public order's remainder rests on the book
+            if filled == 0:
+                continue                            # a fully-unfilled public order: no receipt
         _record_exec(o, filled, price, o["oid"] in reveal_ids, now)
         touched = True
     for o in resting:                               # resting makers that got filled this round
         filled = fills.get(o["oid"], 0)
+        if filled < o["qty"] and (filled > 0 or crossed(o)):
+            # still resting, and this auction changed its story: part-filled, or the price
+            # reached it and rationing passed it over (an untouched maker needs no event)
+            rests(o, filled)
         if filled > 0:
             _record_exec(dict(o, market=m), filled, price, sealed=False, now=now)
             touched = True
