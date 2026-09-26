@@ -157,7 +157,9 @@ python3 offchain/deploy.py --rpc ws://localhost:19800 --chain-spec /tmp/spec.jso
 
 `DEX_SETUP=0` skips the markets and accounts (`1` runs them on a genesis-seeded service
 too); `GENESIS_BALANCE` sets the funding per asset (display units, default 1,000,000);
-`DEPLOY_SERVICE_ID` asks for an id, `DEPLOY_FRESH=1` never reuses. How the Bootstrap
+`DEPLOY_SERVICE_ID` asks for an id, `DEPLOY_FRESH=1` never reuses. The API opens once
+the treasury's JAMKB reserve deposit has landed (`RESERVE_WAIT_SECS`, default 120), so the
+first order is not refused as under-reserved. How the Bootstrap
 instruction was established is in [`offchain/deploy.py`](../offchain/deploy.py).
 lasair nets keep the genesis-seeded service: lasair has no Bootstrap service or JIP-2
 server yet (lasair#68, #69).

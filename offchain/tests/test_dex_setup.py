@@ -216,5 +216,36 @@ class ServerStartup(unittest.TestCase):
         self.assertIs(server.DEFAULT_MARKETS, dex_setup.DEFAULT_MARKETS)
 
 
+class ReserveBeforeTrading(unittest.TestCase):
+    """server.wait_reserved: the API opens once the JAMKB reserve covers the footprint."""
+    def run_wait(self, solvency, timeout=10):
+        import server
+        t, sleeps = [0.0], []
+
+        def sleep(s):
+            sleeps.append(s)
+            t[0] += s
+        saved = server.jamkb_solvency, server.JAMKB_BACKPRESSURE
+        server.jamkb_solvency, server.JAMKB_BACKPRESSURE = solvency, True
+        try:
+            return server.wait_reserved(timeout, poll=2, sleep=sleep, clock=lambda: t[0]), sleeps
+        finally:
+            server.jamkb_solvency, server.JAMKB_BACKPRESSURE = saved
+
+    def test_waits_for_the_deposit_to_land(self):
+        answers = iter([(False, 5), (False, 5), (True, 0)])
+        ok, sleeps = self.run_wait(lambda: next(answers))
+        self.assertEqual((ok, len(sleeps)), (True, 2))
+
+    def test_gives_up_after_the_timeout(self):
+        ok, sleeps = self.run_wait(lambda: (False, 5), timeout=10)
+        self.assertEqual((ok, sum(sleeps)), (False, 10))
+
+    def test_an_unreadable_footprint_is_waited_out_too(self):
+        def boom():
+            raise TimeoutError("reader")
+        self.assertFalse(self.run_wait(boom, timeout=4)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

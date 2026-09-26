@@ -1994,6 +1994,30 @@ def ensure_reserve():
     except Exception as e:
         print("reserve seeding skipped:", e)
 
+RESERVE_WAIT_SECS = float(os.environ.get("RESERVE_WAIT_SECS", "120"))
+def wait_reserved(timeout=None, poll=2.0, sleep=time.sleep, clock=time.monotonic):
+    # Under JAMKB_BACKPRESSURE a new order is refused while the treasury holds less JAMKB
+    # than the service's footprint. ensure_reserve's deposit lands a few blocks after it is
+    # sent, and a service deployed at runtime starts with no reserve at all, so the API
+    # opens once it has landed (or after `timeout`, saying so). Where the footprint is not
+    # readable (jamnp) the obligation reads 0 and this returns at once.
+    if not JAMKB_BACKPRESSURE:
+        return True
+    timeout = RESERVE_WAIT_SECS if timeout is None else timeout
+    deadline, short = clock() + timeout, None
+    while True:
+        try:
+            solvent, short = jamkb_solvency()
+            if solvent:
+                return True
+        except Exception as e:
+            short = f"unreadable: {e}"
+        if clock() >= deadline:
+            print(f"JAMKB reserve still short after {timeout:g}s ({short}): new orders are "
+                  f"refused until it lands")
+            return False
+        sleep(poll)
+
 def ensure_committee():
     # encrypt-until-batch: commit the off-protocol committee keys on-chain (gov-signed), once.
     # Idempotent — if a committee is already committed (node reused across runs), do nothing.
@@ -2387,6 +2411,7 @@ if __name__ == "__main__":
     load_trades(); load_execs()
     try: ensure_markets(); ensure_reserve(); print("listed default markets:", DEFAULT_MARKETS)
     except Exception as e: print("market listing skipped:", e)
+    wait_reserved()
     ensure_committee()
     # service-state gauges, read lazily per scrape (a failed CE-129 read skips the sample)
     metrics.gauge_fn("jamswap_accounts_registered",
