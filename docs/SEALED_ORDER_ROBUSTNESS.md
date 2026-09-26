@@ -184,12 +184,15 @@ Gate reveals on β-finalized commits, not merely accumulated ones. A finalized c
 can never disappear, so the gate never flips back and a revealed round can't be
 rolled back under it. Cost: sealed first-match latency gains the finality lag
 (~2–3 blocks / 12–18 s). That is the honest price of the guarantee, and it's bounded.
-> **Implemented as:** `_sealed_ready_predicate(m, commit_entries, fin)` in
-> `offchain/server.py`. It pins the head height at which each commit is first seen and
-> treats it as final once `finalized_height` reaches that height — a strict safety
-> improvement over R1 (it only ever *delays* a reveal, never reveals a not-on-chain
-> commit), falling back to best-chain membership on a non-finalizing net. Tests:
-> `SealedReadyFinality` in `tests/test_sealed_carry.py`.
+> **Implemented as:** `_sealed_ready_predicate(m, commit_entries, fin, final_entries)` in
+> `offchain/server.py`. Where the backend reads the state at the finalized head (jip2),
+> a commit is final when it is in the commit set there (`final_entries`) — exact,
+> whichever fork it landed on. Otherwise (jamnp; lasair#70) it pins the head height at
+> which each commit is first seen and treats it as final once `finalized_height` reaches
+> that height. Either way it is a strict safety improvement over R1 (it only ever
+> *delays* a reveal, never reveals a not-on-chain commit), falling back to best-chain
+> membership on a non-finalizing net. Tests: `SealedReadyFinality` in
+> `tests/test_sealed_carry.py`, `SealedRevealGate` in `tests/test_finality_reads.py`.
 
 ### R3 — Never drop a revealed order; carry the remainder (fixes F2). *Offchain.*
 Extend the existing `_post_carry_seal` remainder mechanism from partial-fills to the

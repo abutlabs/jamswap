@@ -151,6 +151,17 @@ or `CHAIN_BACKEND=jip2` (any node's JIP-2 RPC at `CHAIN_RPC`, default
 `refine` reading the prior finalized book via historical-lookup — is a later
 optimization.
 
+Durable decisions ask the **state at the finalized head** (`read(key, at="final")`)
+whether what they depend on is there, where the backend reads there (jip2): a sealed
+order is revealed once its commit is in the finalized commit set, and a round is
+receipted once its landed marker (`b"rl"‖round id`) is in the finalized state; each
+fill then carries its round and whether it is final. The jamnp backend cannot read
+there (lasair's reader bridge follows its head; lasair#70), so for it these keep their
+height rule: a commit or landing first seen at head height *h* is final once the
+finalized height reaches *h*. The settle hold is derived: 0 while the finalized head
+moves (within `FINALITY_WINDOW_SLOTS`, 10 slots), else `SETTLE_HOLD_SLOTS` slots (25 =
+150 s) of best-chain survival; `SETTLE_HOLD_SECS` overrides it (lasair6 sets 0).
+
 ## How the clearing price is chosen (`clear()` in `match-engine`)
 
 Every order in a batch clears at **one uniform price `p*`**. The engine considers only
