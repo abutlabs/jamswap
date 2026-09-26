@@ -37,6 +37,7 @@ class FakeBridge:
         self.store = {}              # key hex -> value hex
         self.accept = True
         self.head_hex = "ab" * 32
+        self.read_error = None       # set: /read answers like lasair-reader when it can't read
         self.metrics = ("# HELP lasair_block_height best block height\n"
                         "lasair_block_height 120\nlasair_finalized_height 118\n"
                         "lasair_slot 7000123\nlasair_finalized_slot 7000121\n"
@@ -64,7 +65,9 @@ class FakeBridge:
             def do_GET(self):
                 self._record()
                 u = urlsplit(self.path)
-                if u.path == "/read":
+                if u.path == "/read" and bridge.read_error:
+                    self._reply({"found": False, "error": bridge.read_error})
+                elif u.path == "/read":
                     q = parse_qs(u.query, keep_blank_values=True)
                     v = bridge.store.get(q["key"][0], "")
                     self._reply({"found": bool(v), "service": int(q["service"][0]),
@@ -201,6 +204,18 @@ class JamnpIsUnchanged(unittest.TestCase):
             self.assertEqual(ra, rb)
             self.assertEqual(len(rb), 1)
         self.assertEqual(self.c.read(bytes.fromhex("62010000000200000000")), bytes.fromhex("40420f0000000000"))
+
+    def test_a_reader_that_cannot_read_raises_instead_of_reading_empty(self):
+        # lasair-reader answers {"found": false, "error": ...} when the node is unreachable
+        # or it has no head yet; that is not an absent key (an empty book, zero balances, no
+        # seq floors) — the read must fail closed
+        self.bridge.store["00"] = "01"
+        self.bridge.read_error = "node unreachable: no QUIC connection"
+        with self.assertRaises(chain.ChainError):
+            self.c.read(bytes.fromhex("00"))
+        self.bridge.read_error = None
+        self.assertEqual(self.c.read(bytes.fromhex("00")), b"\x01")
+        self.assertEqual(self.c.read(bytes.fromhex("ff")), b"", "an absent key still reads empty")
 
     def test_submit_is_the_same_request_and_receipt(self):
         payload = bytes([12]) + bytes(range(200))

@@ -176,6 +176,11 @@ class JamnpChain(Chain):
                                    "follows (no finalized or historical reads)")
         r = _http_json(self._need(self.reader_url, "READER_URL")
                        + f"/read?service={self._sid()}&key={key.hex()}")
+        if r.get("error"):
+            # the reader could not read at all (node unreachable, no head yet): that is not
+            # an absent key — reading it as b"" would show an empty book, zero balances and
+            # no seq floors. Raise, as an unreachable bridge does, so callers fail closed.
+            raise ChainError(f"jamnp reader: {r['error']}")
         return bytes.fromhex(r["value_hex"]) if r.get("value_hex") else b""
 
     def submit(self, payload):
