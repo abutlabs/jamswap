@@ -140,7 +140,8 @@ class Netgen(unittest.TestCase):
     def test_dex_backend_follows_the_layout(self):
         self.assertEqual(netgen.dex_backend("lasair-pj-javajam"), "jamnp")   # lasair's bridges
         self.assertEqual(netgen.dex_backend("pj6"), "jip2")
-        self.assertIsNone(netgen.dex_backend("pj-javajam"))
+        self.assertEqual(netgen.dex_backend("pj-javajam"), "jip2")
+        self.assertIsNone(netgen.dex_backend("nolasair"))
 
     def test_jip2_dex_deploys_at_startup_with_no_bridge(self):
         doc = netgen.compose("pj6")["services"]
@@ -182,6 +183,26 @@ class Netgen(unittest.TestCase):
         finally:
             del profiles.PROFILES["_t"]
 
+    def test_pj6_submits_through_its_gateway_only(self):
+        # PolkaJam validators refuse submitWorkPackage: one door, the gateway
+        self.assertNotIn("CHAIN_SUBMIT_RPC", netgen.compose("pj6")["services"]["dex"]["environment"])
+
+    def test_javajam_rpc_from_containers_and_as_a_submission_node(self):
+        # a native JavaJAM (macOS) serves JIP-2 on the host's loopback: containers reach it
+        # at JAVAJAM_RPC_HOST (./dex: host.docker.internal), else at its own service
+        doc = netgen.compose("pj-javajam")["services"]
+        nw = doc["netwatch"]["environment"]["NETWATCH_NODES"].split()
+        self.assertEqual(nw[:3], ["pj%d,polkajam,ws://pj%d:%d" % (i, i, 42400 + i) for i in range(3)])
+        self.assertEqual(nw[3:], ["jj%d,javajam,ws://${JAVAJAM_RPC_HOST:-jj%d}:%d" % (i, i, 42400 + i)
+                                  for i in (3, 4, 5)])
+        env = doc["dex"]["environment"]
+        self.assertEqual(env["CHAIN_RPC"], "ws://rpc:42450")               # reads: the gateway
+        self.assertEqual(env["CHAIN_SUBMIT_RPC"],
+                         "rpc=ws://rpc:42450 jj3=ws://${JAVAJAM_RPC_HOST:-jj3}:42403")
+        self.assertEqual(doc["dex"]["ports"], ["8204:8080"])
+        env42 = netgen.compose("pj-javajam-42")["services"]["dex"]["environment"]
+        self.assertEqual(env42["CHAIN_SUBMIT_RPC"].split()[1], "jj4=ws://${JAVAJAM_RPC_HOST:-jj4}:42504")
+
     def test_the_lasair_dex_stack_is_unchanged(self):
         doc = netgen.compose("lasair-pj-javajam")["services"]
         self.assertEqual(doc["dex"]["depends_on"], ["builder", "reader"])
@@ -207,6 +228,27 @@ class SoakLoad(unittest.TestCase):
     def test_counts(self):
         self.assertEqual(soak.load_counts(self.METRICS), {"offered": 1400, "refused": 3, "busy": 1})
         self.assertEqual(soak.load_counts(""), {"offered": 0, "refused": 0, "busy": 0})
+
+    DEX_METRICS = "\n".join([
+        "# TYPE jamswap_relays_total counter",
+        'jamswap_relays_total{op="commit",via="rpc"} 40', 'jamswap_relays_total{op="round",via="rpc"} 60',
+        'jamswap_relays_total{op="round",via="jj3"} 55', 'jamswap_relays_total{op="reveal",via="jj3"} 9',
+        'jamswap_settled_via_total{op="round",via="rpc"} 60',
+        'jamswap_settled_via_total{op="round",via="jj3"} 54',
+        'jamswap_settled_via_total{op="reveal",via="jj3"} 9', 'jamswap_settled_total{op="round"} 114'])
+
+    def test_rounds_per_submission_node(self):
+        c = soak.via_counts(self.DEX_METRICS)
+        self.assertEqual(c["jj3"], {"relayed": {"round": 55, "reveal": 9},
+                                    "settled": {"round": 54, "reveal": 9}})
+        self.assertEqual(soak.judge_routes(c)["rounds_settled"], {"rpc": 60, "jj3": 63})
+        self.assertTrue(soak.judge_routes(c)["pass"])
+
+    def test_a_node_that_settled_no_round_fails(self):
+        c = soak.via_counts(self.DEX_METRICS.replace('via="jj3"} 54', 'via="jj3"} 0')
+                            .replace('via="jj3"} 9', 'via="jj3"} 0'))
+        self.assertFalse(soak.judge_routes(c)["pass"])
+        self.assertFalse(soak.judge_routes(soak.via_counts(""))["pass"])   # no metrics at all
 
     def test_turned_away_within_one_minus_target(self):
         c = soak.load_counts(self.METRICS)

@@ -255,13 +255,17 @@ def submit(payload, check=None, detail=""):
         except Exception:
             pass
     try:
-        return CHAIN.submit(payload)
+        receipt = CHAIN.submit(payload)
     except ChainBusy as e:
         metrics.refused(tid)           # it can never settle; the caller backs off
         raise ChainBusy(f"{op}: {e}") from None
     except ChainUnsupported:
         metrics.refused(tid)
         raise
+    # the node it went through, where the backend submits through several (jip2
+    # CHAIN_SUBMIT_RPC): counted by node, and named when a round settles
+    metrics.relayed(tid, receipt.get("via") if isinstance(receipt, dict) else None)
+    return receipt
 def storage(key):
     # the value under `key` in the service's storage at the best head (b"" when absent)
     return CHAIN.read(key)
@@ -1245,7 +1249,8 @@ def _finalize_round(m, fr):
         # the prune landed with the round: the expired resting order is off the book now
         order_expiry.pop((m, a, oid), None)
         order_telemetry.terminal(m, a, oid, "expired")
-    print(f"round m{m}: settled on-chain — receipted {len(sealed) + len(public)} order(s), carried {len(carried)}")
+    print(f"round m{m}: settled on-chain — receipted {len(sealed) + len(public)} order(s), carried {len(carried)}"
+          + (f" (round {fr['rid'].hex()[:16]}, via {fr['via']})" if fr.get("via") else ""))
 
 def _round_dead(m, fr):
     """Why the round can no longer settle, or None. These are the preconditions its
@@ -1659,7 +1664,8 @@ def _build_round(m, base, quote):
     # crossed nothing is carried at finalize, not dropped.
     _inflight[m] = rec
     try:
-        submit(payload, check=lambda: _landed_slot(rid) is not None, detail=detail)
+        receipt = submit(payload, check=lambda: _landed_slot(rid) is not None, detail=detail)
+        rec["via"] = receipt.get("via") if isinstance(receipt, dict) else None
     except ChainBusy:
         # BACKPRESSURE: every lm node's CE-133 queue is at cap (lasair --wp-queue-cap),
         # so the round never left the builder. Nothing cleared — put its orders back in

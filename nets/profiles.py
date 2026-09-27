@@ -40,11 +40,11 @@ PROFILES = {
         clients="pj,pj,pj,pj,pbnjam,pbnjam", net=3, finality="grandpa", issue="#19",
         about="4 PolkaJam : 2 pbnjam"),
     "pj-javajam": dict(
-        clients="pj,pj,pj,javajam,javajam,javajam", net=4, finality="grandpa", issue="#18",
-        about="3 PolkaJam : 3 JavaJAM, both GRANDPA (the PR #6 draft between them)"),
+        clients="pj,pj,pj,javajam,javajam,javajam", net=4, finality="grandpa", dex=True,
+        issue="#18", about="3 PolkaJam : 3 JavaJAM, both GRANDPA + the DEX on JIP-2"),
     "pj-javajam-42": dict(
-        clients="pj,pj,pj,pj,javajam,javajam", net=5, finality="grandpa", issue="#18",
-        about="4 PolkaJam : 2 JavaJAM, both GRANDPA"),
+        clients="pj,pj,pj,pj,javajam,javajam", net=5, finality="grandpa", dex=True,
+        issue="#18", about="4 PolkaJam : 2 JavaJAM, both GRANDPA + the DEX on JIP-2"),
     "lasair-pj-javajam": dict(
         clients="lasair,lasair,pj,pj,javajam,javajam", net=6, finality="grandpa",
         dex=True, issue="#20",

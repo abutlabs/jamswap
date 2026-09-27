@@ -91,6 +91,18 @@ class RoundBackpressure(unittest.TestCase):
         entry = next(e for e in metrics.pending_snapshot() if e["id"] == tid)
         self.assertEqual(entry["state"], "refused")
 
+    def test_relays_are_counted_by_submission_node(self):
+        # jip2 with CHAIN_SUBMIT_RPC: the node each payload went through, on the entry and
+        # in jamswap_relays_total; a backend with one door (no via) adds nothing
+        tid = metrics.track("round", "test", check=lambda: False)
+        metrics.relayed(tid, "jj3")
+        entry = next(e for e in metrics.pending_snapshot() if e["id"] == tid)
+        self.assertEqual(entry["via"], "jj3")
+        self.assertIn('jamswap_relays_total{op="round",via="jj3"} 1', metrics.render())
+        tid = metrics.track("deposit", "test")
+        metrics.relayed(tid, None)
+        self.assertNotIn('op="deposit",via=', metrics.render())
+
     @staticmethod
     def _raise_busy(payload, check=None, detail=""):
         raise server.ChainBusy("all guarantors refused (CE-133 queues full)")

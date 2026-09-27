@@ -129,7 +129,7 @@ class Submission(unittest.TestCase):
             "accepted": True, "package_hash": H(package).hex(), "core": 0,
             "anchor": PARENT.hex(), "anchor_slot": 999, "lookup_anchor": GRANDPARENT.hex(),
             "lookup_anchor_slot": 998,
-            "refused": []})
+            "refused": [], "via": self.node.url[len("ws://"):]})
 
     def test_consecutive_packages_alternate_cores(self):
         cores = [self.c.submit(bytes([i]))["core"] for i in range(5)]
@@ -299,6 +299,18 @@ class Configuration(unittest.TestCase):
             c.submit(b"x")
         self.assertEqual(self.node.calls("submitWorkPackage"), [])
 
+    def test_from_env_submission_nodes(self):
+        c = chain.from_env({"CHAIN_BACKEND": "jip2", "CHAIN_RPC": "ws://rpc:1",
+                            "CHAIN_SUBMIT_RPC": "gw=ws://rpc:1, ws://jj3:2"})
+        self.assertEqual([n for n, _ in c._via], ["gw", "jj3:2"])
+        self.assertIs(c._via[0][1], c.rpc)                  # the read node's connection
+        self.assertEqual(c._via[1][1].url, "ws://jj3:2")
+        self.assertIn("submits via gw, jj3:2", c.describe())
+        self.assertEqual(chain.from_env({"CHAIN_BACKEND": "jip2"})._via[0][0], "localhost:19800")
+        for bad in ("http://x:1", "gw=", "jj3:2"):
+            with self.assertRaises(ValueError):
+                chain.parse_endpoints(bad)
+
     def test_from_env(self):
         c = chain.from_env({"CHAIN_BACKEND": "jip2", "SERVICE_ID": "42",
                             "AUTHORIZER": f"0:{AUTH.code_hash.hex()}"})
@@ -308,6 +320,72 @@ class Configuration(unittest.TestCase):
         self.assertFalse(chain.from_env({"CHAIN_BACKEND": "jip2"}).submits)
         with self.assertRaises(ValueError):
             chain.from_env({"CHAIN_BACKEND": "jip2", "AUTHORIZER": "0:beef"})
+
+
+class SubmissionNodes(unittest.TestCase):
+    """submit_via: packages through several nodes, one each in turn; reads from one."""
+    def setUp(self):
+        self.reads, self.a, self.b = FakeSubmitNode(), FakeSubmitNode(), FakeSubmitNode()
+        self.c = chain.Jip2Chain(SID, self.reads.url, timeout=5, authorizer=AUTH,
+                                 submit_via=[("a", self.a.url), ("b", self.b.url)])
+
+    def tearDown(self):
+        for _, node in self.c._via:
+            node.close()
+        self.c.rpc.close()
+        for n in (self.reads, self.a, self.b):
+            n.stop()
+
+    def test_packages_alternate_nodes_and_reads_stay_on_one(self):
+        vias = [self.c.submit(bytes([i]))["via"] for i in range(4)]
+        self.assertEqual(vias, ["a", "b", "a", "b"])
+        self.assertEqual((len(self.a.sent), len(self.b.sent), len(self.reads.sent)), (2, 2, 0))
+        self.assertEqual(self.a.calls("bestBlock"), [])      # the package is built from `reads`
+        self.assertTrue(self.reads.calls("bestBlock"))
+
+    def test_each_node_takes_the_cores_in_turn(self):
+        # two nodes in turn over two cores: not node a on core 0 and node b on core 1 forever
+        got = [(r["via"], r["core"]) for r in (self.c.submit(bytes([i])) for i in range(4))]
+        self.assertEqual(got, [("a", 0), ("b", 0), ("a", 1), ("b", 1)])
+
+    def test_a_node_refusing_every_core_passes_the_package_on(self):
+        self.a.refuse = {0: RpcError(0, "no guarantor"), 1: RpcError(0, "no guarantor")}
+        r = self.c.submit(b"x")
+        self.assertEqual((r["via"], r["core"]), ("b", 0))
+        self.assertEqual([x.split(":")[0] for x in r["refused"]], ["a core 0", "a core 1"])
+        self.assertEqual(self.c.submit(b"y")["via"], "b")    # next in turn after b: a refuses
+
+    def test_an_unreachable_node_is_skipped_before_anything_is_sent(self):
+        self.a.stop()
+        self.c._via[0][1].close()
+        r = self.c.submit(b"x")
+        self.assertEqual(r["via"], "b")
+        self.assertIn("a: unreachable", r["refused"][0])
+
+    def test_every_node_refusing_is_busy(self):
+        for n in (self.a, self.b):
+            n.refuse = {0: RpcError(0, "full"), 1: RpcError(0, "full")}
+        with self.assertRaisesRegex(chain.ChainBusy, "every node and core"):
+            self.c.submit(b"x")
+        self.assertEqual(len(self.a.calls("submitWorkPackage")) + len(self.b.calls("submitWorkPackage")), 4)
+
+    def test_a_node_without_submission_passes_it_on(self):
+        del self.a.methods["submitWorkPackage"]
+        self.assertEqual(self.c.submit(b"x")["via"], "b")
+        del self.b.methods["submitWorkPackage"]
+        with self.assertRaises(chain.ChainUnsupported):
+            self.c.submit(b"x")
+
+    def test_a_dropped_submission_is_unknown_and_not_passed_on(self):
+        self.a.drop_on.add("submitWorkPackage")
+        with self.assertRaisesRegex(chain.ChainError, "via a: outcome unknown"):
+            self.c.submit(b"x")
+        self.assertEqual(self.b.calls("submitWorkPackage"), [])
+
+    def test_for_service_keeps_the_submission_nodes(self):
+        boot = self.c.for_service(0)
+        self.assertEqual([n for n, _ in boot._via], ["a", "b"])
+        self.assertIs(boot._via[1][1], self.c._via[1][1])
 
 
 if __name__ == "__main__":

@@ -30,12 +30,14 @@ Backends (CHAIN_BACKEND):
                    serviceData, parameters. Submission builds a GP 0.8.0 work-package
                    (workpackage.py) and sends it with submitWorkPackage; the authorizer
                    comes from AUTHORIZER, or from the JIP-4 chain spec at CHAIN_SPEC
-                   (chainspec.py).
+                   (chainspec.py). CHAIN_SUBMIT_RPC lists the nodes packages are sent
+                   through, one package each in turn (default: CHAIN_RPC's node).
 
 SERVICE_ID names the service. It comes from genesis (lasair nets) or from a runtime
 deploy through the chain's Bootstrap service over JIP-2 (deploy.py, issue #13).
 """
 import json, os, time, urllib.request
+from urllib.parse import urlsplit
 from typing import NamedTuple, Optional
 
 import chainspec
@@ -244,26 +246,60 @@ class JamnpChain(Chain):
 
 
 # ---- jip2: the JIP-2 node RPC ------------------------------------------------
+def endpoint_name(url):
+    """A JIP-2 endpoint's short name: its host:port."""
+    return urlsplit(url).netloc or url
+
+
+def parse_endpoints(text):
+    """CHAIN_SUBMIT_RPC: JIP-2 endpoints separated by spaces or commas, each URL or
+    NAME=URL -> [(name, url)]; a name defaults to the URL's host:port."""
+    out = []
+    for spec in text.replace(",", " ").split():
+        name, sep, url = spec.partition("=")
+        if not sep or "://" in name:
+            name, url = endpoint_name(spec), spec
+        if urlsplit(url).scheme not in ("ws", "wss") or not name:
+            raise ValueError(f"CHAIN_SUBMIT_RPC: {spec!r} is not [NAME=]ws(s)://host:port")
+        out.append((name, url))
+    return out
+
+
 class Jip2Chain(Chain):
     name = "jip2"
 
     def __init__(self, service_id=None, url="ws://localhost:19800", timeout=30.0, client=None,
                  authorizer=None, chain_spec=None, cores=None, refine_gas=None,
-                 accumulate_gas=None):
+                 accumulate_gas=None, submit_via=None):
+        """submit_via: the nodes work-packages are submitted through, one package each in
+        turn: [(name, url)], [(name, Jip2Client)] or [url] (default: this node). Reads
+        always go to `url`."""
         super().__init__(service_id)
         self.url = url
         self.rpc = client or jip2.Jip2Client(url, timeout)
         self._init_submission(authorizer, chain_spec, cores, refine_gas, accumulate_gas)
+        via = []
+        for v in submit_via or [(endpoint_name(url), self.rpc)]:
+            name, node = (endpoint_name(v), v) if isinstance(v, str) else v
+            if isinstance(node, str):
+                node = self.rpc if node == url else jip2.Jip2Client(node, timeout)
+            via.append((name, node))
+        # the next node, and each node's next core: every node takes the cores in turn by
+        # itself, so two nodes in turn never settle into one core each
+        self._via, self._next_via, self._next_core = via, 0, [0] * len(via)
 
     def describe(self):
-        return f"jip2 ({self.url}; service {self.service_id})"
+        via = "" if [n for n, _ in self._via] == [endpoint_name(self.url)] else \
+            "; submits via " + ", ".join(n for n, _ in self._via)
+        return f"jip2 ({self.url}{via}; service {self.service_id})"
 
     def for_service(self, service_id):
-        """The same node, connection and submission settings, for another service (the
+        """The same node, connections and submission settings, for another service (the
         chain's Bootstrap service, say)."""
         return Jip2Chain(service_id, self.url, client=self.rpc, authorizer=self.authorizer,
                          chain_spec=self.chain_spec, cores=self.cores,
-                         refine_gas=self.refine_gas, accumulate_gas=self.accumulate_gas)
+                         refine_gas=self.refine_gas, accumulate_gas=self.accumulate_gas,
+                         submit_via=self._via)
 
     def _call(self, fn, *args):
         # the node refused (Jip2Error), the transport failed (OSError), or the answer was
@@ -376,7 +412,6 @@ class Jip2Chain(Chain):
         self.refine_gas, self.accumulate_gas = refine_gas, accumulate_gas
         self._params = None
         self._auth_checked = False
-        self._next_core = 0
 
     @property
     def submits(self):
@@ -525,10 +560,12 @@ class Jip2Chain(Chain):
     def submit(self, payload):
         """Send `payload` in its own work-package to the guarantors of the next core that
         accepts the authorizer; on a refusal (JIP-2: the package reached no guarantor) try
-        the next core. The receipt names the package, core and anchor, for
-        package_status(). ChainBusy: nothing was sent, because every core refused or the
-        node could not serve the reads that build the package. Settlement is seen in the
-        service's state, as for any backend."""
+        the next core. With several submission nodes (submit_via), each package goes
+        through the next node in turn, and one that refuses on every core, or cannot be
+        reached, passes it to the next. The receipt names the package, core, anchor and
+        node (`via`), for package_status(). ChainBusy: nothing was sent, because every
+        node and core refused or the reads that build the package failed. Settlement is
+        seen in the service's state, as for any backend."""
         return self.submit_items([payload])
 
     def submit_items(self, payloads):
@@ -543,24 +580,43 @@ class Jip2Chain(Chain):
         except ChainError as e:
             raise ChainBusy(f"not sent: {e}") from e
         package_hash = workpackage.blake2b256(package)
-        refused = []
-        for k in range(len(self.cores)):
-            core = self.cores[(self._next_core + k) % len(self.cores)]
-            try:
-                self.rpc.submit_work_package(core, package)
-            except jip2.Jip2Error as e:
-                if e.code == -32601:           # JSON-RPC "method not found"
-                    raise ChainUnsupported(f"jip2: the node has no submitWorkPackage: {e}") from e
-                refused.append(f"core {core}: {e}")
-                continue
-            except (OSError, ValueError) as e:
-                raise ChainError(f"jip2 submitWorkPackage: outcome unknown: {e}") from e
-            self._next_core = (self._next_core + k + 1) % len(self.cores)
-            return {"accepted": True, "package_hash": package_hash.hex(), "core": core,
-                    "anchor": ctx.anchor.hex(), "anchor_slot": ctx.anchor_slot,
-                    "lookup_anchor": ctx.lookup_anchor.hex(),
-                    "lookup_anchor_slot": ctx.lookup_anchor_slot, "refused": refused}
-        raise ChainBusy("every core refused the package: " + "; ".join(refused))
+        refused, unsupported = [], []
+        many = len(self._via) > 1
+        for j in range(len(self._via)):
+            i = (self._next_via + j) % len(self._via)
+            name, node = self._via[i]
+            at = f"{name} " if many else ""
+            if many:
+                try:
+                    node.connect()             # unreachable: nothing sent, try the next node
+                except OSError as e:
+                    refused.append(f"{name}: unreachable: {e}")
+                    continue
+            for k in range(len(self.cores)):
+                core = self.cores[(self._next_core[i] + k) % len(self.cores)]
+                try:
+                    node.submit_work_package(core, package)
+                except jip2.Jip2Error as e:
+                    if e.code == -32601:       # JSON-RPC "method not found"
+                        unsupported.append(f"{name}: {e}")
+                        break
+                    refused.append(f"{at}core {core}: {e}")
+                    continue
+                except (OSError, ValueError) as e:
+                    raise ChainError(f"jip2 submitWorkPackage via {name}: outcome unknown: "
+                                     f"{e}") from e
+                self._next_core[i] = (self._next_core[i] + k + 1) % len(self.cores)
+                self._next_via = (i + 1) % len(self._via)
+                return {"accepted": True, "package_hash": package_hash.hex(), "core": core,
+                        "anchor": ctx.anchor.hex(), "anchor_slot": ctx.anchor_slot,
+                        "lookup_anchor": ctx.lookup_anchor.hex(),
+                        "lookup_anchor_slot": ctx.lookup_anchor_slot, "refused": refused,
+                        "via": name}
+        if unsupported and len(unsupported) == len(self._via):
+            raise ChainUnsupported("jip2: no submitWorkPackage on the node(s): "
+                                   + "; ".join(unsupported))
+        raise ChainBusy(("every node and core" if many else "every core")
+                        + " refused the package: " + "; ".join(refused + unsupported))
 
     def package_status(self, receipt, at="best"):
         """JIP-2 workPackageStatus of a submitted package at `at`: {"Reportable": ...},
@@ -577,7 +633,8 @@ BACKENDS = ("jamnp", "jip2")
 def from_env(env=None):
     """The backend the environment selects. CHAIN_BACKEND defaults to jamnp, configured
     by BUILDER_URL / READER_URL / NODE_METRICS_URL; jip2 is configured by CHAIN_RPC, and
-    submits with the authorizer AUTHORIZER names or CHAIN_SPEC's genesis holds.
+    submits with the authorizer AUTHORIZER names or CHAIN_SPEC's genesis holds, through
+    the nodes CHAIN_SUBMIT_RPC lists (default: CHAIN_RPC's).
     Nothing touches the network here."""
     env = os.environ if env is None else env
     sid = int(env["SERVICE_ID"]) if env.get("SERVICE_ID") else None
@@ -588,5 +645,6 @@ def from_env(env=None):
     if backend == "jip2":
         return Jip2Chain(sid, env.get("CHAIN_RPC") or "ws://localhost:19800",
                          authorizer=env.get("AUTHORIZER") or None,
-                         chain_spec=env.get("CHAIN_SPEC") or None)
+                         chain_spec=env.get("CHAIN_SPEC") or None,
+                         submit_via=parse_endpoints(env.get("CHAIN_SUBMIT_RPC") or "") or None)
     raise ValueError(f"CHAIN_BACKEND={backend!r}: expected one of {', '.join(BACKENDS)}")

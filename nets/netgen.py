@@ -241,9 +241,13 @@ def dex_services_jamnp(p, ns):
 
 
 def _jip2_url(n):
-    # a container node's JIP-2 RPC on the net. A JavaJAM node running natively on macOS
-    # serves it on the host's loopback, which no container reaches: a jip2 DEX net with
-    # JavaJAM needs its Docker runner (JAVAJAM_RUNNER=docker, Linux) until #18/#20.
+    # a node's JIP-2 RPC as the net's containers reach it: its service on the net. A
+    # JavaJAM node running natively (macOS) serves it on the host's loopback instead,
+    # which containers reach at Docker Desktop's host.docker.internal: ./dex sets
+    # JAVAJAM_RPC_HOST to that for the native runner, and leaves it unset for the Docker
+    # runner (the node's own service then).
+    if n["client"] == "javajam":
+        return "ws://${JAVAJAM_RPC_HOST:-%s}:%d" % (n["service"], n["rpc"])
     return "ws://%s:%d" % (n["service"], n["rpc"])
 
 
@@ -257,14 +261,37 @@ def gateway(p):
     return {"service": "rpc", "client": "polkajam", "port": quic + 50, "rpc": rpc + 50}
 
 
+# clients whose validator RPC takes work-packages (JIP-2 submitWorkPackage) and passes them
+# to the core's guarantors. Observed black box (jamswap#18): JavaJAM 0.4.3 validators do;
+# PolkaJam's (nightly-2026-09-22) answer "Failed to submit work-package to even a single
+# proxy/guarantor", hence the gateway node.
+VALIDATOR_SUBMITS = ("javajam",)
+
+
+def submission_nodes(p, ns):
+    """NAME=URL of every node the DEX submits through, one package each in turn: its
+    gateway, then the first validator of each client in VALIDATOR_SUBMITS, so that
+    client's submission path carries DEX rounds too."""
+    gw = gateway(p)
+    out = ["%s=ws://%s:%d" % (gw["service"], gw["service"], gw["rpc"])]
+    for c in VALIDATOR_SUBMITS:
+        first = next((n for n in ns if n["client"] == c and n["rpc"]), None)
+        if first:
+            out.append("%s=%s" % (first["service"], _jip2_url(first)))
+    return out
+
+
 def dex_services_jip2(p, ns, ctx):
     """The DEX on its gateway node's JIP-2 RPC, with no SERVICE_ID: at startup the dex
     deploys the service through the Bootstrap service and lists the markets and funds
     the dev accounts with ordinary work-items (offchain/deploy.py, dex_setup.py), the
     authorizer taken from the net's spec.json. Beside it the load generator (./dex load)
-    and netwatch over every validator (A1-A3; `./dex soak` drives both)."""
+    and netwatch over every validator (A1-A3; `./dex soak` drives both). Where a client's
+    validators take work-packages themselves, the dex also submits through one of them,
+    in turn with the gateway (CHAIN_SUBMIT_RPC; submission_nodes)."""
     rpc_nodes = [n for n in ns if n["rpc"]]
     gw = gateway(p)
+    via = submission_nodes(p, ns)
     offchain = "%s/offchain:/app:ro" % CTX
     blob = "%s/service/jamswap-service.jam:/work/jamswap-service.jam:ro" % CTX
     dex_build = {"context": CTX, "dockerfile": "offchain/Dockerfile"}
@@ -276,13 +303,16 @@ def dex_services_jip2(p, ns, ctx):
             "volumes": ["shared:/shared"],
             "ports": [_udp(gw), _rpc(gw)],
             "networks": {"net": {}}, "restart": "unless-stopped"}
+    dex_env = {"CHAIN_BACKEND": "jip2", "CHAIN_RPC": _jip2_url(gw)}
+    if len(via) > 1:
+        dex_env["CHAIN_SUBMIT_RPC"] = " ".join(via)
     return {
         gw["service"]: node,
         "dex": {
             "build": dex_build,
             "depends_on": {"spec-init": {"condition": "service_completed_successfully"},
                            gw["service"]: {"condition": "service_started"}},
-            "environment": {"CHAIN_BACKEND": "jip2", "CHAIN_RPC": _jip2_url(gw),
+            "environment": dict(dex_env, **{
                             "CHAIN_SPEC": "/shared/spec.json",
                             "SERVICE_CODE": "/work/jamswap-service.jam",
                             "DEPLOY_STATE": "/shared/jamswap_deploy.json",
@@ -291,7 +321,7 @@ def dex_services_jip2(p, ns, ctx):
                             # order after ~15 min (server.py, reserve keeper)
                             "RESERVE_TOPUP": "1",
                             "PORT": "8080", "PYTHONUNBUFFERED": "1",
-                            "ORDER_EVENTS_FILE": "/shared/order_events.jsonl"},
+                            "ORDER_EVENTS_FILE": "/shared/order_events.jsonl"}),
             "volumes": [offchain, blob, "shared:/shared"],
             "working_dir": "/app", "command": ["python3", "server.py"],
             "ports": ["%d:8080" % (8200 + p["net"])],
@@ -382,6 +412,13 @@ def header(name):
             "dev accounts. netwatch over every validator: 127.0.0.1:%d (/metrics, /verdict)."
             % netwatch_port(p),
         ]
+        via = [v.split("=", 1)[0] for v in submission_nodes(p, ns)]
+        if len(via) > 1:
+            lines += [
+                "Work-packages go through %s in turn (CHAIN_SUBMIT_RPC): %s's validator RPC"
+                % (", ".join(via[:-1]) + " and " + via[-1], " and ".join(via[1:])),
+                "takes them itself, where a PolkaJam validator's does not.",
+            ]
     lines += [
         "",
         "  i  client    service  JAMNP-S udp  RPC (host 127.0.0.1)",
@@ -496,6 +533,9 @@ def main(argv):
         print("NET_FINALITY=%s" % _sh(p.get("finality", "")))
         print("NET_JAVAJAM=%s" % _sh(" ".join("%d:%d:%d" % (n["index"], n["port"], n["rpc"])
                                               for n in ns if n["client"] == "javajam")))
+        # the other validators' compose services (./dex starts them before anything else)
+        print("NET_OTHER_VALIDATORS=%s" % _sh(" ".join(n["service"] for n in ns
+                                                       if n["client"] != "javajam")))
         print("JAVAJAM_IMAGES=%s" % _sh(" ".join("%s=%s" % kv for kv in profiles.JAVAJAM_IMAGES.items())))
     else:
         sys.exit(__doc__.split("\n\n")[1])

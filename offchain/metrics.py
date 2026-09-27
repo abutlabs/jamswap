@@ -123,6 +123,8 @@ _seq = [0]
 describe("jamswap_submits_total", "state-mutating payloads relayed to the chain, by op")
 describe("jamswap_refused_total", "submissions every guarantor refused (CE-133 mempool at cap), by op")
 describe("jamswap_settled_total", "tracked ops whose on-chain effect became visible, by op")
+describe("jamswap_relays_total", "payloads a submission node accepted, by op and node (via)")
+describe("jamswap_settled_via_total", "tracked ops settled, by op and the node they went through")
 describe("jamswap_settle_timeouts_total", "tracked ops with no visible effect within the timeout, by op")
 describe("jamswap_settle_latency_seconds", "submit -> state-visible latency for tracked ops, by op")
 describe("jamswap_api_requests_total", "HTTP API requests, by route and status code")
@@ -143,6 +145,19 @@ def track(op, detail, check=None):
         for x in resolved[:-LEDGER_KEEP]:
             _ledger.remove(x)
     return e["id"]
+
+def relayed(entry_id, via):
+    """The relay was accepted by the chain adapter's submission node `via` (None: a
+    backend with one door, nothing to add): count it by op and node, and keep the node on
+    the entry so its settlement is counted by node too (jamswap_settled_via_total)."""
+    if not via:
+        return
+    with _ledger_lock:
+        for e in reversed(_ledger):
+            if e["id"] == entry_id:
+                e["via"] = via
+                inc("jamswap_relays_total", {"op": e["op"], "via": via})
+                break
 
 def refused(entry_id):
     """The relay never reached the chain — every guarantor refused it (CE-133
@@ -166,6 +181,7 @@ def pending_snapshot():
                  "timed_out" if e["timed_out"] else
                  "pending" if e["check"] else "submitted")
         out.append({"id": e["id"], "op": e["op"], "detail": e["detail"], "state": state,
+                    "via": e.get("via"),
                     "age": round(now - e["submitted"], 1),
                     "latency": round(e["settled"] - e["submitted"], 1) if e["settled"] else None})
     return out
@@ -185,6 +201,8 @@ def _watch():
             if done:
                 e["settled"] = now
                 inc("jamswap_settled_total", {"op": e["op"]})
+                if e.get("via"):
+                    inc("jamswap_settled_via_total", {"op": e["op"], "via": e["via"]})
                 observe("jamswap_settle_latency_seconds", {"op": e["op"]},
                         now - e["submitted"])
             elif now - e["submitted"] > SETTLE_TIMEOUT:

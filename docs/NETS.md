@@ -201,14 +201,17 @@ not to a validator. A validator's other JIP-2 calls (heads, finality, storage) w
 netwatch reads those.
 
 **`./dex soak NET=pj6 [SECS]`** ([`nets/soak.py`](../nets/soak.py)) is the epic's shared
-acceptance in one command, on a freshly started net: loadgen on and `netwatch poll
---require-finality` over the six validators for SECS + 180 s of drain (A1 one head,
-A2 finality on every node), then `netwatch parity` at the common finalized head (A3:
-books, balances, custody, registry, landed-round markers on every node), then
-`soak_verdict.py <the dex's order events> --chain --parity` (A4), and the offered load
-as the load generator counted it (at most 1 − target refused or busy). Everything lands
-in `~/.cache/jamswap/soak/<net>-<UTC time>/` (`--out` to choose) with a `DONE` marker;
-exit 0 iff all four pass.
+acceptance in one command, on a freshly started net: a 60-s `netwatch poll` with no load
+that must pass first (a net that did not form exits 2, unsoaked), then loadgen on and
+`netwatch poll --require-finality` over the six validators for SECS + 180 s of drain
+(A1 one head, A2 finality on every node), then `netwatch parity` at the common finalized
+head (A3: books, balances, custody, registry, landed-round markers on every node), then
+`soak_verdict.py <the dex's order events> --chain --parity` (A4), the offered load as
+the load generator counted it (at most 1 − target refused or busy), and the submission
+nodes (every node the dex submitted through settled at least one round; the dex's
+`jamswap_relays_total` / `jamswap_settled_via_total` by `via`). Everything lands in
+`~/.cache/jamswap/soak/<net>-<UTC time>/` (`--out` to choose; `rounds.txt` lists every
+settled round and its node) with a `DONE` marker; exit 0 iff all five pass.
 
 **Why a reserve keeper.** On JIP-2 the service's footprint is readable, so the JAMKB
 standard's backpressure is live (on lasair nets the footprint reads 0). The first
@@ -255,6 +258,54 @@ final and it waits hidden in the mempool for a counterparty, never revealed alon
 filled by a later auction (latency counts from placement). In the first epoch after
 genesis the gateway refuses packages ("storage access error: invalid epoch N, reference
 epoch is 0"); the deploy retries through it and the API opens ~1–2 min after `up`.
+
+### The DEX on PolkaJam + JavaJAM: pj-javajam (#18)
+
+`./dex up NET=pj-javajam` runs three PolkaJam validators (Docker) and three JavaJAM 0.4.3
+validators (native on macOS), both `--finality-mode grandpa`, and the same JIP-2 DEX
+stack as pj6: the `rpc` gateway (`127.0.0.1:42450`), `dex` (UI `:8204`), `loadgen`,
+`netwatch` (`127.0.0.1:9304`). `pj-javajam-42` (4 : 2) has the same stack, UI `:8205`;
+it has not been run. What differs from pj6:
+
+- **Start, in stages.** The genesis minter; JavaJAM, until every JavaJAM node answers on
+  its JIP-2 RPC (its JVM takes a few seconds; a fixed pause was often too short), plus
+  5 s; then the PolkaJam validators alone; then a 56-s check that every validator
+  follows the chain and finalizes (`up` exits 1 if not: start a fresh net); only then
+  the gateway, dex, loadgen and netwatch. Why: PolkaJam casts its round-1 GRANDPA votes
+  once, as it starts, and never re-sends them (the #18 diagnosis), so they must reach
+  every JavaJAM node at that moment. Starting everything at once failed 5 times in 5 on
+  the loaded test Mac; staged, the first `up` of each soak formed.
+- **JavaJAM's RPC from containers.** A native JavaJAM serves JIP-2 on the host's
+  loopback, which containers reach at `host.docker.internal` (Docker Desktop):
+  `JAVAJAM_RPC_HOST`, which `./dex` sets for the native runner (the Docker runner uses
+  the node's service name). netwatch reads all six validators, JavaJAM included.
+- **Rounds through JavaJAM's RPC.** A JavaJAM validator takes work-packages itself
+  (`submitWorkPackage` answers `null` and it forwards the package to the core's
+  guarantors, PolkaJam or JavaJAM), where a PolkaJam validator refuses. So the dex
+  submits through the gateway and jj3 in turn, one package each (`CHAIN_SUBMIT_RPC=
+  "rpc=ws://rpc:42450 jj3=ws://host.docker.internal:42403"`; reads stay on the
+  gateway; a node that refuses on every core or cannot be reached passes the package
+  to the next). Each settled round names its node in the dex log (`round m1: settled
+  on-chain — receipted 3 order(s), carried 0 (round 02321d3e11b234c3, via jj3)`), the
+  dex counts relays and settlements by node, and `./dex soak` fails unless every
+  submission node settled at least one round.
+
+**JavaJAM 0.4.3's JIP-2, observed** (black box: each method called on jj3, a
+validator, beside PolkaJam's pj0 on the same net). Served as JIP-2 describes:
+`parameters`, `bestBlock`, `finalizedBlock`, `parent`, `stateRoot`, `beefyRoot`,
+`statistics`, `serviceData`, `serviceValue`, `servicePreimage`, `serviceRequest`,
+`listServices`, `workPackageStatus`, `syncState`, `workReport` (code 2 when unknown),
+`fetchWorkPackageSegments` / `fetchSegments` (code 3), `submitWorkPackageBundle`, the
+`subscribe*` methods (a numeric id), and `submitWorkPackage` on a validator (above).
+Where it differs:
+
+JAVAJAM_DIFFS
+
+**Results** (2026-09-27, Apple M1 Pro, Docker Desktop 8 GB, the host shared with other
+jobs: load average 23–37 on 10 cores, swap 9.7 of 10.5 GB in use; fresh net per soak;
+loadgen as for pj6):
+
+RESULTS_PJJJ
 
 ### What the clients did (2026-09-26)
 

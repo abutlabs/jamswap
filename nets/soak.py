@@ -6,6 +6,9 @@ whose DEX runs on JIP-2 (the dex, loadgen and netwatch services nets/netgen.py a
     ./dex soak NET=<name> [SECS]
 
   1. waits for the DEX API and reads the service id the dex deployed (its deploy state);
+     then a short `netwatch poll` (--precheck, 60 s) must pass before any load: a net that
+     did not form (a node stuck at genesis, finality not advancing everywhere) is reported
+     as such, not soaked for an hour and failed on A1/A2;
   2. starts the load generator, and `netwatch poll` over every node for SECS + DRAIN
      seconds, with --require-finality on a GRANDPA net: A1 one head, A2 finality;
   3. after SECS stops the load, so the last rounds settle within DRAIN;
@@ -15,13 +18,19 @@ whose DEX runs on JIP-2 (the dex, loadgen and netwatch services nets/netgen.py a
      clearing SLO >= 0.9999, sealed zero-loss, and the chain half folded in;
   6. the offered load, as the load generator counted it just before it stopped: the SLO
      judges only orders the DEX accepted, so a DEX that turned the load away (a 4xx/5xx
-     to every order) would otherwise pass. At most 1 - target of it may be refused.
+     to every order) would otherwise pass. At most 1 - target of it may be refused;
+  7. the submission nodes (the dex's jamswap_relays_total / jamswap_settled_via_total):
+     every node the dex submitted through (its gateway, and on a net whose clients'
+     validators take work-packages, one of those: CHAIN_SUBMIT_RPC) must have carried at
+     least one round that settled, or the net's claim to route rounds through it fails.
 
 Run it on a freshly started net (`./dex up`): the verdict judges the dex's whole order
 event log. Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>):
-poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl, verdict.txt,
-verdict.json, loadgen.txt, soak.log, and DONE (written last: each step's result). Exit 0
-iff the poll, the parity probe, the soak verdict and the offered load all pass.
+precheck.txt, poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl,
+verdict.txt, verdict.json, loadgen.txt, dex_metrics.txt, rounds.txt (every settled round
+and the node it went through), soak.log, and DONE (written last: each step's result).
+Exit 0 iff the poll, the parity probe, the soak verdict, the offered load and the
+submission nodes all pass; 2 if the precheck failed (nothing was soaked).
 """
 import argparse
 import json
@@ -75,6 +84,31 @@ class Soak:
 
 LOADGEN_METRICS = ("import urllib.request; print(urllib.request.urlopen("
                    "'http://localhost:9111/metrics', timeout=10).read().decode())")
+DEX_METRICS = LOADGEN_METRICS.replace("9111", "8080")
+ROUND_OPS = ("round", "reveal", "enc_round")      # the work-items that settle a round
+
+
+def via_counts(metrics_text):
+    """{node: {"relayed": {op: n}, "settled": {op: n}}} from the dex's /metrics:
+    jamswap_relays_total and jamswap_settled_via_total, labelled {op, via}."""
+    out = {}
+    series = {"jamswap_relays_total": "relayed", "jamswap_settled_via_total": "settled"}
+    for line in metrics_text.splitlines():
+        name = line.split("{")[0]
+        if name not in series or line.startswith("#") or "{" not in line:
+            continue
+        labels = dict(kv.split("=", 1) for kv in line[line.index("{") + 1:line.rindex("}")].split(","))
+        labels = {k: v.strip('"') for k, v in labels.items()}
+        node = out.setdefault(labels.get("via", "?"), {"relayed": {}, "settled": {}})
+        node[series[name]][labels.get("op", "?")] = int(float(line.rsplit(" ", 1)[1]))
+    return out
+
+
+def judge_routes(counts):
+    """Every node the dex submitted through settled at least one round (ROUND_OPS)."""
+    rounds = {n: sum(c["settled"].get(op, 0) for op in ROUND_OPS) for n, c in counts.items()}
+    return {"pass": bool(rounds) and all(v > 0 for v in rounds.values()),
+            "rounds_settled": rounds, "nodes": counts}
 
 
 def load_counts(metrics_text):
@@ -124,6 +158,8 @@ def main(argv=None):
     ap.add_argument("--target", default="0.9999", help="clearing SLO target (0.9999)")
     ap.add_argument("--ready-timeout", type=float, default=900,
                     help="seconds to wait for the DEX API (900)")
+    ap.add_argument("--precheck", type=int, default=60,
+                    help="seconds of netwatch poll that must pass before the load (60; 0: none)")
     a = ap.parse_args(argv)
 
     if not netgen.generated(a.net) or netgen.dex_backend(a.net) != "jip2":
@@ -147,6 +183,22 @@ def main(argv=None):
         sid = int(json.loads(st.stdout)["service_id"])
     done["service"] = sid
     s.log("service %d" % sid)
+
+    if a.precheck > 0:
+        done["precheck"] = s.run_to("precheck.txt", s.compose + ["exec", "-T", "netwatch"] + NETWATCH + [
+            "poll", "--duration", str(a.precheck), "--interval", "6"] + finality,
+            timeout=a.precheck + 300)
+        s.log("precheck (%d s netwatch poll, no load): exit %s" % (a.precheck, done["precheck"]))
+        if done["precheck"] != 0:
+            with open(s.path("precheck.txt")) as fh:
+                print("\n==> precheck.txt\n" + "\n".join(fh.read().splitlines()[-25:]))
+            done["pass"] = False
+            done["finished"] = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            with open(s.path("DONE"), "w") as fh:
+                json.dump(done, fh, indent=2)
+            s.log("DONE FAIL: the net failed its precheck before any load (one head / "
+                  "finality on every node): start a fresh net (./dex down; ./dex up)")
+            return 2
 
     chain_tmp, parity_tmp = "/tmp/soak-%s-chain.jsonl" % stamp, "/tmp/soak-%s-parity.json" % stamp
     poll_cmd = s.compose + ["exec", "-T", "netwatch"] + NETWATCH + [
@@ -198,8 +250,16 @@ def main(argv=None):
     s.run_to("verdict.json", verdict + ["--json"], timeout=300)
     s.log("soak_verdict: exit %s" % done["verdict"])
 
+    r = s.dc("exec", "-T", "dex", "python3", "-c", DEX_METRICS, timeout=60, check=False)
+    with open(s.path("dex_metrics.txt"), "w") as fh:
+        fh.write(r.stdout)
+    done["routes"] = judge_routes(via_counts(r.stdout))
+    r = s.dc("logs", "--no-log-prefix", "dex", timeout=120, check=False)   # a fresh net: all of it
+    with open(s.path("rounds.txt"), "w") as fh:
+        fh.writelines(l + "\n" for l in r.stdout.splitlines() if "settled on-chain" in l)
+
     done["pass"] = (done["poll"] == 0 and done["parity"] == 0 and done["verdict"] == 0
-                    and done["load"]["pass"])
+                    and done["load"]["pass"] and done["routes"]["pass"])
     done["finished"] = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     for f in ("poll.txt", "parity.txt", "verdict.txt"):
         print("\n==> %s" % f)
@@ -210,6 +270,12 @@ def main(argv=None):
     print("\n==> offered load   : %s  (%d orders offered, %d refused, %d busy; at most %g%% may "
           "be turned away)" % ("PASS" if ld["pass"] else "FAIL", ld["offered"], ld["refused"],
                                ld["busy"], 100 * (1 - float(a.target))))
+    rt = done["routes"]
+    print("==> submission nodes: %s  (rounds settled per node: %s)" % (
+        "PASS" if rt["pass"] else "FAIL",
+        ", ".join("%s %d" % kv for kv in sorted(rt["rounds_settled"].items())) or "none"))
+    for node, c in sorted(rt["nodes"].items()):
+        print("      %-10s relayed %s | settled %s" % (node, c["relayed"], c["settled"]))
     with open(s.path("DONE"), "w") as fh:
         json.dump(done, fh, indent=2)
     s.log("DONE %s: %s" % ("PASS" if done["pass"] else "FAIL", json.dumps(done)))

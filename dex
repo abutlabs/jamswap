@@ -72,6 +72,9 @@ if [ -n "$NET_JAVAJAM" ]; then
     fi
     [ -n "${HOST_IP:-}" ] || { echo "no host IP found for the native JavaJAM net: set HOST_IP"; exit 1; }
     export HOST_IP
+    # its JIP-2 RPC listens on the host's loopback: containers (the dex, netwatch) reach
+    # it through Docker Desktop's host.docker.internal (nets/netgen.py _jip2_url)
+    export JAVAJAM_RPC_HOST="${JAVAJAM_RPC_HOST:-host.docker.internal}"
   else
     export COMPOSE_PROFILES=javajam-docker
     arch=$([ "$(uname -m)" = arm64 ] || [ "$(uname -m)" = aarch64 ] && echo arm64 || echo amd64)
@@ -106,6 +109,20 @@ _jj_native_up() {
   done
 }
 
+# JavaJAM is up once its JIP-2 RPC answers (it opens its QUIC endpoint before its RPC);
+# its JVM takes several seconds to get there, so a fixed pause is not enough (jamswap#18)
+_jj_wait() {
+  local n i port rpc
+  for n in $NET_JAVAJAM; do
+    IFS=: read -r i port rpc <<<"$n"
+    for _ in $(seq 1 120); do
+      python3 -c "import sys; sys.path.insert(0, 'offchain'); import jip2
+jip2.Jip2Client('ws://127.0.0.1:' + sys.argv[1], 2).call('bestBlock')" "$rpc" 2>/dev/null && break
+      sleep 1
+    done
+  done
+}
+
 cmd=${1:-help}
 case "$cmd" in
   rebuild)
@@ -129,14 +146,35 @@ case "$cmd" in
         # JavaJAM before PolkaJam (jamswap#18): PolkaJam casts its round-1 GRANDPA vote once,
         # as it starts, and never re-sends it; JavaJAM re-sends its current-round votes to a
         # peer that connects later. PolkaJam first => round 1 never completes and finality
-        # stays at genesis. So: the genesis minter, then JavaJAM, then everything else.
+        # stays at genesis. So: the genesis minter, then JavaJAM, and once every JavaJAM node
+        # answers (and has had a few seconds to reach the others) the other validators.
         "${COMPOSE[@]}" up -d spec-init
         if [ "$JJ_NATIVE" = 1 ]; then
           _jj_native_up
         else
           "${COMPOSE[@]}" up -d $(for n in $NET_JAVAJAM; do echo "jj${n%%:*}"; done)
         fi
+        _jj_wait
         sleep 5
+        # then the other validators alone, and nothing else until they all finalize: the
+        # start is when PolkaJam's one-shot round-1 votes must reach every JavaJAM node
+        "${COMPOSE[@]}" up -d $NET_OTHER_VALIDATORS
+        if [ "$NET_FINALITY" = grandpa ]; then
+          # a validator can miss the start for good (jamswap#18: every peer of a PolkaJam
+          # node timing out ~15 s in, leaving it at genesis; round 1 never completing, so
+          # nothing ever finalizes), and without finality the DEX cannot even deploy: check
+          # now, 20 s to settle then 36 s of heads, rather than in a soak's verdict
+          sleep 20
+          if out=$(python3 nets/onehead.py "$NET" --secs 36 2>&1) \
+              && grep -q "FINALITY: advancing on every node" <<<"$out"; then
+            echo "✓ every validator follows the chain and finalizes"
+          else
+            grep -E '^(best slot|finalized|HEADS|FINALITY)' <<<"$out"
+            echo "✗ the net did not form (a validator missed the start, or finality never"
+            echo "  started): start a fresh one (./dex down NET=$NET; ./dex up NET=$NET)"
+            exit 1
+          fi
+        fi
       fi
       "${COMPOSE[@]}" up -d
       # manual trading by default, as on lasair6
@@ -160,6 +198,7 @@ case "$cmd" in
           echo "✓ DEX ready → $URL   (loadgen is OFF; './dex load NET=$NET' to drive it)"
         else
           echo "DEX not answering at $URL after 10 min: './dex logs NET=$NET dex'"
+          exit 1
         fi
       fi
       exit 0

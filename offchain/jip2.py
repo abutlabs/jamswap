@@ -201,6 +201,14 @@ class Jip2Client:
         with self._lock:
             self._drop()
 
+    def connect(self):
+        """Open the connection now if none is open (OSError if the node is unreachable):
+        a caller about to send something it must not send twice learns that nothing was
+        sent before it tries."""
+        with self._lock:
+            if self._ws is None:
+                self._ws = WebSocket(self.url, self.timeout)
+
     def _drop(self):
         if self._ws is not None:
             self._ws.close()
