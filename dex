@@ -125,8 +125,20 @@ case "$cmd" in
     if [ "$NET_GENERATED" = 1 ]; then
       python3 nets/netgen.py check || { echo "run ./dex gen"; exit 1; }
       "${COMPOSE[@]}" build -q
+      if [ -n "$NET_JAVAJAM" ]; then
+        # JavaJAM before PolkaJam (jamswap#18): PolkaJam casts its round-1 GRANDPA vote once,
+        # as it starts, and never re-sends it; JavaJAM re-sends its current-round votes to a
+        # peer that connects later. PolkaJam first => round 1 never completes and finality
+        # stays at genesis. So: the genesis minter, then JavaJAM, then everything else.
+        "${COMPOSE[@]}" up -d spec-init
+        if [ "$JJ_NATIVE" = 1 ]; then
+          _jj_native_up
+        else
+          "${COMPOSE[@]}" up -d $(for n in $NET_JAVAJAM; do echo "jj${n%%:*}"; done)
+        fi
+        sleep 5
+      fi
       "${COMPOSE[@]}" up -d
-      [ "$JJ_NATIVE" = 1 ] && _jj_native_up
       # manual trading by default, as on lasair6
       if [ "$NET_DEX_BACKEND" = jip2 ]; then "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true; fi
       echo "✓ $NET up: validators (index order) = $NET_CLIENTS"
