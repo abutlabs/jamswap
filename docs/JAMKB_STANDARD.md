@@ -152,7 +152,7 @@ which is the whole point: an inelastic resource with a live, discoverable price.
 | Finite supply | `treasury.JAMKB_SUPPLY` — a fixed pool; the endowment/top-up are capped, never minted |
 | Deployment endowment | `ensure_reserve()` seeds to `reserve_target` (obligation + buffer) at startup |
 | Self-funding | flat base-asset fee → treasury; fees buy JAMKB on the DEX to track the obligation |
-| Beneficiary top-up | `POST /api/reserve_topup` **acquires up to the target** (refuses hoarding) + UI control |
+| Beneficiary top-up | `POST /api/reserve_topup` **acquires up to the target** (refuses hoarding) + UI control; `RESERVE_TOPUP=1` automates it for an operator who is the beneficiary (a keeper: tops up to the target once half a buffer short; the test nets on JIP-2 run it) |
 | Solvency backpressure | `api_order` refuses new orders while under-reserved (`JAMKB_BACKPRESSURE`) |
 | Anti-hoard signal | `over_reserved` in `profit_split` + the UI reserve gauge flags idle RAM rights to release |
 | Profit extraction | gov-signed sweep of **fee revenue** (USDC/DOT) only — JAMKB is never withdrawable (`REVENUE.md`) |

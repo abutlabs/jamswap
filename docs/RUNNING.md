@@ -164,6 +164,35 @@ instruction was established is in [`offchain/deploy.py`](../offchain/deploy.py).
 lasair nets keep the genesis-seeded service: lasair has no Bootstrap service or JIP-2
 server yet (lasair#68, #69).
 
+Point `CHAIN_RPC` at a node that forwards work-packages. A PolkaJam **validator**'s RPC
+does not (it answers `submitWorkPackage` with "Failed to submit work-package to even a
+single proxy/guarantor"); an ordinary PolkaJam node joined to the same net does, as do
+`polkajam-testnet`'s RPC nodes.
+
+On JIP-2 the service's footprint is readable (`serviceData`), so the JAMKB standard's
+backpressure is live: the reserve seeded at startup (obligation + `JAMKB_RESERVE_BUFFER`,
+8 KB) is outgrown after ~15 min of steady trading (a landed-round marker lives an hour),
+and from then on **every new order is refused** ("service under-reserved on JAMKB").
+`RESERVE_TOPUP=1` runs the beneficiary's capped top-up as a keeper: every
+`RESERVE_TOPUP_SECS` (15) it tops the reserve up to its target once it has fallen half a
+buffer short, one deposit in flight at a time, resent under the same nonce if it has not
+landed in 60 s. Leave it off where someone else funds the reserve (docs/JAMKB_STANDARD.md).
+
+### Run it on six PolkaJam validators — no lasair anywhere (`pj6`)
+
+The same runtime deploy as a test net, one command (docs/NETS.md, "The DEX with no
+lasair"): six PolkaJam validators with GRANDPA on a shared genesis, an ordinary PolkaJam
+node as the DEX's gateway, the DEX on JIP-2 (`RESERVE_TOPUP=1`), a load generator and
+netwatch.
+
+```sh
+./dex up NET=pj6              # builds, mints genesis, deploys + sets up → http://localhost:8201
+./dex load NET=pj6            # drive it (PROFILE / RATE / SEALED_RATIO as for lasair6)
+./dex status NET=pj6          # one head + finality across the six, and the market
+./dex soak NET=pj6 3600       # A1-A4: 1 h of load, parity, the soak verdict (exit 0 = pass)
+./dex down NET=pj6            # tear down, wipe the chain
+```
+
 ### Options
 
 ```sh

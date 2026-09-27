@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # jamswap DEX control — ONE script, clear verbs. Hides the compose sprawl.
 #
-# The DEX runs on the ALL-LASAIR finality net (six lasair validators, β-finality) —
-# the ONLY net where sealed orders settle durably (see docs/NETS.md for why, and for
-# what every other net is). You almost never need anything else.
+# The DEX runs on the ALL-LASAIR finality net (six lasair validators, β-finality),
+# where sealed orders settle durably; NET=pj6 runs it on six PolkaJam validators with
+# no lasair at all (see docs/NETS.md for why finality matters, and for what every
+# other net is). You almost never need anything else.
 #
 #   ./dex rebuild     # rebuild the on-chain service blob from source (service/*.jam)
 #   ./dex up          # start the net (no auto-load), wait for finality, print the URL

@@ -1,8 +1,10 @@
 # Which net is which (and why there are so many compose files)
 
 **TL;DR — you almost always want `./dex up`.** That runs the all-lasair finality net,
-the only one where sealed orders settle durably. Everything below is here so the other
-`docker-compose.*.yml` files aren't a mystery — most are consensus *research*, not the DEX.
+where sealed orders settle durably. `./dex up NET=pj6` runs the same DEX on six PolkaJam
+validators with no lasair anywhere ([below](#the-dex-with-no-lasair-pj6-17)). Everything
+below is here so the other `docker-compose.*.yml` files aren't a mystery — most are
+consensus *research*, not the DEX.
 
 ## Just run the DEX
 
@@ -45,13 +47,16 @@ before):
 ./dex logs NET=pj6 pj3      # a node's log (native JavaJAM nodes too)
 ./dex down NET=pj6          # tear down, wipe the chain, stop native nodes
 ./dex gen                   # regenerate nets/compose/*.yml after editing nets/
+# nets with the JIP-2 DEX (pj6):
+./dex load NET=pj6          # start the load generator (up leaves it stopped); noload stops it
+./dex soak NET=pj6 3600     # A1-A4 in one command (below); default 600 s
 ```
 
 | Net | Validators 0..5 | Finality | For | Status (2026-09-26, Apple M1 Pro) |
 |---|---|---|---|---|
 | `lasair6` | lasair ×6 | lasair GRANDPA (PR #6 draft) | the DEX | hand-written `docker-compose.lasair6.yml`, unchanged |
 | `mixed` | pj ×3, lasair ×3 | none shared | #2 research | hand-written `docker-compose.mixed.yml` |
-| `pj6` | pj ×6 | GRANDPA | #17 | **one head + finality**: 61/61 samples SAME over 6 min, finalized advanced on all six |
+| `pj6` | pj ×6 + the DEX on JIP-2 | GRANDPA | #17 | **A1–A4 pass** with the DEX, no lasair image anywhere: 10-min and 1-hour soaks, SLO 1.0, 1,440 orders offered and none refused (below) |
 | `pj-pbnjam` | pj ×5, pbnjam | GRANDPA (pj's 5-of-6) | #19 | **pbnjam can't start** (see below); the five PolkaJam nodes keep one head and finalize |
 | `pj-pbnjam-42` | pj ×4, pbnjam ×2 | GRANDPA | #19 | blocked on the pbnjam image |
 | `pj-javajam` | pj ×3, JavaJAM ×3 | GRANDPA both | #18 | **one head, no finality**: 70/71 samples SAME over 7 min (the other: JavaJAM still starting); finalized stays at genesis on all six |
@@ -139,6 +144,101 @@ walking `parent`), **FORK** (a head off the highest head's chain) or **DOWN**. V
 ONE HEAD: no fork longer than two samples, nobody down at the end, heads advanced, and on
 a finalizing net finality advanced on every node with no conflicting finalized blocks.
 
+### The DEX with no lasair: pj6 (#17)
+
+`./dex up NET=pj6` starts six PolkaJam validators with GRANDPA and the DEX, and no lasair
+image anywhere (the genesis minter is the plain `polkajam` build target; nothing is
+injected into genesis). The generator gives every layout without a lasair node this
+stack (`nets/netgen.py` `dex_backend`: `jip2`; a layout with lasair keeps lasair's
+bridges, `jamnp`):
+
+| Service | What it is |
+|---|---|
+| `rpc` | an **ordinary PolkaJam node** (no validator key, `--mode ordinary`, the net's `--finality-mode`): the DEX's gateway, JIP-2 on `127.0.0.1:42150` (the net's RPC block + 50) |
+| `dex` | `offchain/server.py` with `CHAIN_BACKEND=jip2`, `CHAIN_RPC=ws://rpc:42150`, `CHAIN_SPEC=/shared/spec.json`, `RESERVE_TOPUP=1` and **no `SERVICE_ID`**: at startup it deploys `service/jamswap-service.jam` through the Bootstrap service, lists the markets and funds the six dev accounts ([`RUNNING.md`](RUNNING.md#run-it-on-any-jip-2-node--runtime-deploy-no-lasair-no-jamt)); UI on `:8201` once the reserve has landed (~1 min) |
+| `loadgen` | `offchain/loadgen.py` at the DEX (`PROFILE`, `RATE`, `SEALED_RATIO`; default trading, 12/min, 0.2) — stopped by `up`, started by `./dex load` |
+| `netwatch` | `netwatch.py serve` over the six validators' JIP-2 (`127.0.0.1:9301/metrics`, `/verdict`) |
+
+**Why a gateway node.** Every pj6 validator's RPC answers `submitWorkPackage` with
+`Failed to submit work-package to even a single proxy/guarantor` (PolkaJam
+nightly-2026-09-22; on both cores, for the whole run), while the same package through
+an ordinary PolkaJam node on the same net is accepted and guaranteed — the topology
+`polkajam-testnet` has too (validators plus RPC nodes). So builders talk to a full node,
+not to a validator. A validator's other JIP-2 calls (heads, finality, storage) work, and
+netwatch reads those.
+
+**`./dex soak NET=pj6 [SECS]`** ([`nets/soak.py`](../nets/soak.py)) is the epic's shared
+acceptance in one command, on a freshly started net: loadgen on and `netwatch poll
+--require-finality` over the six validators for SECS + 180 s of drain (A1 one head,
+A2 finality on every node), then `netwatch parity` at the common finalized head (A3:
+books, balances, custody, registry, landed-round markers on every node), then
+`soak_verdict.py <the dex's order events> --chain --parity` (A4), and the offered load
+as the load generator counted it (at most 1 − target refused or busy). Everything lands
+in `~/.cache/jamswap/soak/<net>-<UTC time>/` (`--out` to choose) with a `DONE` marker;
+exit 0 iff all four pass.
+
+**Why a reserve keeper.** On JIP-2 the service's footprint is readable, so the JAMKB
+standard's backpressure is live (on lasair nets the footprint reads 0). The first
+1-hour soak passed every check while the DEX had turned its load away for 45 of its 60
+minutes: the footprint grows ~400 octets a minute under load (a landed-round marker
+lives an hour), and at 173,272 octets the obligation, 170 KB, passed the 169 KB reserve
+seeded at startup; from then on every order came back `400 service under-reserved on
+JAMKB (short 1 KB)`. The SLO could not see it (it judges only orders the DEX accepted).
+So the dex runs with `RESERVE_TOPUP=1` (the beneficiary's capped top-up, automated:
+[`RUNNING.md`](RUNNING.md#run-it-on-any-jip-2-node--runtime-deploy-no-lasair-no-jamt)),
+and `./dex soak` also fails when more than 1 − target of the offered load was refused.
+
+Results (2026-09-27, Apple M1 Pro, Docker Desktop 8 GB; fresh net per soak; loadgen
+trading at RATE 12: a crossing pair every 5 s, 20 % of the sells sealed):
+
+**10 minutes** (`./dex soak NET=pj6 600`):
+
+```
+orders seen         : 244
+clearing SLO        : 1.000000  (target 0.9999)  PASS
+  cleared           : 238
+  missed            : 0  (expired/lost 0, stuck-open 0)
+breakdown           : {'cleared': 238, 'open': 1, 'resting': 5}
+SEALED zero-loss    : PASS  (seen 25, terminal 24, stuck-open 0)
+clear latency       : p50 30.4s  p99 64.5s
+one head            : PASS  (hash (JIP-2 nodes); 130/130 samples ok, max lag 0 slots, 0 divergence episode(s), longest 0 slots vs epoch 12)
+liveness            : PASS  (best advanced 129..129 slots per node over 774.8 s)
+finality            : PASS  (finalizing, required; 0 conflict(s), 0 regression(s), longest stall 1.0 slots vs 12, 104 finalized slots hash-checked)
+authoring (pi)      : PASS  (blocks per validator {'0': 25, '1': 22, '2': 28, '3': 20, '4': 18, '5': 19})
+state parity        : PASS  (all digests agree; service 1, 103 keys at final slot 9122159 0xc8d0b8e3 (from pj0), attempt 1)
+  pj0..pj5          : 548c7f2ac200a767  present 80  (pinned), on all six
+VERDICT (orders + chain): PASS
+offered load        : PASS  (240 orders offered, 0 refused, 0 busy)
+```
+
+**1 hour** (`./dex soak NET=pj6 3600`; 120 orders placed in every 5-minute window, the
+keeper topped the reserve up 6 times as the footprint grew 166 → 190 KB):
+
+```
+orders seen         : 1444
+clearing SLO        : 1.000000  (target 0.9999)  PASS
+  cleared           : 1435
+  missed            : 0  (expired/lost 0, stuck-open 0)
+breakdown           : {'cleared': 1435, 'resting': 8, 'open': 1}
+SEALED zero-loss    : PASS  (seen 133, terminal 132, stuck-open 0)
+clear latency       : p50 30.5s  p99 357.8s
+one head            : PASS  (hash (JIP-2 nodes); 630/630 samples ok, max lag 1 slots, 0 divergence episode(s), longest 0 slots vs epoch 12)
+liveness            : PASS  (best advanced 630..630 slots per node over 3777.7 s)
+finality            : PASS  (finalizing, required; 0 conflict(s), 0 regression(s), longest stall 1.0 slots vs 12, 591 finalized slots hash-checked)
+authoring (pi)      : PASS  (blocks per validator {'0': 99, '1': 98, '2': 100, '3': 121, '4': 107, '5': 111})
+state parity        : PASS  (all digests agree; service 1, 156 keys at final slot 9122807 0x65556373 (from pj0), attempt 1)
+  pj0..pj5          : 88568b80eebbef01  present 133  (pinned), on all six
+VERDICT (orders + chain): PASS
+offered load        : PASS  (1440 orders offered, 0 refused, 0 busy)
+```
+
+The open order in each run is a lone sealed order that crossed nothing: its commit is
+final and it waits hidden in the mempool for a counterparty, never revealed alone
+(`offchain/round.py`); it ends filled or expired (32 min). The p99 is resting makers
+filled by a later auction (latency counts from placement). In the first epoch after
+genesis the gateway refuses packages ("storage access error: invalid epoch N, reference
+epoch is 0"); the deploy retries through it and the API opens ~1–2 min after `up`.
+
 ### What the clients did (2026-09-26)
 
 - **PolkaJam + JavaJAM (`pj-javajam`) co-author one chain** — blocks from both clients,
@@ -222,7 +322,7 @@ python3 offchain/soak_verdict.py /shared/order_events.jsonl --target 0.9999 \
 (replacing the mixed overlay's log-scraping `exporter` service, whose `jam_pi_*` series
 would otherwise be counted twice). `make verify-mixed` runs `netwatch poll` too.
 
-## Why the DEX needs the all-lasair net (the finality story)
+## Why the DEX needs a finalizing net (the finality story)
 
 Settlement is durable only under **finality**: once a block is β-finalized it can't be
 re-orged, so a filled order can't be un-filled. Finality is a GRANDPA-style gadget that
@@ -233,6 +333,8 @@ needs a **≥2/3+1 supermajority** of validators to agree.
   client; it's the BFT threshold.
 - On the **all-lasair net**, all six speak lasair's finality gadget → 5-of-6 quorum →
   finalizes. That's why the DEX lives here.
+- On the **all-PolkaJam net** (`pj6`), all six run PolkaJam's GRANDPA → it finalizes too,
+  and the DEX settles there the same way (#17).
 
 ### Is PolkaJam "not following the spec"? No — the finality *wire protocol* is unspecified.
 
