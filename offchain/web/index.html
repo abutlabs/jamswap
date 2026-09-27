@@ -66,7 +66,7 @@
   <!-- Network badge -->
   <div style="display:flex;align-items:center;gap:6px;padding:5px 12px;background:{{ T.rowBg }};border:1px solid {{ T.rowBorder }};border-radius:999px;font-size:11px;color:{{ T.sub }};margin:0 8px;flex-shrink:0;">
     <div style="width:6px;height:6px;border-radius:50%;background:#4ADE80;box-shadow:0 0 8px rgba(74,222,128,.9);animation:pulse 2s infinite;flex-shrink:0;"></div>
-    <span>lasair · localhost</span>
+    <span>JAM dev chain · localhost</span>
   </div>
 
   <!-- Finality (β) chip: GRANDPA-finalized head vs current head -->
@@ -473,7 +473,7 @@
   <div style="max-width:480px;margin:36px auto;">
     <div style="background:{{ T.cardBg }};border:1px solid {{ T.cardBorder }};border-radius:24px;padding:26px;">
       <h2 style="font-size:18px;font-weight:700;color:{{ T.text }};margin-bottom:5px;">Testnet faucet</h2>
-      <p style="font-size:13px;color:{{ T.dim }};margin-bottom:24px;line-height:1.6;">Fund your connected account on lasair — no real value. Withdraw is signed + overdraft-protected.</p>
+      <p style="font-size:13px;color:{{ T.dim }};margin-bottom:24px;line-height:1.6;">Fund your connected account on this dev chain — no real value. Withdraw is signed + overdraft-protected.</p>
       <div style="font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:{{ T.dim }};font-weight:600;margin-bottom:7px;">Asset</div>
       <div style="display:flex;gap:6px;margin-bottom:16px;">
         <sc-for list="{{ faucetAssets }}" as="fa" hint-placeholder-count="3">
@@ -919,7 +919,7 @@ class Component extends DCLogic {
           rowStyle:`display:flex;align-items:center;gap:8px;padding:10px 12px;cursor:pointer;border-bottom:1px solid ${T.tapeRow};`,
           onClick:p.isLive&&p.market
             ?()=>{this.switchMarket(p.market);this.setState({marketDropdownOpen:false,marketSearch:''});}
-            :()=>this.toast('🚧 '+p.display+' coming soon — only DOT/USDC, JAMKB/USDC and JAMKB/DOT are live on lasair','info',3500),
+            :()=>this.toast('🚧 '+p.display+' coming soon — only DOT/USDC, JAMKB/USDC and JAMKB/DOT are live','info',3500),
         }));
       })(),
       marketName:market.name,

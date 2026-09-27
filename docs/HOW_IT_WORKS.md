@@ -1,7 +1,8 @@
 # How Jamswap works
 
 > Moved from the README (2026-07-16) to keep it short. This is the full explainer:
-> what Jamswap is, how it works, how it hides your orders, and what it costs.
+> what Jamswap is, how it works, how it hides your orders, what it costs, and where it
+> runs.
 
 ## What is it? (and why it couldn't exist before)
 
@@ -63,14 +64,14 @@ cancelling is verified against it. No exchange can move your money — only you 
 > key is a stop-gap, not the architecture — when JAM wallets arrive, "your account" simply
 > becomes a key your wallet holds; nothing in the service changes. The full work-around
 > (why ed25519, how registration binds the key on-chain, replay protection):
-> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) → "Accounts & signing".
+> [`ARCHITECTURE.md`](ARCHITECTURE.md) → "Accounts & signing".
 
 Once matched, any part of your order that didn't fill can **rest in the order book** and
 fill later when a matching order arrives — a true continuous exchange, not a one-shot
 auction.
 
-**Full technical architecture:** [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
-**What's built and what's next:** [`docs/STATUS.md`](docs/STATUS.md).
+**Full technical architecture:** [`ARCHITECTURE.md`](ARCHITECTURE.md).
+**What's built and what's next:** [`STATUS.md`](STATUS.md).
 
 ---
 
@@ -89,7 +90,7 @@ There are **three approaches**, a ladder from simplest to strongest:
 - **Rung 2 — Encrypt-until-batch.** You encrypt your order to a committee and go offline;
   they help decrypt it only when the batch closes, with a proof they did it honestly. No
   reveal step, and no single party can peek. *(Shipped as an **opt-in** — `ENC_MODE=1`;
-  the committee is simulated today, see [`docs/COMMITTEE_DEPLOYMENT.md`](docs/COMMITTEE_DEPLOYMENT.md).)*
+  the committee is simulated today, see [`COMMITTEE_DEPLOYMENT.md`](COMMITTEE_DEPLOYMENT.md).)*
 - **Rung 1 — ZK dark-pool.** The auction runs privately off-chain and the chain verifies
   a single zero-knowledge proof that it cleared correctly — orders **never** appear
   on-chain. Strongest privacy, and cheapest at scale. *(Proven in a research spike; not
@@ -105,11 +106,11 @@ they'll match, all while their terms stay private until they clear.
 Off-chain: only the builder you submitted through — with the hosted browser UI, that's
 the exchange operator (same trust as any exchange). Want privacy from *everyone*,
 including us? **Run your own builder** — one command, verified working, and your order
-data never leaves your machine: [`docs/LOCAL_BUILDER.md`](docs/LOCAL_BUILDER.md).
+data never leaves your machine: [`LOCAL_BUILDER.md`](LOCAL_BUILDER.md).
 
 **Read the full ELI5 of all three — what each protects, what it still leaks, and its
-current state — in [`docs/SEALED_ORDERS.md`](docs/SEALED_ORDERS.md).** The precise trust
-boundaries are in [`docs/SECURITY.md`](docs/SECURITY.md).
+current state — in [`SEALED_ORDERS.md`](SEALED_ORDERS.md).** The precise trust
+boundaries are in [`SECURITY.md`](SECURITY.md).
 
 Whichever rung you use, the guarantee never changes: **the auction itself is always
 re-verified under JAM's guarantee-and-audit protocol** (assigned validators compute it,
@@ -123,18 +124,30 @@ when* — not whether it cleared honestly.
 Two resources, two meters: **compute** is bought per-slot (refine gas), **state** is
 bought per-byte (**JAMKB** — JAM's proposed token pricing validator RAM at 1 JAMKB = 1 KB).
 
-- **Throughput (measured in lasair's PVM, GP 0.8.0 gas):** a public-order batch is
+- **Throughput (GP 0.8.0 gas, measured in lasair's PVM and cross-checked against the
+  polkavm interpreter):** a public-order batch is
   gas-bound at **~945 orders per 6-second batch per core**; committee-sealed orders at
   **~267/n** (n = committee size); the ZK dark-pool clears **~27,500–68,900** orders with one flat
   proof. The full tables, what binds each privacy rung, and how big orders accumulate
-  fills across batches: [`docs/THROUGHPUT.md`](docs/THROUGHPUT.md).
+  fills across batches: [`THROUGHPUT.md`](THROUGHPUT.md).
 - **JAMKB:** Jamswap aims to be a grounded example in how JAMKB will be utilized in a 
-  JAM network. the order book visibly grows and shrinks the RAM footprint, every order 
+  JAM network: the order book visibly grows and shrinks the RAM footprint, every order 
   pays state rent so nothing rests forever, JAMKB itself trades on the exchange, and fees 
-  fund the service's own rent — a self-funding loop: [`docs/JAMKB_IN_PRACTICE.md`](docs/JAMKB_IN_PRACTICE.md).
+  fund the service's own rent — a self-funding loop: [`JAMKB_IN_PRACTICE.md`](JAMKB_IN_PRACTICE.md).
 
 ---
 
+## Where it runs
+
+Jamswap is one JAM service (`service/jamswap-service.jam`, GP 0.8.0), written to the
+Graypaper and not to any client, plus an off-chain builder. The builder reaches the
+chain through one interface ([`offchain/chain.py`](../offchain/chain.py)): the JIP-2
+node RPC that any client can serve, or lasair's JAMNP-S bridges, since lasair has no
+JIP-2 server yet. Today the DEX runs on two nets: six lasair validators (`lasair6`) and
+six stock PolkaJam validators with no lasair anywhere (`pj6`), where it deploys itself
+through the chain's Bootstrap service. Run on both clients, the same scenario leaves
+byte-identical service state ([`DIFFERENTIAL_TESTNET.md`](DIFFERENTIAL_TESTNET.md)).
+Which net is which: [`NETS.md`](NETS.md).
 
 ---
 
@@ -145,16 +158,17 @@ bought per-byte (**JAMKB** — JAM's proposed token pricing validator RAM at 1 J
   into formula-based pricing.
 - The **batch auction is MEV-resistant by construction** — no intra-round speed race —
   and orders can be **sealed until the batch closes**.
-- We also build the JAM client it runs on (**lasair**), so we understand the whole stack
-  from the matching engine down to the state machine.
+- It is **client-neutral**: the same service runs on lasair and on stock PolkaJam, and
+  we also build a JAM client (**lasair**), so we understand the whole stack from the
+  matching engine down to the state machine.
 
 **Honest caveats** (kept in view): JAM mainnet timing isn't ours to control; orders are now
 verified on-chain end-to-end (public orders per-order in `refine`, sealed commits
 owner-signed — not even the builder can inject either), but "trustless" still carries an
 asterisk in the parts being hardened (a carried sealed remainder's *terms* are
 builder-attested until the ZK linkage; real on-chain custody); and bootstrapping trading
-liquidity is a real grind. See [`docs/PLAN.md`](docs/PLAN.md) §9 and
-[`docs/SECURITY.md`](docs/SECURITY.md).
+liquidity is a real grind. See [`PLAN.md`](PLAN.md) §9 and
+[`SECURITY.md`](SECURITY.md).
 
 ---
 

@@ -7,38 +7,41 @@ proven results see [`M1_DEMO.md`](M1_DEMO.md).
 Kickoff was 2026-06-30; the core matching engine landed first, then settlement,
 resting orders, sealing, and the trading layer on top.
 
-## Open: GP 0.8.0 migration (2026-09-24)
+## Where it runs (2026-09-27)
 
-jamswap runs on lasair 2.0.0 (GP 0.8.0). The service is built with `tools/jam080`
-(no public 0.8.0 SDK exists), and every signature is now verified in refine: one ed25519
-verify costs ~5.3M gas under 0.8.0, more than a work-report's accumulate budget can spare
-per item. On the all-lasair net, sealed orders pass the zero-loss check, and the signed
-register / withdraw / cancel / commit paths pass `offchain/test_sealed_resting_e2e.py` and
-`offchain/test_signed_ops_e2e.py`. **Known issue:** in a 20-minute soak, PUBLIC rounds of
-~15–37 orders never settled ("never settled — re-queued N order(s)"), and clearing SLO was
-0.49 against 0.9999. Small rounds settle.
+The service is GP 0.8.0, built with `tools/jam080` (no public 0.8.0 SDK exists); every
+signature is verified in refine. The off-chain builder reaches the chain only through
+`offchain/chain.py` (#10), with two backends:
 
-**Root cause (2026-09-25):** sealed commits raised the same per-account seq floor as public
-orders, and the UI/loadgen draw both seqs from one counter. A trader's commit (a small
-standalone work-item) usually landed first, so the round carrying that trader's older public
-orders failed accumulate's floor check whole; the builder waited out the 60 s gate,
-re-queued the round to the tail, and later recorded the stale orders "rejected" with no
-receipt. **Fix:** a separate commit floor (`b"sc"`); a refine-computed round id over the
-exact work-item payload, marked landed per round (`b"rl"‖id → slot`, expired only by age —
-a first cut used a per-market ring of the newest 32, which anyone could flush by landing 32
-cheap rounds) so the builder knows exactly which rounds settled; rounds that would change
-nothing refused on-chain; dead rounds released in seconds, to the front of the mempool;
-late-landing released rounds finalized after a second sighting, their orders claimed from any
-round still carrying copies (and handed back if a re-org erases the landing); one record per
-round id; the round builder and the resolver serialized per market (no double terminals);
-no same-account overtaking under the batch cap; repeated seqs and out-of-band market prices
-dropped before they sink a round; truthful receipts for superseded and cancelled orders
-(`offchain/tests/test_round_poison.py`, `crates/match-engine/src/{floors,round_id}.rs`).
-Service rebuilt (new genesis). The lasair6 soak re-run is pending, together with lasair's
-Phase 7 guarantor fixes (block rate, orphaning).
+- **JIP-2**, any client that serves it: spec-valid work-packages (#11), durable
+  decisions read at the finalized head (#12), and a runtime deploy through the Bootstrap
+  service (#13). On **pj6** (six stock PolkaJam validators, no lasair) the A1–A4
+  acceptance passes in 10-minute and 1-hour soaks: clearing SLO 1.000000, sealed
+  zero-loss, one head, finality and state parity on all six nodes (#17).
+- **JAMNP-S** through lasair's builder and reader bridges, while lasair has no JIP-2
+  server. On **lasair6** (six lasair validators) short runs since the round-poisoning
+  fix reached SLO 1.000000 (82 orders, #13; a 3-minute load, #14).
+
+The cross-client differential gives byte-identical service state on lasair and
+PolkaJam 0.1.29 (#23), and the encrypted-round attack e2e passes on both (#24).
+
+**Open.**
+- No long lasair6 soak on the current blob is recorded yet (dd7b005 left it open,
+  pending a lasair image with lasair's Phase 7 guarantor fixes).
+- lasair6 still gates reveals by height; finalized reads there wait for an image with
+  lasair#70 (#26).
+- Mixed-client nets: PolkaJam + JavaJAM keep one head but do not finalize (#18); the
+  pbnjam image does not start (#19); lasair + PolkaJam + JavaJAM (#20) and the no-lasair
+  control (#21) have not run.
 
 ## Done
 
+- ✅ **Round-poisoning fix (2026-09-26, dd7b005)** — a 20-minute GP 0.8.0 soak had
+  public rounds that never settled (SLO 0.49): a sealed commit raised the same
+  per-account seq floor as public orders, so the round carrying the trader's older
+  orders failed accumulate whole. Commits now have their own floor, each round has a
+  payload-bound id and a landed marker the builder confirms against, and rounds that
+  would change nothing are refused on-chain (`offchain/tests/test_round_poison.py`).
 - ✅ **Owner-signed sealed commits (2026-07-03)** — `TAG_COMMIT`/`TAG_ENC_COMMIT` carry the
   owner's signature (verified in refine since GP 0.8.0; accumulate binds the signer's key
   to the account); commit/enc set entries are
@@ -60,8 +63,9 @@ Phase 7 guarantor fixes (block rate, orphaning).
 - ✅ **`service/`** — the `no_std` JAM service: `refine` = the matching engine,
   `accumulate` = settlement. **M1 PROVEN** — it clears a real batch *in Refine on
   lasair*, deterministically (byte-identical re-runs), at **7,476 gas** for 3
-  orders (~0.00015% of the refine budget). See [`M1_DEMO.md`](M1_DEMO.md).
-  **Jamswap is a self-contained JAM service — nothing baked into Lasair.**
+  orders (~0.00015% of the refine budget; GP 0.7.2). See [`M1_DEMO.md`](M1_DEMO.md).
+  **Jamswap is a self-contained JAM service — nothing baked into any client**; since
+  #13 it deploys at runtime on stock PolkaJam.
 - ✅ **Phase 2 settlement** — `accumulate` now moves real **balances**: a cleared
   batch debits/credits each trader's base/quote at the uniform price; deposits fund
   accounts. Verified e2e on lasair (deposit → auction → settled balances, value
@@ -76,7 +80,7 @@ Phase 7 guarantor fixes (block rate, orphaning).
   batch auction (no latency race), nobody can front-run within a round. Verified
   e2e: hidden commit → reveal+match settles; an uncommitted order is rejected.
   *Honest asterisk:* adds a reveal round + a non-reveal griefing vector.
-- ✅ **Sealed orders — encrypt-until-batch (rung 2, the default)** — orders
+- ✅ **Sealed orders — encrypt-until-batch (rung 2, opt-in `ENC_MODE=1`)** — orders
   ECIES-encrypted to an off-protocol committee whose keys are committed on-chain
   (`ENC_SETUP`, gov-signed). At batch close the committee supplies Chaum-Pedersen-
   proven partial decryptions; `refine` verifies each against the committed keys and
@@ -101,7 +105,8 @@ Phase 7 guarantor fixes (block rate, orphaning).
 - ✅ **Off-chain builder + trading UI** ([`../offchain/`](../offchain/)) — a stdlib
   API that runs the round lifecycle (collect orders → read the book → assemble +
   submit the batch) and a single-page exchange UI (order book, place order, run
-  round, balances, faucet) at `:8080`.
+  round, balances, faucet). It reaches the chain only through the client-neutral
+  adapter `offchain/chain.py` (JIP-2, or lasair's JAMNP-S bridges).
 - ✅ **Asset lifecycle** — deposit → trade → **withdraw** with conserved accounting
   and overdraft protection; a per-asset custody total whose invariant
   (Σ balances == custody) holds by construction. (Mock custody; real `on_transfer`
@@ -149,11 +154,11 @@ Phase 7 guarantor fixes (block rate, orphaning).
 
 ## Next
 
-- ◻️ Trustless per-order signature check in `refine` (not just at the builder).
 - ◻️ Fund escrow at submission (reserve funds across pending orders, not just a guard).
 - ◻️ Real `on_transfer` custody against the JAM token standard.
 - ◻️ Round sequencing via historical-lookup (`refine` reads the prior finalized book).
 - ◻️ ZK dark-pool (rung 1) integration into Jamswap proper (`MATCH_ZK` tag).
+- ◻️ Retire the JAMNP-S bridge backend once lasair serves JIP-2 (lasair#68).
 - ◻️ Indexer + WebSocket feeds; a W3F grant application.
 
 CI (`.github/workflows/ci.yml`) runs the matching-engine property tests

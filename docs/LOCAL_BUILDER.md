@@ -1,8 +1,8 @@
 # Local builder mode — run your own, trust no one
 
-> **Status: works today** (verified e2e 2026-07-03 — two independent builders on one
-> deployed service; see "Verified" below). Packaging it as a one-click desktop app is
-> open work; the architecture and the env vars already exist.
+> **Status: works today** (verified e2e 2026-07-03 on lasair — two independent builders
+> on one deployed service; see "Verified" below). Packaging it as a one-click desktop
+> app is open work; the architecture and the env vars already exist.
 
 The jamswap **service** is on-chain, permissionless, and controlled by nobody: matching
 rules, settlement, custody, and every signature check live in the `.jam` blob the
@@ -14,21 +14,25 @@ refine, replay floors, the hash-bound book, owner-signed sealed commitments), so
 builders are *contestable infrastructure*, like Ethereum block builders or a rollup's
 sequencer — or like Uniswap Labs' front-end vs the Uniswap contracts.
 
-That means anyone can run their own:
+That means anyone can run their own, on any chain the DEX reaches
+(`offchain/chain.py`):
 
 ```sh
-SERVICE_ID=<deployed id> BUILDER_URL=<a CE-133 builder bridge> READER_URL=<a CE-129 reader bridge> \
+# a node that serves JIP-2 (any client)
+CHAIN_BACKEND=jip2 CHAIN_RPC=ws://<node>:19800 CHAIN_SPEC=<the net's spec.json> \
+    SERVICE_ID=<deployed id> PORT=8081 python3 offchain/server.py
+# a lasair net, through lasair's CE-133 builder and CE-129 reader bridges (jamnp)
+SERVICE_ID=<deployed id> BUILDER_URL=<builder bridge> READER_URL=<reader bridge> \
     PORT=8081 python3 offchain/server.py
-# your own builder + UI at http://localhost:8081, attached to the SAME on-chain service
+# either way: your own builder + UI at http://localhost:8081, on the SAME on-chain service
 ```
 
-Against any node that serves JIP-2, `CHAIN_BACKEND=jip2 CHAIN_RPC=ws://<node>:19800` replaces
-the two bridges (`offchain/chain.py`). To submit it needs the chain's authorizer: point
-`CHAIN_SPEC` at the net's JIP-4 chain spec (the authorizer is read from its genesis) or
-name it with `AUTHORIZER=<host service>:<code hash hex>`. Leave `SERVICE_ID` unset and the
+To submit over JIP-2 the builder needs the chain's authorizer: `CHAIN_SPEC` (the net's
+JIP-4 chain spec; the authorizer is read from its genesis) or
+`AUTHORIZER=<host service>:<code hash hex>`. Leave `SERVICE_ID` unset there and the
 builder deploys the service itself through the chain's Bootstrap service, or reuses the
 one it (or anyone) already deployed with this code (`offchain/deploy.py`; see
-[RUNNING.md](RUNNING.md#run-it-on-any-jip-2-node--runtime-deploy-no-lasair-no-jamt)).
+[RUNNING.md](RUNNING.md#the-dex-on-any-jip-2-node-runtime-deploy)).
 
 ## Why you'd want to
 
@@ -86,10 +90,10 @@ terms and watches the public book/last price, so it can time its entry to batche
 expects to cross. Restoring full rest-hidden-until-cross *with* shared sealed matching
 is precisely rung 1's job (the crossing check moves inside the ZK proof).
 
-## Verified (2026-07-03)
+## Verified (2026-07-03, lasair)
 
-Two builders attached to one deployed service (hosted compose + a local
-`SERVICE_ID=…` instance):
+Two builders attached to one deployed service on a lasair chain (the hosted compose + a
+local `SERVICE_ID=…` instance; not yet repeated on a JIP-2 net):
 
 - the hosted builder's mempool showed **zero** knowledge of the local builder's sealed
   order (only the commitment on-chain);
@@ -102,8 +106,8 @@ Two builders attached to one deployed service (hosted compose + a local
 
 - [ ] Package as a desktop app (Tauri/Electron wrapping server.py + UI) with key
       import/export — today it's a `python3`/`docker` invocation.
-- [ ] Light-client or multi-node RPC reads (today the app trusts one node's RPC for
-      chain reads; writes are verified on-chain regardless).
+- [ ] Light-client or multi-node reads (today the app trusts one node for chain reads —
+      its JIP-2 RPC, or lasair's reader bridge; writes are verified on-chain regardless).
 - [ ] Multi-builder round-cadence convention (avoid wasted coretime on races).
 - [ ] Client-side encryption for the rung-2 path (ciphertext leaves the app, plaintext
       never does) + entry-timing heuristics.

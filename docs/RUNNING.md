@@ -1,151 +1,46 @@
 # Running Jamswap — every mode
 
-> Moved from the README (2026-07-16). The one-shot everyone wants is `./dex up`
-> (see the README); this doc covers every other way to run it — the single-node
-> quickstart, the mixed lasair+PolkaJam research nets, local source builds,
-> monitoring, and platform notes. `docs/NETS.md` explains which net is which.
+The one-shot is `./dex up` (see the README). This doc covers every mode: the two DEX
+nets, the DEX on any JIP-2 node, the single-node quickstart, the mixed-client research
+net, local lasair builds, monitoring and platform notes. [`NETS.md`](NETS.md) says
+which net is which.
 
-## Try it in one command
+## How the DEX reaches the chain
 
-You **don't need the JAM client's source code.** Everything chain-side runs from one
-published, **multi-arch** image (`ghcr.io/abutlabs/lasair`). Clone this repo and:
+`offchain/server.py` (the round builder, API and UI) reaches the chain only through
+[`offchain/chain.py`](../offchain/chain.py). `CHAIN_BACKEND` picks the backend:
 
-```sh
-docker compose up            # trading UI at http://localhost:8080
-```
+| Backend | Talks to | The service | Used on |
+|---|---|---|---|
+| `jip2` | a node's JIP-2 RPC at `CHAIN_RPC` (default `ws://localhost:19800`): heads and finality, service reads at the best or finalized block, and `submitWorkPackage` with a GP 0.8.0 work-package it builds (authorizer from the JIP-4 chain spec at `CHAIN_SPEC`) | deployed at startup through the Bootstrap service, or named by `SERVICE_ID` | pj6, any JIP-2 node |
+| `jamnp` (default) | lasair's bridges: `BUILDER_URL` (CE-133 submit), `READER_URL` (CE-129 read at the node's head), `NODE_METRICS_URL` (heads and finality from lasair's gauges) | seeded into genesis (`SERVICE_ID`) | lasair6, the quickstart, the mixed net |
 
-**All networking is spec JAMNP-S over QUIC** — in the single node here and in the
-networked testnet below. Orders reach the chain as work-packages over **CE-133**, state
-is read back over **CE-129**, and the service is **seeded into genesis** — there is no
-client-specific HTTP node RPC anywhere.
+The service blob, `service/jamswap-service.jam` (GP 0.8.0), is the same on both.
+`jamnp` retires once lasair serves JIP-2 (lasair#68).
 
-| Compose file | Run it | Scenario |
-|---|---|---|
-| [`docker-compose.yml`](docker-compose.yml) | `docker compose up` | **Quickstart** — one lasair process authors all six dev validators' slots and hosts the service; a CE-133 builder and a CE-129 reader bridge the DEX to the chain. Trading UI at `:8080`; nothing to build. |
-| [`docker-compose.mixed.yml`](docker-compose.mixed.yml) | `docker compose -f docker-compose.mixed.yml up` | **Networked testnet — mixed-client** — six validators split across **two independent JAM clients** (lasair + PolkaJam) co-authoring one Safrole chain over JAMNP-S/QUIC, leadership rotating across clients. The jamswap service is in the shared genesis; `make mixed-dex` settles trades on-chain, `make mixed` runs the equal-split consensus comparison — see [the section below](#run-it-on-a-mixed-client-chain--lasair-and-polkajam-one-command). |
+## The DEX nets
 
-The quickstart serves the **trading UI** on top of that chain (the compiled
-`service/jamswap-service.jam` ships in the repo). Open `http://localhost:8080` and you can:
-
-1. **Create an account** — an ed25519 keypair your browser holds (exportable/importable).
-2. **Fund it** in the Faucet tab — assets are **USDC, DOT, JAMKB**, trading across three
-   pairs (**DOT/USDC, JAMKB/USDC, JAMKB/DOT**).
-3. **Place an order** — Buy/Sell, Limit or Market. Tick **🔒 Seal** to hide it.
-4. **Watch it clear** — auctions run **every 6 seconds** automatically; a live countdown
-   shows the next one. Watch the order book, the mempool, and your balances update.
-
-Toggle the **mempool** view to see the data actually sitting in the service: open orders
-are tagged 🌐 LIMIT / ⚡ MARKET (terms visible) or 🔒 SEALED (only a commitment on-chain,
-terms hidden until they clear).
-
-### Run it on a MIXED-client chain — lasair **and** PolkaJam, one command
-
-The quickstart above runs one client. JAM's real promise is a network of
-**different** client implementations agreeing on one chain. This compose runs exactly
-that: six validators split across **two independent JAM clients** — [lasair](https://github.com/abutlabs/lasair)
-(our OCaml client) and **PolkaJam** (Parity's) — co-authoring **one** Safrole chain,
-with **leadership rotating across clients** and each client re-executing the other's
-blocks to a byte-identical state root.
+`./dex up` starts lasair6 (six lasair validators) and `./dex up NET=pj6` starts pj6
+(six PolkaJam validators, no lasair). Both finalize under GRANDPA; the README has the
+walkthrough and [`NETS.md`](NETS.md) the details. For pj6:
 
 ```sh
-docker compose -f docker-compose.mixed.yml up
+./dex up NET=pj6              # builds, mints genesis, deploys + sets up → http://localhost:8201
+./dex load NET=pj6            # drive it (PROFILE / RATE / SEALED_RATIO, as on lasair6)
+./dex status NET=pj6          # one head + finality across the six, and the market
+./dex soak NET=pj6 3600       # A1-A4: 1 h of load, parity, the soak verdict (exit 0 = pass)
+./dex down NET=pj6            # tear down, wipe the chain
 ```
 
-That's it — one line brings up a **multi-architecture** (Apple Silicon **and** Intel
-Linux) mixed-client JAM testnet:
-
-- `pj0 pj1 pj2` — PolkaJam validators (indices 0,1,2)
-- `lm3 lm4 lm5` — lasair validators (indices 3,4,5)
-- `spec-init` — mints the **shared genesis** both clients load (identical bytes → identical state root)
-- `watch` — prints the chain advancing
-
-Watch leadership rotate across clients, and confirm both agree on state:
-
-```sh
-# who authored each block — lasair's slots (val 3/4/5) interleave with PolkaJam's
-docker compose -f docker-compose.mixed.yml logs lm3 lm4 lm5 | grep authored
-
-# both clients on ONE chain: a lasair-authored block, re-derived by PolkaJam to the
-# SAME state root (RPC on the host):
-docker compose -f docker-compose.mixed.yml logs watch          # PolkaJam's view of the chain
-```
-
-Typical output — a single chain whose blocks alternate authorship:
-
-```
-lm5 | 🚀 authored slot 7918603 (val 5) height 1 …
-lm4 | 🚀 authored slot 7918606 (val 4) height 4 …
-lm3 | 🚀 authored slot 7918614 (val 3) height 12 …
-      (PolkaJam authored heights 2,3,5,6,7,9,10,11 in between)
-CROSS-CLIENT ROTATION — both clients co-author one chain; PolkaJam re-derives
-every lasair-authored block's state root: MATCH ✓
-```
-
-**How it works, and what it proves.** Both clients load one operator-defined genesis
-(`gen-spec`), whose validator set carries each node's real keys — PolkaJam's for
-indices 0–2, lasair's for 3–5. Each node authors **only its own** Safrole slots (the
-leader is resolved from on-chain state, so a node signs a slot *iff* it owns that
-slot's leader) and imports every other slot over the **spec JAMNP-S/QUIC** transport
-both clients speak. Because both are GP-v0.7.2-conformant, they agree on the fallback
-leader schedule and re-execute to identical state. It's the strongest possible
-interop result: two from-scratch client implementations running **one** blockchain.
-
-**Options.**
-
-build-local expects the private lasair checkout as a sibling of jamswap (../lasair); point elsewhere with make build-local LASAIR_SRC=/path/to/lasair.
-```sh
-make build-local                                                      # build a new lasair image for local use
-docker build -f ../lasair/Dockerfile.mesh -t lasair:local ../lasair   # Docker equivalent
-```
-
-```sh
-# use a specific published lasair client image, or your locally-built one:
-LASAIR_IMAGE=ghcr.io/abutlabs/lasair:0.1.0 docker compose -f docker-compose.mixed.yml up
-LASAIR_IMAGE=lasair:local                  docker compose -f docker-compose.mixed.yml up   # built from the lasair repo
-
-# pin the PolkaJam release fetched (black-box) at build time:
-PJ_RELEASE=nightly-2026-07-04 docker compose -f docker-compose.mixed.yml up
-
-# change the client split (which indices each client owns):
-LAYOUT=lasair,lasair,polkajam,polkajam,lasair,polkajam docker compose -f docker-compose.mixed.yml up
-```
-
-> **Two mixed modes.** The jamswap **service** is deployed into the shared genesis of
-> the mixed chain (both clients start with it on-chain), and there are two ways to run it:
->
-> - **`make mixed`** (this compose) — an **equal 3 PolkaJam / 3 lasair** split: a
->   *consensus-comparison* testbed where both clients author, seal (Safrole tickets), and
->   import each other's blocks apples-to-apples — what the Grafana dashboards measure. The
->   DEX UI is live and work-items are *guaranteed*, but trades **don't settle on-chain**:
->   a work-report only accumulates once it is *available* (a >2/3 super-majority of
->   assurances on the canonical branch within the 5-slot window), and only lasair can
->   produce those assurances — on a contested 3:3 chain its guarantee/assurance blocks
->   lose the fork-choice race before the window closes.
-> - **`make mixed-dex`** — a **lasair-dominant** overlay where lasair authors the
->   canonical chain, so reports become available and **register / deposit / withdraw
->   accumulate on-chain**. PolkaJam (pj0) still runs the independent client and derives
->   the same state; it just authors negligibly. This is the mixed chain running the **full
->   DEX trading flow**. See [`docker-compose.mixed-dex.yml`](docker-compose.mixed-dex.yml)
->   for the why. (Trades settle once the chain reaches Safrole ticket-seal steady state,
->   ~1–2 epochs after launch.)
->
-> The single-client quickstart above (`docker compose up`) also runs the full trading flow.
-
-> **On PolkaJam & compliance.** PolkaJam is used **black-box**: its binary is fetched
-> from the public [`paritytech/polkajam-releases`](https://github.com/paritytech/polkajam-releases)
-> at image-build time on *your* machine and is never committed or redistributed. The
-> lasair client image is a normal multi-arch pull. See
-> [`mixed/`](./mixed) and lasair's [`docs/MIXED_CLIENT_NETWORK.md`](https://github.com/abutlabs/lasair/blob/main/docs/MIXED_CLIENT_NETWORK.md).
-
-### Run it on any JIP-2 node — runtime deploy, no lasair, no `jamt`
+## The DEX on any JIP-2 node (runtime deploy)
 
 On a chain that has a Bootstrap service (id 0, e.g. PolkaJam's `--chain dev`) the DEX
 deploys itself: start `offchain/server.py` on the JIP-2 backend with **no `SERVICE_ID`**
 and it creates the service through the Bootstrap service, provides the code with JIP-2
 `submitPreimage`, then lists the default markets and registers and funds the six dev
-accounts with ordinary work-items (what genesis does on a lasair net). The id is kept in
-`DEPLOY_STATE` (default `/tmp/jamswap_deploy.json`); a restart reuses the service (so
-does a restart without the file: a service already running this code is reused).
+accounts with ordinary work-items. The id is kept in `DEPLOY_STATE` (default
+`/tmp/jamswap_deploy.json`); a restart reuses the service, and so does a restart without
+the file (a service already running this code is reused). No `jamt` is needed.
 
 ```sh
 polkajam --chain dev dump-spec /tmp/spec.json      # the authorizer comes from its genesis
@@ -159,10 +54,10 @@ python3 offchain/deploy.py --rpc ws://localhost:19800 --chain-spec /tmp/spec.jso
 too); `GENESIS_BALANCE` sets the funding per asset (display units, default 1,000,000);
 `DEPLOY_SERVICE_ID` asks for an id, `DEPLOY_FRESH=1` never reuses. The API opens once
 the treasury's JAMKB reserve deposit has landed (`RESERVE_WAIT_SECS`, default 120), so the
-first order is not refused as under-reserved. How the Bootstrap
-instruction was established is in [`offchain/deploy.py`](../offchain/deploy.py).
-lasair nets keep the genesis-seeded service: lasair has no Bootstrap service or JIP-2
-server yet (lasair#68, #69).
+first order is not refused as under-reserved. How the Bootstrap instruction was
+established is in [`offchain/deploy.py`](../offchain/deploy.py). This path is verified on
+PolkaJam; lasair nets keep the genesis-seeded service, since lasair has no Bootstrap
+service or JIP-2 server yet (lasair#73, lasair#68).
 
 Point `CHAIN_RPC` at a node that forwards work-packages. A PolkaJam **validator**'s RPC
 does not (it answers `submitWorkPackage` with "Failed to submit work-package to even a
@@ -178,44 +73,97 @@ and from then on **every new order is refused** ("service under-reserved on JAMK
 buffer short, one deposit in flight at a time, resent under the same nonce if it has not
 landed in 60 s. Leave it off where someone else funds the reserve (docs/JAMKB_STANDARD.md).
 
-### Run it on six PolkaJam validators — no lasair anywhere (`pj6`)
-
-The same runtime deploy as a test net, one command (docs/NETS.md, "The DEX with no
-lasair"): six PolkaJam validators with GRANDPA on a shared genesis, an ordinary PolkaJam
-node as the DEX's gateway, the DEX on JIP-2 (`RESERVE_TOPUP=1`), a load generator and
-netwatch.
+## Single-node quickstart: `docker compose up`
 
 ```sh
-./dex up NET=pj6              # builds, mints genesis, deploys + sets up → http://localhost:8201
-./dex load NET=pj6            # drive it (PROFILE / RATE / SEALED_RATIO as for lasair6)
-./dex status NET=pj6          # one head + finality across the six, and the market
-./dex soak NET=pj6 3600       # A1-A4: 1 h of load, parity, the soak verdict (exit 0 = pass)
-./dex down NET=pj6            # tear down, wipe the chain
+docker compose up            # trading UI at http://localhost:8080
 ```
 
-### Options
+Nothing to build: one lasair process from the published multi-arch image
+(`ghcr.io/abutlabs/lasair`) authors all six dev validators' slots and hosts the
+service, seeded into genesis; lasair's CE-133 builder and CE-129 reader bridges connect
+the DEX to it over JAMNP-S/QUIC. There is no finality, so fills are not durable: it is
+the 60-second demo, not a net.
+
+The UI works as on the DEX nets: create an account, fund it in the Faucet tab (USDC,
+DOT, JAMKB across DOT/USDC, JAMKB/USDC and JAMKB/DOT), place a Limit or Market order
+(tick **🔒 Seal** to hide it), and watch the 6-second auctions clear it. The
+**mempool** view shows what sits in the service: 🌐 LIMIT / ⚡ MARKET orders with their
+terms, 🔒 SEALED ones as a commitment only until they clear.
+
+## The mixed-client research net: lasair and PolkaJam on one chain
 
 ```sh
-LASAIR_TAG=1.6.2 docker compose up              # pin the client version instead of :latest
-LASAIR_IMAGE=lasair:local docker compose up     # any image ref — e.g. a local source build
+docker compose -f docker-compose.mixed.yml up
 ```
 
-### Dev modes (Makefile)
-
-Public images by default; a local lasair source build on demand — so a lasair change
-can be verified end-to-end BEFORE tagging a release and waiting for the ~80-min
-multi-arch CI publish. Requires the (private) lasair checkout next to this repo
-(override with `LASAIR_SRC=…`):
+Six validators on one shared genesis, split across two independent clients:
+`pj0 pj1 pj2` are PolkaJam (fetched black-box at build time), `lm3 lm4 lm5` are lasair.
+Each node authors only its own Safrole slots and imports the others' over JAMNP-S/QUIC,
+so leadership rotates across clients; `spec-init` mints the shared genesis and `watch`
+prints the chain advancing.
 
 ```sh
-make up             # default DEX stack, published image        (docker compose up)
-make mixed          # mixed net, EQUAL 3 PolkaJam / 3 lasair (consensus comparison)
-make mixed-dex      # mixed net, lasair-dominant — DEX SETTLES TRADES on-chain
-make local          # build ../lasair -> lasair:local -> DEX stack
-make mixed-local    # same source build -> equal-split mixed net
-make mixed-dex-local# same source build -> functional-DEX mixed net
-make verify         # e2e smoke test against the RUNNING DEX stack (works on mixed-dex too)
+docker compose -f docker-compose.mixed.yml logs lm3 lm4 lm5 | grep authored   # lasair's slots
+docker compose -f docker-compose.mixed.yml logs watch                         # the chain, via PolkaJam's RPC
+```
+
+lasair's GP 0.8.0 release checks include a 10-minute 3:3 soak of this net with PolkaJam
+`nightly-2026-09-22`: one head, 98 heads agreed, none diverged (lasair
+`docs/GP_0_8_0_PLAN.md`). `make verify-mixed` judges a running net the same way (below).
+
+**It is not a DEX net.** The DEX UI runs on `:8090` through lasair's bridges and the
+service is in the shared genesis, but the two clients share no finality (PolkaJam runs
+`dummy`), and a 45-minute run in 2026-07 settled nothing ([`SOAK_RELIABILITY.md`](SOAK_RELIABILITY.md)).
+`make mixed-dex` layers `docker-compose.mixed-dex.yml` on top, a lasair-dominant
+configuration under which trades settled in 2026-07 (GP 0.7.2); it is not re-verified
+at GP 0.8.0.
+
+The generated nets (`./dex up NET=<net>`, [`NETS.md`](NETS.md)) are the successors: any
+mix of lasair, PolkaJam, JavaJAM and pbnjam, one command each.
+
+> **On PolkaJam and compliance.** PolkaJam is used **black-box**: its binary is fetched
+> from the public [`paritytech/polkajam-releases`](https://github.com/paritytech/polkajam-releases)
+> at image-build time on *your* machine and is never committed or redistributed. See
+> [`mixed/`](../mixed) and lasair's [`docs/MIXED_CLIENT_NETWORK.md`](https://github.com/abutlabs/lasair/blob/main/docs/MIXED_CLIENT_NETWORK.md).
+
+## Options
+
+```sh
+LASAIR_IMAGE=lasair:local docker compose up          # any lasair image, e.g. a local source build
+LASAIR_TAG=2.0.0 docker compose up                   # the quickstart's tag (default 2.0.0)
+PJ_RELEASE=nightly-2026-09-22 docker compose -f docker-compose.mixed.yml up   # the PolkaJam release (default)
+```
+
+`LASAIR_IMAGE` works for every compose file and `./dex`; lasair 1.x is GP 0.7.2 and
+cannot run the current service blob. `mixed/Dockerfile.polkajam` checks the release
+tarball against a pinned sha256; a release with no pin is checked against the digest
+the release API reports, with a warning. For another client split, use a generated net
+(`./dex up NET=<net>`, [`NETS.md`](NETS.md)).
+
+Sealing defaults to commit–reveal (rung 3, the permissionless base state). To opt in to
+the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
+`ENC_MODE: "1"` under the `dex` service in `docker-compose.yml`. Rounds are sized to the
+refine budget of a tiny chain (G_R = 1e9); on a full-spec chain set `REFINE_GAS: "5e9"`
+there too ([`THROUGHPUT.md`](THROUGHPUT.md)).
+
+## Dev modes (Makefile)
+
+Public images by default; a local lasair source build on demand, so a lasair change can
+be verified end to end before tagging a release and waiting for the ~80-min multi-arch
+CI publish. Needs the (private) lasair checkout next to this repo (override with
+`LASAIR_SRC=…`):
+
+```sh
+make up             # quickstart, published image                    (docker compose up)
+make mixed          # mixed net, 3 PolkaJam / 3 lasair (consensus comparison)
+make mixed-dex      # mixed net, lasair-dominant overlay (historical, see above)
+make local          # build ../lasair -> lasair:local -> quickstart
+make mixed-local    # same source build -> mixed net
+make mixed-dex-local# same source build -> mixed net + lasair-dominant overlay
+make verify         # e2e smoke test against the RUNNING quickstart (:8080)
 make verify-mixed   # health check against the RUNNING mixed net
+make test-nets      # unit tests of the net configs (nets/), no Docker
 make down           # stop whichever stack is up
 ```
 
@@ -227,12 +175,15 @@ default 360 s, then judges) — only then tag `client-vX.Y.Z` and let CI publish
 every validator credited blocks in the on-chain statistics, and peers; see
 `mixed/verify.sh` for the knobs (`LAYOUT`, `NETWATCH_NODES`, `VERIFY_ARGS`).
 
-### Monitoring the mixed network
+## Monitoring
 
 ```sh
-make monitor        # mixed net + Prometheus + Grafana; dashboards on :3010, no login
+make monitor        # Prometheus + Grafana on a running mixed net; dashboards on :3010, no login
 make monitor-down
 ```
+
+lasair6 has its own overlay, `docker-compose.lasair6-monitor.yml`; on pj6, netwatch runs
+as part of the net (`127.0.0.1:9301/metrics`, `/verdict`).
 
 Metric sources, client-neutral first:
 
@@ -244,15 +195,14 @@ Metric sources, client-neutral first:
   `jam_final_agree` (hash agreement at the common slot), `jam_peers`, `jam_node_up`
   (all `{node, client}`), net-wide `jam_net_*` (distinct heads, one-head flag,
   divergence length) and `/verdict` (the same judgement `netwatch.py poll` prints).
-- **The apples-to-apples baseline: on-chain validator statistics (GP π)**,
-  decoded by netwatch from JIP-2 `statistics` (GP 0.8.0 C(13)) — per-validator
-  blocks / tickets / guarantees / assurances as recorded by CONSENSUS, identical
-  from any node, covering every client's validators (`jam_pi_*`).
-- **lasair's native `/metrics`** (≥1.6.4, `--metrics-port`): blocks
-  authored/imported, import rejects by STF reason, peers, per-peer dial failures,
-  QUIC accepts/errors, Safrole tickets, the CE-133 pipeline. The dashboards show
-  these in collapsed **lasair overlay** rows — optional detail, empty on a net
-  without lasair.
+- **On-chain validator statistics (GP π)**, decoded by netwatch from JIP-2 `statistics`
+  (GP 0.8.0 C(13)) — per-validator blocks / tickets / guarantees / assurances as
+  recorded by consensus, identical from any node, covering every client's validators
+  (`jam_pi_*`).
+- **lasair's native `/metrics`** (`--metrics-port`): blocks authored/imported, import
+  rejects by STF reason, peers, per-peer dial failures, QUIC accepts/errors, Safrole
+  tickets, the CE-133 pipeline. The dashboards show these in collapsed **lasair
+  overlay** rows — optional detail, empty on a net without lasair.
 - `monitor/exporter.py` (legacy): PolkaJam log scraping through the Docker socket.
   The monitor image runs it only while `NETWATCH_NODES` is unset.
 
@@ -264,24 +214,11 @@ averaged by `client`), **JAM node** (any node, with a selector), **JAM finality*
 `monitor/grafana/gen_dashboards.py` — edit that, not the JSON.
 Prometheus itself is on :9090.
 
-Sealing defaults to commit–reveal (rung 3 — the permissionless base state). To opt in to
-the rung-2 committee (encrypt-until-batch, simulated committee), uncomment
-`ENC_MODE: "1"` under the `dex` service in `docker-compose.yml`. Rounds are sized to the
-refine budget of a tiny chain (G_R = 1e9); on a full-spec chain set `REFINE_GAS: "5e9"`
-there too ([`THROUGHPUT.md`](THROUGHPUT.md)).
+## Platforms
 
 | Your machine | What runs | Notes |
 |---|---|---|
 | **Linux / amd64** (Intel/AMD) | native | — |
-| **Apple Silicon** (M1–M4, arm64) | native | the image is built for arm64 too |
+| **Apple Silicon** (M1–M4, arm64) | native | lasair and PolkaJam images are arm64 too; JavaJAM runs as a native process (NETS.md) |
 | **Windows / WSL2** (amd64) | native | run inside a WSL2 Linux shell |
 | **arm64 without an arm64 image yet** | emulated | add `--platform linux/amd64` (slower, but works) |
-
-> **Running your own JAM node?** Jamswap is a fully self-contained JAM **service** —
-> nothing is baked into the client. Any conformant node that speaks JAMNP-S (CE-133
-> work-package submission, CE-129 storage reads) can host it and run the same flow.
-> Build the blob yourself with `./dex rebuild` (GP 0.8.0, via `tools/jam080`). lasair is
-> just the node we ship it on.
-
----
-

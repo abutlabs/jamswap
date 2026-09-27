@@ -1,40 +1,70 @@
-# Mixed-client differential testnet — one service, independent clients, one verdict
+# Cross-client differential — one service, independent clients, one verdict
 
-> **First green run: 2026-07-04.** The same `service/jamswap-service.jam` deployed to a
-> lasair node and a PolkaJam local testnet (both GP 0.7.2), driven through the identical
-> trustless scenario, produced **byte-identical on-chain state** — and both PVMs rejected
-> the same forged order.
+The same `service/jamswap-service.jam` runs the same trustless scenario on independent
+JAM clients, each on its own fresh chain, and the resulting service state is compared
+byte for byte. If two clients disagree, one of them has a conformance bug, judged
+against the Graypaper (GP 0.8.0), never against the other client, and the scenario is
+a minimal reproducer by construction.
 
-> **Rig retired.** This document records a completed milestone. The
-> `docker-compose.differential.yml` rig it describes was removed when jamswap retired
-> the HTTP operator RPC (everything now runs over JAMNP-S/QUIC); the result above
-> stands as recorded, and the scenario survives in
-> [`differential/differential.py`](../differential/differential.py) as standalone lanes that
-> read state through the DEX's chain adapter (`offchain/chain.py`: jamnp on lasair, JIP-2
-> on PolkaJam). The GP 0.8.0 re-run (lasair vs PolkaJam 0.1.29, 2026-09-26) agreed byte
-> for byte (jamswap#23).
-> The successor cross-client story is the live mixed-client chain
-> (`docker-compose.mixed.yml` — see the README).
+**Current result (2026-09-26, GP 0.8.0, jamswap#23):** lasair (a local build of lasair
+main at `d88fc0a`) and PolkaJam 0.1.29 (`nightly-2026-09-22`) — **ALL CLIENTS AGREE**:
+balance, book and book-after-forgery match byte for byte, and the forged order is
+rejected on both (commit 878ea19).
 
-## What it proves (and why it beats static vectors)
+## The scenario
 
-Conformance suites test clients against *fixed* vectors. This rig tests them against a
-**live application**: real ed25519 verification inside refine, real state writes in
-accumulate, real adversarial inputs. If two independent implementations of GP 0.7.2
-execute the same service identically down to the byte, that's evidence about both
-clients *and* about the service's portability. If they ever disagree, one of them has a
-conformance bug — and we have a minimal reproducer by construction.
-
-The scenario each client runs (now `differential/differential.py`):
+[`differential/differential.py`](../differential/differential.py) drives it; the
+scenario and assertions are client-agnostic.
 
 | step | payload | asserted result |
 |---|---|---|
-| owner-signed registration | `TAG_REGISTER` | handle bytes equal |
+| owner-signed registration | `TAG_REGISTER` | a handle, chain-assigned (reported, not compared) |
 | market listing + deposit | `TAG_LIST`, `TAG_DEPOSIT` | balance bytes equal |
-| **signed order** (ed25519 verified in refine) | `TAG_SMATCH` | resting-book bytes equal |
+| **signed order** (ed25519 verified in refine) | `TAG_SMATCH` | resting-book bytes equal (the account field normalized to each lane's handle) |
 | **forged order** (wrong key for the account) | `TAG_SMATCH` | book unchanged on both |
 
-Verdict table from the first green run:
+## Lanes
+
+Each lane runs standalone and prints its state as JSON; `compare` diffs them. Both
+lanes submit and read through the DEX's chain adapter (`offchain/chain.py`).
+
+| lane | client | how |
+|---|---|---|
+| `lasair` | lasair | inside a lasair net (lasair6): the service is seeded in genesis (`SERVICE_ID`); the adapter's `jamnp` backend (lasair's CE-133 builder and CE-129 reader bridges) |
+| `pj` | PolkaJam, black box | `differential/Dockerfile.polkajam`: the public release fetched at build time (never committed), a local `polkajam-testnet`; the service deployed over JIP-2 through the Bootstrap service (`offchain/deploy.py`), items and reads through the adapter's `jip2` backend. `PJ_DEPLOY=jamt` / `PJ_SUBMIT=jamt` use `jamt` instead (A/B checks) |
+
+```sh
+# lasair lane, inside the lasair6 network
+BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 SERVICE_ID=100 \
+    python3 differential.py lasair > lasair.json
+# pj lane (the image's default command starts polkajam-testnet, then runs it)
+python3 differential.py pj > pj.json
+python3 differential.py compare lasair.json pj.json
+```
+
+Adding a lane means a client shim (`deploy`, `item`, `storage`, `poll`); for a client
+that serves JIP-2, `storage` is the adapter's `read`. JavaJAM 0.4.3 (GP 0.8.0, serves
+JIP-2) has not been tried as a lane yet; the other full nodes listed in #22 (JAM DUNA
+and others, at GP 0.7.x) become candidates once they move to 0.8.0. Running N lanes in
+one invocation is still open from #15.
+
+## Findings along the way
+
+- **A package anchored before its service exists is dropped silently.** `jamt item`
+  right after `create-service` anchored one slot before the creation and vanished; the
+  driver waits a few slots after creation. Poll state; don't trust submission receipts.
+- **`jamt` hex arguments need a `0x` prefix**; bare hex is read as an ASCII string, and
+  the resulting garbage payloads execute as silent no-ops.
+- **Use the handle the chain assigns.** lasair6's genesis seeds dev accounts 1–6, so
+  the trader got handle 7 while the order still named account 1, and lasair correctly
+  refused it. The scenario now reads the assigned handle (878ea19).
+
+## History
+
+**First green run (2026-07-04, GP 0.7.2).** The retired `docker-compose.differential.yml`
+rig deployed the service to a lasair node over lasair's old HTTP operator RPC
+(`ghcr.io/abutlabs/lasair-node`, since retired) and to a PolkaJam local testnet with
+`jamt`; both produced byte-identical state and rejected the same forged order:
 
 ```
 check                lasair                              polkajam                            verdict
@@ -44,45 +74,5 @@ book                 010000000a0000000000350c0050c30000  010000000a0000000000350
 book_after_forgery   (unchanged)                         (unchanged)                         MATCH ✓
 ```
 
-## What this is NOT (yet): a shared consensus network
-
-The two lanes are **separate chains** running the same service. A single network mixing
-clients is gated on transport interop: lasair's testnet gossips over its own TCP
-protocol, while PolkaJam (and the other teams' nets) speak **JAMNP-S over QUIC**. That's
-lasair M2/M3 client work, not compose plumbing. When JAMNP-S lands in lasair, these
-lanes merge into one chain and the byte-comparison becomes consensus itself.
-
-## Lanes
-
-| lane | client | how | status |
-|---|---|---|---|
-| 1 | **lasair** (ours, OCaml) | `ghcr.io/abutlabs/lasair-node`, HTTP operator RPC | ✅ green |
-| 2 | **PolkaJam** (Parity, Rust, binary-only) | public release fetched at image build (never committed — black-box use, see lasair `docs/DISCLOSURES.md`); local `polkajam-testnet`; the service deployed over JIP-2 through the Bootstrap service (`offchain/deploy.py`, no `jamt`; `PJ_DEPLOY=jamt` for the old path) | ✅ green |
-| 3 | **JAM DUNA** (`jam-duna/jamtestnet`) | published `jamduna` binary (linux/amd64) + chainspec tooling + JSON-RPC :19800-19805, GP 0.7.2 | 🔜 best next candidate — needs its RPC's service-deploy/work-item surface verified; amd64-only (emulated on arm64) |
-| 4 | **TurboJam** (r2rationality, C++) | source-build Dockerfiles upstream; JIP-2 RPC | ⏸ deferred — no prebuilt release, work-item interface unverified |
-
-Adding a lane = implement the client shim in `differential/differential.py`
-(`deploy`, `item`, `storage`); `storage` is `chain.py`'s `read` for any client that serves
-JIP-2. The scenario and assertions are client-agnostic.
-
-## Operational findings (the rig already paid rent)
-
-- **Anchor lag drops packages silently**: a work package anchored on a block where the
-  target service doesn't exist yet is dropped with no error — `jamt item` immediately
-  after `create-service` anchored one slot before the creation and vanished. The driver
-  now waits a few slots post-creation. (Same class of lesson as lasair's "no partial
-  credit" fuzzing: distributed pipelines fail silently; poll state, don't trust
-  submission receipts.)
-- **`jamt` hex arguments need `0x` prefixes** — bare hex is interpreted as an ASCII
-  string (payloads submitted as garbage tags execute as no-ops, again silently).
-- PolkaJam release pinning: `PJ_RELEASE=nightly-2026-07-04 docker compose ... up`
-  (verified against `nightly-2026-06-29`/0.1.28 and `nightly-2026-07-04`).
-
-## Where this goes
-
-1. **Lane 3 (JAM DUNA)** — third independent implementation, same verdict table.
-2. **Scenario depth** — sealed rounds (commit–reveal + committee), partial-fill carry,
-   market-order band checks: the full `sim/demo.py` matrix, asserted cross-client.
-3. **JAMNP-S in lasair** — the lanes become one chain; differential-by-comparison
-   becomes differential-by-consensus, and jamswap runs on a genuinely mixed validator
-   set with zero changes (the service is already proven client-portable).
+The lanes were rewritten for QUIC-era lasair (3f1526b), moved onto the chain adapter
+(#10–#13), and re-run at GP 0.8.0 (#23).
