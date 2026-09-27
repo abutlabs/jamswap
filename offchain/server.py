@@ -264,8 +264,92 @@ def submit(payload, check=None, detail=""):
         raise
     # the node it went through, where the backend submits through several (jip2
     # CHAIN_SUBMIT_RPC): counted by node, and named when a round settles
-    metrics.relayed(tid, receipt.get("via") if isinstance(receipt, dict) else None)
+    if isinstance(receipt, dict):
+        metrics.relayed(tid, receipt.get("via"))
+        _note_refusals(op, receipt)
+        if payload[0] not in ROUND_TAGS:
+            _watch_package(op, payload, receipt, detail)
     return receipt
+# --- package watch: submitWorkPackage success is not delivery ---------------------------
+# JIP-2 submitWorkPackage returns once the package reached one guarantor; it may still never
+# be reported (a guarantor may drop it: JavaJAM 0.4.3 queues a package for a busy core and
+# drops the queue when the guarantor rotation moves it off that core, jamswap#18). JIP-2
+# workPackageStatus then answers Failed ("cannot become ready on this fork") once its
+# reporting window has passed, ~6-8 blocks after the anchor. A round in flight is released
+# on that (see _resolve_inflight); any other payload is sent again, as is: the service is
+# idempotent under a duplicate (at-least-once submission, chain.py), so a resend that races
+# a late landing is refused, never applied twice.
+ROUND_TAGS = (TAG_SMATCH, TAG_REVEAL, TAG_ENC_ROUND)
+PACKAGE_POLL_SECS = float(os.environ.get("PACKAGE_POLL_SECS", "6"))   # one status read per slot
+PACKAGE_WATCH_SECS = 300.0         # stop watching a package this long after it was sent
+PACKAGE_RESENDS = 5                # most resends of one payload
+_pkg_watch = []                    # {"op","payload","receipt","detail","t","checked","resends"}
+_pkg_lock = threading.Lock()
+def _watch_package(op, payload, receipt, detail=""):
+    if "package_hash" not in receipt or getattr(CHAIN, "package_status", None) is None:
+        return                         # a backend with no package status (jamnp)
+    with _pkg_lock:
+        _pkg_watch.append({"op": op, "payload": payload, "receipt": receipt, "detail": detail,
+                           "t": time.time(), "checked": 0.0, "resends": 0})
+def _package_status(receipt):
+    """(kind, detail) of a submitted package's JIP-2 workPackageStatus at the best block:
+    ("Reportable" | "Reported" | "Ready" | "Failed", ...), or (None, None) when there is
+    none to be had (no receipt, a backend without it, a read error, an anchor too old to
+    ask about)."""
+    status = getattr(CHAIN, "package_status", None)
+    if not isinstance(receipt, dict) or "package_hash" not in receipt or status is None:
+        return None, None
+    try:
+        s = status(receipt)
+    except Exception:
+        return None, None
+    if isinstance(s, dict) and len(s) == 1:
+        kind = next(iter(s))
+        return kind, s[kind]
+    return None, None
+def _resolve_packages_once(now):
+    """Resend each watched payload whose package JIP-2 reports Failed; forget one that is
+    Ready (queued for accumulation), past PACKAGE_WATCH_SECS, or resent PACKAGE_RESENDS
+    times."""
+    with _pkg_lock:
+        todo = [w for w in _pkg_watch if now - w["checked"] >= PACKAGE_POLL_SECS]
+    for w in todo:
+        w["checked"] = now
+        kind, why = _package_status(w["receipt"])
+        done = kind == "Ready" or now - w["t"] > PACKAGE_WATCH_SECS
+        if kind == "Failed":
+            if w["resends"] >= PACKAGE_RESENDS:
+                print(f"package watch: {w['op']} package {w['receipt']['package_hash'][:16]}.. "
+                      f"failed ({why}); {w['resends']} resends, giving up")
+                done = True
+            else:
+                try:
+                    r = CHAIN.submit(w["payload"])
+                except Exception as e:
+                    r = None
+                    print(f"package watch: {w['op']} resend failed ({type(e).__name__}: {e})")
+                metrics.inc("jamswap_package_resends_total", {"op": w["op"]})
+                print(f"package watch: {w['op']} package {w['receipt']['package_hash'][:16]}.. "
+                      f"(via {w['receipt'].get('via')}) failed ({why}): resent"
+                      + (f" via {r.get('via')} as {r['package_hash'][:16]}.." if isinstance(r, dict)
+                         and "package_hash" in r else ""))
+                w["resends"] += 1
+                if isinstance(r, dict) and "package_hash" in r:
+                    w["receipt"], w["t"] = r, now
+        if done:
+            with _pkg_lock:
+                if w in _pkg_watch:
+                    _pkg_watch.remove(w)
+_refusal_seen = {}                 # reason -> last time it was printed
+def _note_refusals(op, receipt):
+    # a node or core that refused before another took the package: say why, once a minute
+    # per reason (a node that refuses everything would otherwise go unnoticed)
+    now = time.time()
+    for r in receipt.get("refused") or ():
+        key = r[:160]
+        if now - _refusal_seen.get(key, 0) >= 60:
+            _refusal_seen[key] = now
+            print(f"relay {op}: refused by {r[:300]} (sent via {receipt.get('via')})")
 def storage(key):
     # the value under `key` in the service's storage at the best head (b"" when absent)
     return CHAIN.read(key)
@@ -1427,7 +1511,19 @@ def _resolve_inflight(m, fr, now):
             _abandon(m, fr, why, now)
     else:
         fr.pop("dead_since", None)
-        if now - fr["t"] > ROUND_GATE_SECS:
+        kind, failed = None, None
+        if fr.get("receipt") and now - fr.get("pkg_checked", 0.0) >= PACKAGE_POLL_SECS:
+            fr["pkg_checked"] = now
+            kind, failed = _package_status(fr["receipt"])
+        if kind == "Failed":
+            # its package can no longer be reported on this fork (JIP-2 workPackageStatus
+            # Failed): it cannot land, so there is nothing to wait out. Released as a
+            # zombie like any other, so a landing that still happens is finalized.
+            _inflight.pop(m, None)
+            print(f"round m{m}: package {fr['receipt']['package_hash'][:16]}.. (via "
+                  f"{fr['receipt'].get('via')}, core {fr['receipt'].get('core')}) failed: {failed}")
+            _abandon(m, fr, "package-failed", now)
+        elif now - fr["t"] > ROUND_GATE_SECS:
             _inflight.pop(m, None)
             _abandon(m, fr, "timeout", now)
 
@@ -1440,6 +1536,7 @@ def _resolve_rounds_once(now=None):
     the next sweep (see _market_lock)."""
     pinned, now = now, now or time.time()
     _resolve_registrations_once(now)   # confirm-or-retry fresh-account registrations
+    _resolve_packages_once(now)        # resend payloads whose packages JIP-2 reports Failed
     _drain_carry_retry(now)            # retry any re-seals the chain was too busy to accept
     for m in sorted(set(_inflight) | set(_zombies)):
         lk = _market_lock(m)
@@ -1478,7 +1575,8 @@ metrics.describe("jamswap_book_depth", "resting on-chain book quantity per marke
 metrics.describe("jamswap_mempool_orders", "orders waiting in the off-chain mempool per market")
 metrics.describe("jamswap_inflight_orders", "orders inside a round awaiting durable settlement per market")
 metrics.describe("jamswap_settle_reverted_total", "settlements observed on-chain then ERASED by a re-org before the hold window passed")
-metrics.describe("jamswap_round_abandoned_total", "rounds released without settling, by reason (book-moved / commit-gone / seq-floor = dead; timeout = never included)")
+metrics.describe("jamswap_round_abandoned_total", "rounds released without settling, by reason (book-moved / commit-gone / seq-floor = dead; package-failed = JIP-2 reports its package cannot be reported; timeout = never included)")
+metrics.describe("jamswap_package_resends_total", "payloads sent again because JIP-2 reported their package Failed, by op")
 metrics.describe("jamswap_round_late_landed_total", "released rounds that settled after all (seen by their landed-round marker, then finalized)")
 
 def _stats_poller():
@@ -1666,6 +1764,7 @@ def _build_round(m, base, quote):
     try:
         receipt = submit(payload, check=lambda: _landed_slot(rid) is not None, detail=detail)
         rec["via"] = receipt.get("via") if isinstance(receipt, dict) else None
+        rec["receipt"] = receipt if isinstance(receipt, dict) else None
     except ChainBusy:
         # BACKPRESSURE: every lm node's CE-133 queue is at cap (lasair --wp-queue-cap),
         # so the round never left the builder. Nothing cleared — put its orders back in

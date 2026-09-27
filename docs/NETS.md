@@ -1,21 +1,24 @@
 # Which net is which
 
-The DEX runs on two nets today. Both are GP 0.8.0, both finalize under GRANDPA, and
-each is a single client:
+The DEX runs on three nets today. All are GP 0.8.0 and finalize under GRANDPA:
 
 - **`lasair6`** (the `./dex` default): six lasair validators. The DEX reaches them
   through lasair's JAMNP-S builder and reader bridges ([below](#the-dex-on-lasair-lasair6)).
 - **`pj6`**: six stock PolkaJam validators and no lasair anywhere. The DEX reaches them
   over JIP-2 and deploys its service at startup ([below](#the-dex-on-jip-2-pj6-17)).
+- **`pj-javajam`**: three PolkaJam and three JavaJAM validators, two clients finalizing
+  one chain together; the pj6 stack, submitting through a PolkaJam and a JavaJAM node in
+  turn ([below](#the-dex-on-polkajam--javajam-pj-javajam-18)).
 
 The other nets are cross-client research: do different clients keep one head, finalize
-together and hold the same state? None of them is a DEX net today.
+together and hold the same state?
 
 ## Just run the DEX
 
 ```bash
 ./dex up                # lasair6: start, wait for finality → http://localhost:8081
 ./dex up NET=pj6        # pj6: start, deploy + set up the service → http://localhost:8201
+./dex up NET=pj-javajam # PolkaJam + JavaJAM (JavaJAM native on macOS) → http://localhost:8204
 ./dex status            # finality + market at a glance (NET=pj6 for pj6, as for every verb)
 ./dex load              # optional: start the load generator (up leaves it stopped)
 ./dex down              # tear down + wipe the chain
@@ -33,8 +36,8 @@ next `up`; only a change to `service/src` needs `./dex rebuild`.
 | `lasair6` | lasair ×6 | 0.8.0 | GRANDPA (lasair, jam-np PR #6 draft) | **runs**: lasair's bridges, service in genesis; UI :8081 | #12 |
 | `pj6` | PolkaJam ×6 | 0.8.0 | GRANDPA (PolkaJam) | **runs**: JIP-2, runtime deploy; A1–A4 pass (10-min and 1-hour soaks); UI :8201 | #17 |
 | `mixed` | PolkaJam ×3, lasair ×3 | 0.8.0 | none shared (PolkaJam runs `dummy`) | UI on :8090 through lasair's bridges; does not settle (no shared finality; a 45-min run in 2026-07 cleared nothing) | #2 |
-| `pj-javajam` | PolkaJam ×3, JavaJAM ×3 | 0.8.0 | GRANDPA on both: one head, but finality stays at genesis | none | #18 |
-| `pj-javajam-42` | PolkaJam ×4, JavaJAM ×2 | 0.8.0 | GRANDPA on both; not run yet | none | #18 |
+| `pj-javajam` | PolkaJam ×3, JavaJAM ×3 (native on macOS) | 0.8.0 | GRANDPA on both, finalizing together (JavaJAM started first) | **runs**: JIP-2 through the PolkaJam gateway and JavaJAM's jj3, runtime deploy; A1–A4 pass (10-min soak; 1-hour: PJJJ_60_ROW); UI :8204 | #18 |
+| `pj-javajam-42` | PolkaJam ×4, JavaJAM ×2 | 0.8.0 | GRANDPA on both; not run yet | configured (the pj-javajam stack), not run; UI :8205 | #18 |
 | `pj-pbnjam` | PolkaJam ×5, pbnjam ×1 | 0.8.0 (pbnjam: unconfirmed) | GRANDPA: the five PolkaJam nodes finalize alone (5 of 6) | none; the pbnjam image does not start | #19 |
 | `pj-pbnjam-42` | PolkaJam ×4, pbnjam ×2 | 0.8.0 (pbnjam: unconfirmed) | GRANDPA | none; blocked on the pbnjam image | #19 |
 | `lasair-pj-javajam` | lasair ×2, PolkaJam ×2, JavaJAM ×2 | 0.8.0 | GRANDPA | configured (lasair's bridges), not run: needs lasair#54, #60, #66 | #20 |
@@ -51,7 +54,7 @@ compose files; the others are generated from [`nets/profiles.py`](../nets/profil
 | File | Net | UI | What it's for |
 |---|---|---|---|
 | `docker-compose.lasair6.yml` | 6× lasair, GRANDPA | :8081 | The DEX on lasair (`./dex up`). |
-| `nets/compose/<net>.yml` | per-index client layouts | pj6: :8201 | **Generated** nets (below), including `pj6`, the DEX on PolkaJam. `./dex up NET=<net>`. |
+| `nets/compose/<net>.yml` | per-index client layouts | pj6: :8201, pj-javajam: :8204 | **Generated** nets (below), including `pj6`, the DEX on PolkaJam, and `pj-javajam`, the DEX on PolkaJam + JavaJAM. `./dex up NET=<net>`. |
 | `docker-compose.yml` | one lasair process | :8080 | Quickstart demo: one command, nothing to build. No finality, so fills are not durable. |
 | `docker-compose.mixed.yml` | 3× lasair + 3× PolkaJam | :8090 | Consensus research: two clients co-authoring one chain. No shared finality; not a settlement net. |
 | `docker-compose.mixed-dex.yml` | mixed, lasair-dominant | (overlay) | Historical (2026-07, GP 0.7.2): lasair authors nearly every block so trades settle; not re-verified at GP 0.8.0. |
@@ -72,7 +75,7 @@ them. Add `NET=<name>` to any `./dex` verb (default `lasair6`):
 ./dex logs NET=pj6 pj3      # a node's log (native JavaJAM nodes too)
 ./dex down NET=pj6          # tear down, wipe the chain, stop native nodes
 ./dex gen                   # regenerate nets/compose/*.yml after editing nets/
-# nets with the JIP-2 DEX (pj6):
+# nets with the JIP-2 DEX (pj6, pj-javajam):
 ./dex load NET=pj6          # start the load generator (up leaves it stopped); noload stops it
 ./dex soak NET=pj6 3600     # A1-A4 in one command (below); default 600 s
 ```
@@ -267,14 +270,25 @@ stack as pj6: the `rpc` gateway (`127.0.0.1:42450`), `dex` (UI `:8204`), `loadge
 `netwatch` (`127.0.0.1:9304`). `pj-javajam-42` (4 : 2) has the same stack, UI `:8205`;
 it has not been run. What differs from pj6:
 
-- **Start, in stages.** The genesis minter; JavaJAM, until every JavaJAM node answers on
-  its JIP-2 RPC (its JVM takes a few seconds; a fixed pause was often too short), plus
-  5 s; then the PolkaJam validators alone; then a 56-s check that every validator
-  follows the chain and finalizes (`up` exits 1 if not: start a fresh net); only then
-  the gateway, dex, loadgen and netwatch. Why: PolkaJam casts its round-1 GRANDPA votes
-  once, as it starts, and never re-sends them (the #18 diagnosis), so they must reach
-  every JavaJAM node at that moment. Starting everything at once failed 5 times in 5 on
-  the loaded test Mac; staged, the first `up` of each soak formed.
+- **Start, in stages, then check.** The genesis minter; JavaJAM, until every JavaJAM
+  node answers on its JIP-2 RPC (its JVM takes a few seconds), plus 5 s; then the
+  PolkaJam validators *and the gateway*; then 20 s and a 36-s `nets/onehead.py --gateway
+  --min-peers 2`: every validator and the gateway on one head, finalizing, with at least
+  two peers each — if not, `up` tears the net down and starts a fresh one, up to
+  `UP_TRIES` (5) times; only then the dex, loadgen and netwatch. Why each step:
+  - PolkaJam casts its round-1 GRANDPA votes once, as it starts, and never re-sends them
+    (the #18 diagnosis): they must reach every JavaJAM node at that moment.
+  - A PolkaJam node that joins a running net follows the head but never finalizes past
+    the block it synced to — an ordinary node (the gateway) and a restarted validator
+    alike, and on `pj6` too (no JavaJAM: the gateway started 30 s after the validators
+    stayed at its first finalized block while they finalized 29 more). The DEX reads
+    finalized state through the gateway, so it must start with the validators; started
+    after them, it never finalized, and no sealed order could be revealed.
+  - On this Mac (Docker Desktop, every validator addressed at the host's IP so that the
+    native JavaJAM can reach the containers) a PolkaJam container sometimes loses every
+    peer ~15 s after it starts — all its QUIC connections time out at once — and never
+    gets them back (stuck at genesis, or on one peer). Of 18 starts on 2026-09-27 (the
+    host at load average 23–50), 6 formed; the check catches the rest before any load.
 - **JavaJAM's RPC from containers.** A native JavaJAM serves JIP-2 on the host's
   loopback, which containers reach at `host.docker.internal` (Docker Desktop):
   `JAVAJAM_RPC_HOST`, which `./dex` sets for the native runner (the Docker runner uses
@@ -289,39 +303,90 @@ it has not been run. What differs from pj6:
   on-chain — receipted 3 order(s), carried 0 (round 02321d3e11b234c3, via jj3)`), the
   dex counts relays and settlements by node, and `./dex soak` fails unless every
   submission node settled at least one round.
+- **A package can be accepted and still never land.** JIP-2 `submitWorkPackage` succeeds
+  once the package reached one guarantor. A JavaJAM guarantor whose core is busy queues
+  it ("Core 0 is engaged. Queueing work package") and drops the queue when the guarantor
+  rotation moves it off that core ("Dropping 1 queued work package(s) for core 0: no
+  longer assigned to it"); the package is never reported. The dex used to wait
+  `ROUND_GATE_SECS` (300 s) for such a round, the market blocked meanwhile. Now it reads
+  JIP-2 `workPackageStatus` of the round's package once a slot and releases the round
+  (orders back to the front of the mempool, kept as a zombie in case it lands after all)
+  as soon as the status is `Failed`, ~1 min after submission; any other payload (a sealed
+  order's commit, a deposit) is sent again as is — the service is idempotent under a
+  duplicate — at most 5 times (`jamswap_package_resends_total`,
+  `jamswap_round_abandoned_total{reason="package-failed"}`).
 
-**JavaJAM 0.4.3's JIP-2, observed** (black box: each method called on jj3, a
-validator, beside PolkaJam's pj0 on the same net). Served as JIP-2 describes:
+**JavaJAM 0.4.3's JIP-2, observed** (black box: every JIP-2 method called on jj3, a
+validator, and on PolkaJam's pj1 on the same net, after the 10-minute soak). Served:
 `parameters`, `bestBlock`, `finalizedBlock`, `parent`, `stateRoot`, `beefyRoot`,
 `statistics`, `serviceData`, `serviceValue`, `servicePreimage`, `serviceRequest`,
-`listServices`, `workPackageStatus`, `syncState`, `workReport` (code 2 when unknown),
-`fetchWorkPackageSegments` / `fetchSegments` (code 3), `submitWorkPackageBundle`, the
-`subscribe*` methods (a numeric id), and `submitWorkPackage` on a validator (above).
-Where it differs:
+`listServices`, `workPackageStatus`, `syncState`, `workReport` (code 2 for an unknown
+hash), `fetchWorkPackageSegments` / `fetchSegments` (code 3), `submitPreimage`,
+`submitWorkPackage` and `submitWorkPackageBundle` on a validator, and every
+`subscribe*` method (a numeric id). Where it differs from JIP-2 / JSON-RPC 2.0 or from
+PolkaJam:
 
-JAVAJAM_DIFFS
+- **Error objects without `"message"`**: `{"code": 0}` for a package that does not
+  decode (its log: an `ArrayIndexOutOfBoundsException`), `{"code": 2, "data": …}` for
+  an unknown work-report, `{"code": 3}` for segments. JSON-RPC 2.0 §5.1 requires a
+  message; PolkaJam gives one ("Codec error: …", "The work-report … is not available").
+- **An unknown method** is `{"code": 0, "message": "unknown error"}`; JSON-RPC's
+  -32601 "Method not found" (PolkaJam's answer) tells a missing method from a failure.
+- **An error with no `"id"`**: `subscribeWorkPackageStatus(hash, anchor)` without its
+  `finalized` argument gets no answer the caller can match (logged: a
+  NullPointerException, then an error response with no id); the client waits for its
+  timeout. PolkaJam answers -32602 "Invalid params". With all three arguments it works.
+- **`submitPreimage` of a preimage nobody requested** returns `null` (success) and
+  logs `preimage_not_requested`; PolkaJam returns "Preimage was not requested".
+- **`workPackageStatus` stays `Reported`**: a package PolkaJam's pj1 reported `Ready`
+  one block after it was reported was still `Reported` on jj3 two minutes later (both
+  asked at their own best block). The dex reads status on the gateway.
+- **Accepted, then dropped**: a package `submitWorkPackage` accepted can be queued for a
+  busy core and dropped at the next guarantor rotation (above). In the passing
+  10-minute soak all 8 packages JIP-2 reported `Failed` had gone through jj3 (8 of ~29
+  sent there), none of the ~31 sent through the PolkaJam gateway.
 
 **Results** (2026-09-27, Apple M1 Pro, Docker Desktop 8 GB, the host shared with other
 jobs: load average 23–37 on 10 cores, swap 9.7 of 10.5 GB in use; fresh net per soak;
 loadgen as for pj6):
 
-RESULTS_PJJJ
+**10 minutes** (`./dex soak NET=pj-javajam 600`, the net formed on the first `up`):
+every check PASS — SLO 1.000000 (237 cleared, 0 missed), sealed zero-loss (26 of 29
+terminal, 3 open), one head 130/130 samples with every node up, 112 finalized slots
+hash-checked, longest finality stall 1 slot, state parity on all six (99 keys, digest
+`c094dbe8415f494e` on pj0..pj2 and jj3..jj5 at final slot 9131433), 240 orders offered
+and none refused; 25 rounds settled, 13 through jj3 and 12 through the gateway; p50 /
+p99 clear latency 36 s / 124 s (pj6: 30 s / 358 s over an hour). The package watch
+resent 7 commits, 1 carry commit and 1 deposit and released 1 round, all first sent
+through jj3.
+
+Before the gateway started with the validators and the package watch existed, two
+10-minute soaks on formed nets failed: in one the gateway never finalized and one
+PolkaJam validator ran on a single peer (a 15-slot finality stall on it, A2 FAIL; 2
+rounds settled in 10 minutes, 179 of 244 orders still open); in the other A1–A4 passed
+but only 2 of 4 rounds settled — the other two, one through the gateway and one through
+jj3, each waited out the 300-s gate — so orders cleared in batches of 100+ (p50 212 s),
+and the submission-node check failed (no round had settled through the gateway).
+
+RESULTS_60
 
 ### What the clients did (2026-09-26)
 
 - **PolkaJam + JavaJAM (`pj-javajam`) co-author one chain** — blocks from both clients,
   one best hash on all six nodes (JavaJAM native on the Mac, PolkaJam in Docker,
-  addressed through the host IP) — **but never finalize.** Both run `--finality-mode
-  grandpa` and exchange GRANDPA messages: PolkaJam logs every JavaJAM validator's
+  addressed through the host IP) — **but did not finalize on 2026-09-26** (fixed the
+  next day by the start order: PolkaJam never re-sends its round-1 vote, see #18 and
+  [the pj-javajam section](#the-dex-on-polkajam--javajam-pj-javajam-18)). Both run
+  `--finality-mode grandpa` and exchange GRANDPA messages: PolkaJam logs every JavaJAM validator's
   GRANDPA view ("updated view. Now at 1, 0") and 9 incoming round-1 messages; JavaJAM
   logs "Grandpa state received for round 1, set 0" and "Grandpa vote received for round 1
   and set 0". Yet round 1 of set 0 never completes: PolkaJam's round state stays
   `prevote_ghost = genesis, estimate = genesis, finalized = None, completable = false`
   after it prevoted and precommitted, and `finalizedBlock` is genesis on every node for
   the whole soak (the same PolkaJam build finalizes within seconds as `pj6`). So the votes
-  cross the wire but are not counted across clients (3 + 3 < the 5-of-6 quorum). Next
-  (#18): which side drops which vote, judged against the PR #6 text (vote encoding and
-  signing context).
+  looked uncounted across clients (3 + 3 < the 5-of-6 quorum); in fact both sides
+  encode and count each other's votes, and a round-1 prevote PolkaJam sent before
+  JavaJAM was up was lost for good (#18).
 - **JavaJAM 0.4.3 sometimes shuts itself down right after it starts**: ~0.5 s after its
   first outbound connections the netty event loop is gone ("event executor terminated"),
   and the process exits with status 0 ("Bye") after 3–9 s; seen in 4 of 9 starts in
@@ -400,9 +465,9 @@ supermajority, 5 of 6 on these nets.
 - **`mixed`** (3 : 3) has no shared finality gadget: PolkaJam runs `dummy`. The DEX
   does not settle there (a 45-minute run in 2026-07: 138
   work-items guaranteed, volume 0; [`SOAK_RELIABILITY.md`](SOAK_RELIABILITY.md)).
-- A mixed net finalizes only when its clients count each other's votes. `pj-javajam` is
-  the first try: each client logs GRANDPA messages from the other, but finality stays
-  at genesis (#18).
+- A mixed net finalizes only when its clients count each other's votes. **`pj-javajam`**
+  (3 PolkaJam : 3 JavaJAM) does, once JavaJAM is up before PolkaJam casts its one-shot
+  round-1 vote (#18): the DEX runs there too.
 
 **What the specs say.** The Graypaper names GRANDPA and the vote data (the best block's
 header plus its posterior state root) and requires a block to be audited before it is

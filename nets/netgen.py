@@ -533,9 +533,13 @@ def main(argv):
         print("NET_FINALITY=%s" % _sh(p.get("finality", "")))
         print("NET_JAVAJAM=%s" % _sh(" ".join("%d:%d:%d" % (n["index"], n["port"], n["rpc"])
                                               for n in ns if n["client"] == "javajam")))
-        # the other validators' compose services (./dex starts them before anything else)
+        # the other validators' compose services, and a JIP-2 DEX net's gateway: ./dex starts
+        # them together, right after JavaJAM (a PolkaJam node that joins later never
+        # finalizes, jamswap#18)
         print("NET_OTHER_VALIDATORS=%s" % _sh(" ".join(n["service"] for n in ns
                                                        if n["client"] != "javajam")))
+        print("NET_GATEWAY=%s" % _sh(gateway(p)["service"] if dex_backend(name) == "jip2"
+                                     and generated(name) else ""))
         print("JAVAJAM_IMAGES=%s" % _sh(" ".join("%s=%s" % kv for kv in profiles.JAVAJAM_IMAGES.items())))
     else:
         sys.exit(__doc__.split("\n\n")[1])

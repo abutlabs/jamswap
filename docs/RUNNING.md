@@ -12,7 +12,7 @@ which net is which.
 
 | Backend | Talks to | The service | Used on |
 |---|---|---|---|
-| `jip2` | a node's JIP-2 RPC at `CHAIN_RPC` (default `ws://localhost:19800`): heads and finality, service reads at the best or finalized block, and `submitWorkPackage` with a GP 0.8.0 work-package it builds (authorizer from the JIP-4 chain spec at `CHAIN_SPEC`) | deployed at startup through the Bootstrap service, or named by `SERVICE_ID` | pj6, any JIP-2 node |
+| `jip2` | a node's JIP-2 RPC at `CHAIN_RPC` (default `ws://localhost:19800`): heads and finality, service reads at the best or finalized block, and `submitWorkPackage` with a GP 0.8.0 work-package it builds (authorizer from the JIP-4 chain spec at `CHAIN_SPEC`) | deployed at startup through the Bootstrap service, or named by `SERVICE_ID` | pj6, pj-javajam, any JIP-2 node |
 | `jamnp` (default) | lasair's bridges: `BUILDER_URL` (CE-133 submit), `READER_URL` (CE-129 read at the node's head), `NODE_METRICS_URL` (heads and finality from lasair's gauges) | seeded into genesis (`SERVICE_ID`) | lasair6, the quickstart, the mixed net |
 
 The service blob, `service/jamswap-service.jam` (GP 0.8.0), is the same on both.
@@ -62,7 +62,20 @@ service or JIP-2 server yet (lasair#73, lasair#68).
 Point `CHAIN_RPC` at a node that forwards work-packages. A PolkaJam **validator**'s RPC
 does not (it answers `submitWorkPackage` with "Failed to submit work-package to even a
 single proxy/guarantor"); an ordinary PolkaJam node joined to the same net does, as do
-`polkajam-testnet`'s RPC nodes.
+`polkajam-testnet`'s RPC nodes, and so does a JavaJAM 0.4.3 validator. The node must
+have been on the net from its start or have finalized since joining: the DEX reads
+finalized state there, and a PolkaJam node that joins a running net never finalizes
+(docs/NETS.md, pj-javajam). To submit through several nodes, one package each in turn,
+set `CHAIN_SUBMIT_RPC` to `NAME=ws://… NAME=ws://…` (reads stay on `CHAIN_RPC`; a node
+that refuses on every core or cannot be reached passes the package to the next; the
+dex counts relays and settlements by node in `jamswap_relays_total` /
+`jamswap_settled_via_total{via}`).
+
+`submitWorkPackage` succeeding is not delivery: a guarantor may still drop the package.
+The dex reads JIP-2 `workPackageStatus` once a slot (`PACKAGE_POLL_SECS`, 6): a round
+whose package is `Failed` is released at once (its orders back to the front of the
+mempool); any other payload is sent again, as is, up to 5 times
+(`jamswap_package_resends_total`).
 
 On JIP-2 the service's footprint is readable (`serviceData`), so the JAMKB standard's
 backpressure is live: the reserve seeded at startup (obligation + `JAMKB_RESERVE_BUFFER`,

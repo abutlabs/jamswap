@@ -626,6 +626,96 @@ class SubmitOutcomeUnknown(_Base):
         self.assertEqual([x["oid"] for x in server.pending[M]], [50])
 
 
+class FailedPackages(_Base):
+    """JIP-2 submitWorkPackage success is not delivery (jamswap#18: JavaJAM drops a package
+    queued for a busy core at the guarantor rotation). workPackageStatus Failed releases the
+    round at once, not after the gate; any other payload is sent again."""
+
+    class Chain:
+        def __init__(self):
+            self.status, self.sent = {}, []
+
+        def package_status(self, receipt, at="best"):
+            return self.status.get(receipt["package_hash"], {"Reportable": {"remaining_blocks": 3}})
+
+        def submit(self, payload):
+            self.sent.append(payload)
+            return {"package_hash": "%064x" % (100 + len(self.sent)), "via": "rpc", "core": 0}
+
+        def read(self, key, at="best"):
+            raise server.ChainUnsupported("the fake reads through server.storage")
+
+    def setUp(self):
+        super().setUp()
+        self._chain, self._submit_real = server.CHAIN, self._saved["submit"]
+        server.CHAIN = self.fake = self.Chain()
+        n = [0]
+
+        def submit(payload, check=None, detail=""):
+            n[0] += 1
+            self.sent.append(payload)
+            return {"package_hash": "%064x" % n[0], "via": "jj3", "core": 1}
+        server.submit = submit
+        server._pkg_watch.clear()
+
+    def tearDown(self):
+        server.CHAIN = self._chain
+        server._pkg_watch.clear()
+        super().tearDown()
+
+    def test_a_failed_round_package_releases_the_round_at_once(self):
+        self.crossing_pair()
+        self.build()
+        fr = server._inflight[M]
+        t = time.time()
+        server._resolve_rounds_once(now=t)
+        self.assertIn(M, server._inflight, "still reportable: keep waiting")
+        self.fake.status[fr["receipt"]["package_hash"]] = {"Failed": "not reported in time"}
+        server._resolve_rounds_once(now=t + 1)
+        self.assertIn(M, server._inflight, "one status read per PACKAGE_POLL_SECS")
+        server._resolve_rounds_once(now=t + server.PACKAGE_POLL_SECS + 1)
+        self.assertNotIn(M, server._inflight, "released long before the gate")
+        self.assertEqual(self.pending_oids(), [1, 2], "its orders back at the front")
+        self.assertNotIn(M, server._round_gate, "no cool-down: rebuilt at the next auction")
+        self.assertEqual(server._zombies[M][0]["why"], "package-failed")
+        self.chain.land(fr)                                  # it landed after all: still finalized
+        self.sweeps(20, 22)
+        self.assertEqual(self.dispositions(7), ["filled"])
+
+    def test_other_payloads_are_sent_again_on_failed(self):
+        receipt = {"package_hash": "aa" * 32, "via": "jj3", "core": 0}
+        server._watch_package("commit", b"\x02commit", receipt)
+        t = time.time()
+        server._resolve_packages_once(t)
+        self.assertEqual(self.fake.sent, [], "reportable: nothing to do")
+        self.fake.status["aa" * 32] = {"Failed": "not reported in time"}
+        server._resolve_packages_once(t + server.PACKAGE_POLL_SECS)
+        self.assertEqual(self.fake.sent, [b"\x02commit"], "the same payload, sent again")
+        (w,) = server._pkg_watch
+        self.assertEqual((w["resends"], w["receipt"]["package_hash"]), (1, "%064x" % 101))
+        self.fake.status[w["receipt"]["package_hash"]] = {"Ready": {}}
+        server._resolve_packages_once(t + 2 * server.PACKAGE_POLL_SECS)
+        self.assertEqual(server._pkg_watch, [], "ready: no longer watched")
+
+    def test_resends_are_bounded_and_the_watch_expires(self):
+        server._watch_package("deposit", b"\x01dep", {"package_hash": "bb" * 32})
+        t = time.time()
+        for i in range(1, server.PACKAGE_RESENDS + 3):
+            for w in server._pkg_watch:
+                self.fake.status[w["receipt"]["package_hash"]] = {"Failed": "x"}
+            server._resolve_packages_once(t + i * server.PACKAGE_POLL_SECS)
+        self.assertEqual(len(self.fake.sent), server.PACKAGE_RESENDS)
+        self.assertEqual(server._pkg_watch, [])
+        server._watch_package("commit", b"\x02c", {"package_hash": "cc" * 32})
+        server._pkg_watch[0]["t"] = t - server.PACKAGE_WATCH_SECS - 1
+        server._resolve_packages_once(t)
+        self.assertEqual(server._pkg_watch, [], "past the watch window: forgotten")
+
+    def test_no_status_no_watch(self):
+        server._watch_package("commit", b"\x02c", {"accepted": True})   # jamnp receipt
+        self.assertEqual(server._pkg_watch, [])
+
+
 class ExpiryPrunes(_Base):
     def test_a_released_prune_is_pruned_again_and_ends_only_when_it_lands(self):
         server.expired_pairs = self._saved["expired_pairs"]   # the real one

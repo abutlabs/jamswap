@@ -6,9 +6,11 @@ whose DEX runs on JIP-2 (the dex, loadgen and netwatch services nets/netgen.py a
     ./dex soak NET=<name> [SECS]
 
   1. waits for the DEX API and reads the service id the dex deployed (its deploy state);
-     then a short `netwatch poll` (--precheck, 60 s) must pass before any load: a net that
-     did not form (a node stuck at genesis, finality not advancing everywhere) is reported
-     as such, not soaked for an hour and failed on A1/A2;
+     then a short `netwatch poll` (--precheck, 60 s) must pass before any load, and the
+     DEX's gateway must finalize with the validators (nets/onehead.py --gateway, from the
+     host: the dex reads finalized state there): a net that did not form (a node stuck at
+     genesis, finality not advancing everywhere) is reported as such, not soaked for an
+     hour and failed on A1/A2;
   2. starts the load generator, and `netwatch poll` over every node for SECS + DRAIN
      seconds, with --require-finality on a GRANDPA net: A1 one head, A2 finality;
   3. after SECS stops the load, so the last rounds settle within DRAIN;
@@ -26,7 +28,7 @@ whose DEX runs on JIP-2 (the dex, loadgen and netwatch services nets/netgen.py a
 
 Run it on a freshly started net (`./dex up`): the verdict judges the dex's whole order
 event log. Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>):
-precheck.txt, poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl,
+precheck.txt, precheck_gateway.txt, poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl,
 verdict.txt, verdict.json, loadgen.txt, dex_metrics.txt, rounds.txt (every settled round
 and the node it went through), soak.log, and DONE (written last: each step's result).
 Exit 0 iff the poll, the parity probe, the soak verdict, the offered load and the
@@ -189,9 +191,18 @@ def main(argv=None):
             "poll", "--duration", str(a.precheck), "--interval", "6"] + finality,
             timeout=a.precheck + 300)
         s.log("precheck (%d s netwatch poll, no load): exit %s" % (a.precheck, done["precheck"]))
-        if done["precheck"] != 0:
-            with open(s.path("precheck.txt")) as fh:
-                print("\n==> precheck.txt\n" + "\n".join(fh.read().splitlines()[-25:]))
+        gw = s.run_to("precheck_gateway.txt", [sys.executable, os.path.join(HERE, "onehead.py"),
+                      a.net, "--secs", "30", "--gateway", "--min-peers", "2"], timeout=300)
+        with open(s.path("precheck_gateway.txt")) as fh:
+            gw_out = fh.read()
+        if gw == 0 and finality and "FINALITY: advancing on every node" not in gw_out:
+            gw = 1                             # a GRANDPA net: the gateway must finalize too
+        done["precheck_gateway"] = gw
+        s.log("precheck (gateway + validators, 30 s, >= 2 peers each): exit %s" % gw)
+        if done["precheck"] != 0 or gw != 0:
+            for f in ("precheck.txt", "precheck_gateway.txt"):
+                with open(s.path(f)) as fh:
+                    print("\n==> %s\n" % f + "\n".join(fh.read().splitlines()[-12:]))
             done["pass"] = False
             done["finished"] = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
             with open(s.path("DONE"), "w") as fh:

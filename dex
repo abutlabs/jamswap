@@ -20,11 +20,15 @@
 #   ./dex down NET=pj6
 #   ./dex nets                 # the profiles;  ./dex gen  regenerates nets/compose/*.yml
 #
-# pj6 carries the DEX on JIP-2 (no lasair anywhere): up deploys the service at startup
-# and waits for the API; load/noload drive its load generator, and
+# pj6 and pj-javajam (3 PolkaJam + 3 JavaJAM) carry the DEX on JIP-2 (no lasair anywhere):
+# up deploys the service at startup and waits for the API; load/noload drive its load
+# generator, and
 #
 #   ./dex soak NET=pj6 [SECS]  # A1-A4 (docs/NETS.md): load + netwatch for SECS (600),
 #                              # then state parity and the soak verdict; exit 0 iff all pass
+#
+# With JavaJAM in the net, up starts it first, then the other validators and the DEX's
+# gateway node, and starts a fresh net unless they all finalize together (UP_TRIES, 5).
 #
 # Keys: LASAIR_DEV_ALL_KEYS=1 (default on nets with lasair, until lasair#62) lets each
 # lasair node sign guarantees as every lasair index; =0 narrows it to its own index.
@@ -123,6 +127,54 @@ jip2.Jip2Client('ws://127.0.0.1:' + sys.argv[1], 2).call('bestBlock')" "$rpc" 2>
   done
 }
 
+# Start a net with JavaJAM; 0 once every validator (and the DEX's gateway) finalizes.
+_jj_form() {
+  # JavaJAM before PolkaJam (jamswap#18): PolkaJam casts its round-1 GRANDPA vote once, as
+  # it starts, and never re-sends it; JavaJAM re-sends its current-round votes to a peer
+  # that connects later. PolkaJam first => round 1 never completes and finality stays at
+  # genesis. So: the genesis minter, then JavaJAM, and once every JavaJAM node answers (and
+  # has had a few seconds to reach the others) the other validators.
+  "${COMPOSE[@]}" up -d spec-init
+  if [ "$JJ_NATIVE" = 1 ]; then
+    _jj_native_up
+  else
+    "${COMPOSE[@]}" up -d $(for n in $NET_JAVAJAM; do echo "jj${n%%:*}"; done)
+  fi
+  _jj_wait
+  sleep 5
+  # then the other validators, and the DEX's gateway node with them: a PolkaJam node that
+  # joins a running net follows the head but never finalizes past the block it synced to
+  # (seen on pj6 too, no JavaJAM), and the DEX reads finalized state there. Nothing else
+  # until they all finalize: the start is when PolkaJam's one-shot round-1 votes must
+  # reach every JavaJAM node.
+  "${COMPOSE[@]}" up -d $NET_OTHER_VALIDATORS $NET_GATEWAY
+  [ "$NET_FINALITY" = grandpa ] || return 0
+  # a node can miss the start for good (jamswap#18: every peer of a PolkaJam node timing
+  # out ~15 s in, leaving it at genesis or on one peer; round 1 never completing, so
+  # nothing ever finalizes), and without finality the DEX cannot even deploy: check now,
+  # 20 s to settle then 36 s of heads (the gateway's too, and at least 2 peers each),
+  # rather than in a soak's verdict
+  sleep 20
+  local out
+  if out=$(python3 nets/onehead.py "$NET" --secs 36 --gateway --min-peers 2 2>&1) \
+      && grep -q "FINALITY: advancing on every node" <<<"$out"; then
+    echo "✓ every validator$([ -n "$NET_GATEWAY" ] && echo " and the gateway") follows the chain and finalizes"
+    return 0
+  fi
+  grep -E '^(best slot|finalized|HEADS|FINALITY|PEERS)' <<<"$out"
+  echo "✗ the net did not form (a validator missed the start, or finality never started)"
+  return 1
+}
+
+# tear the net down and wipe its chain (and stop its native nodes)
+_down() {
+  "${COMPOSE[@]}" down -v --remove-orphans
+  if [ -n "$NET_JAVAJAM" ] && [ -d "$STATE" ]; then
+    nets/javajam-native.sh stop "$STATE"
+    rm -rf "$STATE"
+  fi
+}
+
 cmd=${1:-help}
 case "$cmd" in
   rebuild)
@@ -143,38 +195,17 @@ case "$cmd" in
       python3 nets/netgen.py check || { echo "run ./dex gen"; exit 1; }
       "${COMPOSE[@]}" build -q
       if [ -n "$NET_JAVAJAM" ]; then
-        # JavaJAM before PolkaJam (jamswap#18): PolkaJam casts its round-1 GRANDPA vote once,
-        # as it starts, and never re-sends it; JavaJAM re-sends its current-round votes to a
-        # peer that connects later. PolkaJam first => round 1 never completes and finality
-        # stays at genesis. So: the genesis minter, then JavaJAM, and once every JavaJAM node
-        # answers (and has had a few seconds to reach the others) the other validators.
-        "${COMPOSE[@]}" up -d spec-init
-        if [ "$JJ_NATIVE" = 1 ]; then
-          _jj_native_up
-        else
-          "${COMPOSE[@]}" up -d $(for n in $NET_JAVAJAM; do echo "jj${n%%:*}"; done)
-        fi
-        _jj_wait
-        sleep 5
-        # then the other validators alone, and nothing else until they all finalize: the
-        # start is when PolkaJam's one-shot round-1 votes must reach every JavaJAM node
-        "${COMPOSE[@]}" up -d $NET_OTHER_VALIDATORS
-        if [ "$NET_FINALITY" = grandpa ]; then
-          # a validator can miss the start for good (jamswap#18: every peer of a PolkaJam
-          # node timing out ~15 s in, leaving it at genesis; round 1 never completing, so
-          # nothing ever finalizes), and without finality the DEX cannot even deploy: check
-          # now, 20 s to settle then 36 s of heads, rather than in a soak's verdict
-          sleep 20
-          if out=$(python3 nets/onehead.py "$NET" --secs 36 2>&1) \
-              && grep -q "FINALITY: advancing on every node" <<<"$out"; then
-            echo "✓ every validator follows the chain and finalizes"
-          else
-            grep -E '^(best slot|finalized|HEADS|FINALITY)' <<<"$out"
-            echo "✗ the net did not form (a validator missed the start, or finality never"
-            echo "  started): start a fresh one (./dex down NET=$NET; ./dex up NET=$NET)"
+        # a start can fail for good (see _jj_form): try fresh nets, UP_TRIES of them
+        tries=${UP_TRIES:-5}
+        for t in $(seq 1 "$tries"); do
+          _jj_form && break
+          if [ "$t" = "$tries" ]; then
+            echo "✗ the net did not form in $tries fresh starts (UP_TRIES); ./dex down NET=$NET"
             exit 1
           fi
-        fi
+          echo "  starting a fresh net (attempt $((t + 1)) of $tries)"
+          _down >/dev/null 2>&1
+        done
       fi
       "${COMPOSE[@]}" up -d
       # manual trading by default, as on lasair6
@@ -226,11 +257,7 @@ case "$cmd" in
   noload) "${COMPOSE[@]}" stop loadgen;  echo "✓ loadgen OFF — trade manually at $URL";;
 
   down)
-    "${COMPOSE[@]}" down -v --remove-orphans
-    if [ -n "$NET_JAVAJAM" ] && [ -d "$STATE" ]; then
-      nets/javajam-native.sh stop "$STATE"
-      rm -rf "$STATE"
-    fi
+    _down
     echo "✓ net down, chain wiped (next ./dex up mints a fresh genesis)"
     ;;
 

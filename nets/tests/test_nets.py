@@ -203,6 +203,20 @@ class Netgen(unittest.TestCase):
         env42 = netgen.compose("pj-javajam-42")["services"]["dex"]["environment"]
         self.assertEqual(env42["CHAIN_SUBMIT_RPC"].split()[1], "jj4=ws://${JAVAJAM_RPC_HOST:-jj4}:42504")
 
+    def test_env_names_the_start_order(self):
+        # ./dex up: JavaJAM, then the other validators with the gateway, then the rest
+        import contextlib, io
+        def env(name):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                netgen.main(["netgen.py", "env", name])
+            return dict(l.split("=", 1) for l in out.getvalue().splitlines())
+        e = env("pj-javajam")
+        self.assertEqual((e["NET_OTHER_VALIDATORS"], e["NET_GATEWAY"]), ("'pj0 pj1 pj2'", "'rpc'"))
+        self.assertEqual(e["NET_JAVAJAM"], "'3:41403:42403 4:41404:42404 5:41405:42405'")
+        self.assertEqual(env("pj-pbnjam")["NET_GATEWAY"], "''")               # no DEX
+        self.assertEqual(env("lasair-pj-javajam")["NET_GATEWAY"], "''")       # lasair's bridges
+
     def test_the_lasair_dex_stack_is_unchanged(self):
         doc = netgen.compose("lasair-pj-javajam")["services"]
         self.assertEqual(doc["dex"]["depends_on"], ["builder", "reader"])

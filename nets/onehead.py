@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """One head? Poll every validator of a running net and say whether they agree.
 
-    python3 nets/onehead.py NET [--secs 300] [--every 6] [--jsonl FILE]
+    python3 nets/onehead.py NET [--secs 300] [--every 6] [--jsonl FILE] [--gateway]
+                                [--min-peers N]
     ./dex heads NET=<name> [SECS]
 
 Each sample reads every node's best block (and finalized block) and classifies it:
@@ -24,8 +25,14 @@ How each client is read (black box, public interfaces only):
   lasair                        no JIP-2 RPC yet (lasair#68): its `STATUS height= head=
                                 root= slot=` log line (best block) and its
                                 lasair_finalized_* metrics (no finalized hash)
-Exit 0 when no fork persisted, no node was down at the end, every node's head advanced
-and no two finalized blocks conflict; whether finality advanced is reported beside it.
+--gateway adds the net's DEX gateway (the `rpc` node of a JIP-2 DEX net) to the nodes
+judged: the DEX reads its finalized state there. --min-peers N also fails the run when a
+JIP-2 node reports fewer than N peers (syncState) at the end: one peer is one timeout
+from isolation.
+
+Exit 0 when no fork persisted, no node was down at the end, every node's head advanced,
+no two finalized blocks conflict and (with --min-peers) every node kept N peers; whether
+finality advanced is reported beside it.
 """
 import argparse
 import base64
@@ -69,6 +76,9 @@ class Jip2Probe:
 
     def parent(self, h):
         return self._desc(self._call("parent", base64.b64encode(bytes.fromhex(h)).decode()))
+
+    def peers(self):
+        return int(self._call("syncState")["num_peers"])
 
 
 class ExecProbe(Jip2Probe):
@@ -119,9 +129,12 @@ class LasairProbe:
         return self.seen.get(slot)
 
 
-def probes(net):
+def probes(net, gateway=False):
     proj = netgen.project(net)
     out = []
+    if gateway and netgen.dex_backend(net) == "jip2":
+        gw = netgen.gateway(netgen.profile(net))
+        out.append((gw["service"], Jip2Probe("ws://127.0.0.1:%d" % gw["rpc"])))
     for n in netgen.nodes(net):
         name = n["service"]
         container = "%s-%s-1" % (proj, name)
@@ -258,8 +271,12 @@ def main():
     ap.add_argument("--secs", type=int, default=300)
     ap.add_argument("--every", type=float, default=6.0)
     ap.add_argument("--jsonl", help="also append every sample to this file")
+    ap.add_argument("--gateway", action="store_true",
+                    help="judge the DEX gateway (a JIP-2 DEX net's rpc node) too")
+    ap.add_argument("--min-peers", type=int, default=0,
+                    help="fail if a JIP-2 node reports fewer peers at the end (syncState)")
     a = ap.parse_args()
-    ps = probes(a.net)
+    ps = probes(a.net, a.gateway)
     names = [k for k, _ in ps]
     print("probing %s: %s" % (a.net, ", ".join(names)))
     samples, cache, t0 = [], {}, time.time()
@@ -273,7 +290,21 @@ def main():
         if time.time() - t0 >= a.secs:
             break
         time.sleep(max(0.0, a.every - (time.time() - s["t"])))
-    sys.exit(0 if summarize(samples, names) else 1)
+    ok = summarize(samples, names)
+    if a.min_peers:
+        peers = {}
+        for name, p in ps:
+            if hasattr(p, "peers") and not isinstance(p, ExecProbe):
+                try:
+                    peers[name] = p.peers()
+                except Exception:                # noqa: BLE001 - a node that can't say
+                    peers[name] = None
+        few = sorted(k for k, v in peers.items() if v is None or v < a.min_peers)
+        print("PEERS:    %s  (%s)" % ("too few on " + ", ".join(few) if few else
+                                      "at least %d on every node" % a.min_peers,
+                                      ", ".join("%s %s" % kv for kv in peers.items())))
+        ok = ok and not few
+    sys.exit(0 if ok else 1)
 
 
 if __name__ == "__main__":
