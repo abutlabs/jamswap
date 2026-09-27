@@ -175,8 +175,8 @@ services:
       PORT: "8080"
       PYTHONUNBUFFERED: "1"
       ORDER_EVENTS_FILE: /shared/order_events.jsonl
-      # the net FINALIZES (lasair-native GRANDPA commits over CE-192; see lasair
-      # docs/FINALITY_PLAN.md Phase 3a): history below beta-finalized cannot
+      # the net FINALIZES (GRANDPA, the jam-np PR #6 draft: LASAIR_FINALITY above;
+      # see lasair docs/FINALITY_PLAN.md): history below the finalized head cannot
       # re-org, so settlement durability comes from CONSENSUS, not a hold
       # timer. jamswap_settle_reverted_total still watches — a revert now means
       # a finality violation, i.e. a chain bug by definition.

@@ -24,7 +24,7 @@ PROFILES = {
     "lasair6": dict(
         compose="docker-compose.lasair6.yml", project="lasair6",
         clients="lasair,lasair,lasair,lasair,lasair,lasair", issue="#12",
-        about="6x lasair, GRANDPA: THE DEX net (sealed orders settle durably)"),
+        about="6x lasair, GRANDPA: a DEX net (lasair's bridges; the ./dex up default)"),
     "mixed": dict(
         compose="docker-compose.mixed.yml", project="jamswap",
         clients="pj,pj,pj,lasair,lasair,lasair", issue="#2",

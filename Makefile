@@ -13,10 +13,9 @@
 #
 # TWO MIXED MODES (see docker-compose.mixed-dex.yml + docs/mixed_chain_dex_settlement.md):
 #   mixed      EQUAL split: both clients author/seal/import apples-to-apples; the
-#              Grafana dashboards compare them. With lasair >= 1.7.3 (the default
-#              image) trades ALSO SETTLE here — the tier-1 settlement fix:
-#              fork-choice-aware guarantor + assure-any-pending + builder fan-out
-#              complete availability on the contested chain.
+#              Grafana dashboards compare them. Whether trades settle here was
+#              claimed in 2026-07 (GP 0.7.2) and not re-measured at 0.8.0; a 45-min
+#              run on 2026-07-09 cleared nothing (docs/NETS.md).
 #   mixed-dex  lasair authors a near-linear canonical chain (pj0 co-validates).
 #              Historical: was the only settling mode before the tier-1 fix.
 #

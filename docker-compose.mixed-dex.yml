@@ -4,10 +4,9 @@
 #       -f docker-compose.mixed.yml -f docker-compose.mixed-dex.yml up -d
 #   (or: make mixed-dex / make mixed-dex-local)
 #
-# NOTE (2026-07-08): with the tier-1 settlement fix (fork-choice-aware guarantor +
-# assure-any-pending + builder fan-out; lasair >= 1.7.0) the EQUAL split settles
-# trades too — this overlay is no longer required for settlement. It remains as the
-# near-linear-chain configuration. docs/mixed_chain_dex_settlement.md has the story.
+# NOTE: the near-linear-chain configuration from 2026-07 (GP 0.7.2). Whether the
+# EQUAL 3:3 split settles trades was claimed then and not re-measured at 0.8.0
+# (docs/NETS.md). docs/mixed_chain_dex_settlement.md has the history.
 #
 # WHY THIS EXISTS (historical)
 # --------------
