@@ -51,6 +51,63 @@
     "current": {},
     "options": [],
     "hide": 0
+   },
+   {
+    "name": "at",
+    "label": "at",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "query_result(clamp_max(max(obs_run_end_timestamp_seconds{net=\"$net\",run_id=\"$run_id\"}), ${__to:date:seconds}) or vector(${__to:date:seconds}))",
+    "definition": "query_result(clamp_max(max(obs_run_end_timestamp_seconds{net=\"$net\",run_id=\"$run_id\"}), ${__to:date:seconds}) or vector(${__to:date:seconds}))",
+    "regex": "/\\}\\s+(\\S+)\\s/",
+    "refresh": 2,
+    "sort": 0,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 2
+   },
+   {
+    "name": "run_from",
+    "label": "run_from",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "query_result(max by (link_from) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "definition": "query_result(max by (link_from) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "regex": "/link_from=\"([^\"]+)\"/",
+    "refresh": 2,
+    "sort": 0,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 2
+   },
+   {
+    "name": "run_to",
+    "label": "run_to",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "query_result(max by (link_to) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "definition": "query_result(max by (link_to) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "regex": "/link_to=\"([^\"]+)\"/",
+    "refresh": 2,
+    "sort": 0,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 2
    }
   ]
  },
@@ -124,10 +181,60 @@
      "matchAny": false,
      "limit": 500
     }
+   },
+   {
+    "name": "lifecycle",
+    "enable": true,
+    "hide": false,
+    "iconColor": "#B877D9",
+    "datasource": {
+     "type": "loki",
+     "uid": "loki"
+    },
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\"",
+    "target": {
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\"",
+     "refId": "Anno",
+     "queryType": "range"
+    },
+    "instant": false,
+    "titleFormat": "{{node}} {{event}}",
+    "textFormat": "{{msg}}",
+    "tagKeys": "node,event,reason"
+   },
+   {
+    "name": "node stopped during the run",
+    "enable": true,
+    "hide": false,
+    "iconColor": "red",
+    "datasource": {
+     "type": "loki",
+     "uid": "loki"
+    },
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\"",
+    "target": {
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\"",
+     "refId": "Anno",
+     "queryType": "range"
+    },
+    "instant": false,
+    "titleFormat": "{{node}} {{event}}",
+    "textFormat": "{{msg}}",
+    "tagKeys": "node,event,reason"
    }
   ]
  },
  "links": [
+  {
+   "type": "link",
+   "title": "whole run",
+   "icon": "dashboard",
+   "includeVars": true,
+   "keepTime": false,
+   "targetBlank": false,
+   "tooltip": "Set the time range to this run's start \u2192 end (1 min either side)",
+   "url": "/d/obs-dex?from=${run_from}&to=${run_to}"
+  },
   {
    "type": "dashboards",
    "tags": [
@@ -166,10 +273,10 @@
    },
    "targets": [
     {
-     "expr": "min(jamswap_order_clearing_slo{net=\"$net\",run_id=\"$run_id\"})",
+     "expr": "last_over_time((min(jamswap_order_clearing_slo{net=\"$net\",run_id=\"$run_id\"}))[$__range:$__interval] @ $at)",
      "refId": "A",
-     "range": true,
-     "instant": false
+     "range": false,
+     "instant": true
     }
    ],
    "fieldConfig": {
@@ -197,7 +304,7 @@
     "overrides": []
    },
    "options": {
-    "graphMode": "area",
+    "graphMode": "none",
     "colorMode": "background",
     "textMode": "value",
     "justifyMode": "center",
@@ -227,10 +334,10 @@
    },
    "targets": [
     {
-     "expr": "((sum(loadgen_op_errors_total{net=\"$net\",run_id=\"$run_id\"}) or vector(0)) + (sum(loadgen_ops_busy_total{net=\"$net\",run_id=\"$run_id\"}) or vector(0))) / sum(loadgen_ops_total{net=\"$net\",run_id=\"$run_id\"})",
+     "expr": "last_over_time((((sum(loadgen_op_errors_total{net=\"$net\",run_id=\"$run_id\"}) or vector(0)) + (sum(loadgen_ops_busy_total{net=\"$net\",run_id=\"$run_id\"}) or vector(0))) / sum(loadgen_ops_total{net=\"$net\",run_id=\"$run_id\"}))[$__range:$__interval] @ $at)",
      "refId": "A",
-     "range": true,
-     "instant": false
+     "range": false,
+     "instant": true
     }
    ],
    "fieldConfig": {
@@ -258,7 +365,7 @@
     "overrides": []
    },
    "options": {
-    "graphMode": "area",
+    "graphMode": "none",
     "colorMode": "background",
     "textMode": "value",
     "justifyMode": "center",
@@ -288,10 +395,10 @@
    },
    "targets": [
     {
-     "expr": "sum(jamswap_settle_timeouts_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0)",
+     "expr": "last_over_time((sum(jamswap_settle_timeouts_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0))[$__range:$__interval] @ $at)",
      "refId": "A",
-     "range": true,
-     "instant": false
+     "range": false,
+     "instant": true
     }
    ],
    "fieldConfig": {
@@ -318,7 +425,7 @@
     "overrides": []
    },
    "options": {
-    "graphMode": "area",
+    "graphMode": "none",
     "colorMode": "background",
     "textMode": "value",
     "justifyMode": "center",
@@ -348,10 +455,10 @@
    },
    "targets": [
     {
-     "expr": "sum(jamswap_settle_reverted_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0)",
+     "expr": "last_over_time((sum(jamswap_settle_reverted_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0))[$__range:$__interval] @ $at)",
      "refId": "A",
-     "range": true,
-     "instant": false
+     "range": false,
+     "instant": true
     }
    ],
    "fieldConfig": {
@@ -378,7 +485,7 @@
     "overrides": []
    },
    "options": {
-    "graphMode": "area",
+    "graphMode": "none",
     "colorMode": "background",
     "textMode": "value",
     "justifyMode": "center",
@@ -408,10 +515,10 @@
    },
    "targets": [
     {
-     "expr": "histogram_quantile(0.99, sum by (le) (rate(jamswap_order_clear_latency_seconds_bucket{net=\"$net\",run_id=\"$run_id\"}[10m])))",
+     "expr": "last_over_time((histogram_quantile(0.99, sum by (le) (rate(jamswap_order_clear_latency_seconds_bucket{net=\"$net\",run_id=\"$run_id\"}[10m]))))[$__range:$__interval] @ $at)",
      "refId": "A",
-     "range": true,
-     "instant": false
+     "range": false,
+     "instant": true
     }
    ],
    "fieldConfig": {
@@ -427,7 +534,7 @@
     "overrides": []
    },
    "options": {
-    "graphMode": "area",
+    "graphMode": "none",
     "colorMode": "background",
     "textMode": "value",
     "justifyMode": "center",

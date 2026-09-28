@@ -198,7 +198,8 @@ class Dashboards(unittest.TestCase):
     def test_soak_runs_dashboard(self):
         d = gen_dashboards.soak_runs()
         self.assertEqual(d["uid"], "obs-soak-runs")
-        self.assertEqual([v["name"] for v in d["templating"]["list"]], ["net", "run_id"])
+        self.assertEqual([v["name"] for v in d["templating"]["list"]], ["net", "run_id", "at", "run_from", "run_to"])
+        self.assertEqual(d["links"][0]["title"], "whole run")
         exprs = [t["expr"] for p in d["panels"] for t in p.get("targets", [])]
         for c, _, _ in soak_metrics.CHECKS:
             self.assertTrue(any('check="%s"' % c in e for e in exprs), c)

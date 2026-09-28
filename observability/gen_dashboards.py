@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.join(OBS_HOME, "dashgen"))
 sys.path.insert(0, os.path.join(REPO, "nets"))
 try:
     from obsdash import (GREEN, PASS_FAIL, PROM, RED, SEL, Layout, dashboard, right_axis,  # noqa: E402
-                         stat, table, text, ts, variables, write_all)
+                         run_variables, stat, table, text, ts, variables, write_all)
 except ImportError:                          # the tests skip without it
     obsdash_missing = "dashgen/obsdash.py not found under OBS_HOME=%s" % OBS_HOME
 else:
@@ -174,8 +174,9 @@ def soak_runs():
         return {"name": name, "label": name, "type": "query", "datasource": PROM,
                 "query": query, "definition": query, "refresh": 2, "sort": sort,
                 "includeAll": False, "multi": False, "current": {}, "options": [], "hide": 0}
+    # then the run's hidden variables: the "whole run" link at the top reads them
     variables_ = [var("net", "label_values(soak_info, net)", 1),
-                  var("run_id", 'label_values(soak_info{net="$net"}, run_id)', 2)]
+                  var("run_id", 'label_values(soak_info{net="$net"}, run_id)', 2)] + run_variables()
     L = Layout()
     L.add(text(ABOUT), 24, 13)
 
@@ -229,6 +230,8 @@ def soak_runs():
         "[lasair validator duties](/d/obs-lasair?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) · "
         "[DEX](/d/obs-dex?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) · "
         "[Memory](/d/obs-memory?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) · "
+        "[Node detail](/d/obs-node?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) (one "
+        "node: why it stopped, its last words) · "
         "[Logs](/d/obs-logs?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range})",
         "Open"), 24, 3)
 
