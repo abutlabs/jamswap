@@ -51,6 +51,63 @@
     "current": {},
     "options": [],
     "hide": 0
+   },
+   {
+    "name": "at",
+    "label": "at",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "query_result(clamp_max(max(obs_run_end_timestamp_seconds{net=\"$net\",run_id=\"$run_id\"}), ${__to:date:seconds}) or vector(${__to:date:seconds}))",
+    "definition": "query_result(clamp_max(max(obs_run_end_timestamp_seconds{net=\"$net\",run_id=\"$run_id\"}), ${__to:date:seconds}) or vector(${__to:date:seconds}))",
+    "regex": "/\\}\\s+(\\S+)\\s/",
+    "refresh": 2,
+    "sort": 0,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 2
+   },
+   {
+    "name": "run_from",
+    "label": "run_from",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "query_result(max by (link_from) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "definition": "query_result(max by (link_from) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "regex": "/link_from=\"([^\"]+)\"/",
+    "refresh": 2,
+    "sort": 0,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 2
+   },
+   {
+    "name": "run_to",
+    "label": "run_to",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "query_result(max by (link_to) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "definition": "query_result(max by (link_to) (obs_run_info{net=\"$net\",run_id=\"$run_id\"}))",
+    "regex": "/link_to=\"([^\"]+)\"/",
+    "refresh": 2,
+    "sort": 0,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 2
    }
   ]
  },
@@ -124,10 +181,60 @@
      "matchAny": false,
      "limit": 500
     }
+   },
+   {
+    "name": "lifecycle",
+    "enable": true,
+    "hide": false,
+    "iconColor": "#B877D9",
+    "datasource": {
+     "type": "loki",
+     "uid": "loki"
+    },
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\" or reason!~\"killed|oom|crashed\"",
+    "target": {
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\" or reason!~\"killed|oom|crashed\"",
+     "refId": "Anno",
+     "queryType": "range"
+    },
+    "instant": false,
+    "titleFormat": "{{node}} {{event}}",
+    "textFormat": "{{msg}}",
+    "tagKeys": "node,event,reason"
+   },
+   {
+    "name": "node stopped during the run",
+    "enable": true,
+    "hide": false,
+    "iconColor": "red",
+    "datasource": {
+     "type": "loki",
+     "uid": "loki"
+    },
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\" | reason=~\"killed|oom|crashed\"",
+    "target": {
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\" | reason=~\"killed|oom|crashed\"",
+     "refId": "Anno",
+     "queryType": "range"
+    },
+    "instant": false,
+    "titleFormat": "{{node}} {{event}}",
+    "textFormat": "{{msg}}",
+    "tagKeys": "node,event,reason"
    }
   ]
  },
  "links": [
+  {
+   "type": "link",
+   "title": "whole run",
+   "icon": "dashboard",
+   "includeVars": true,
+   "keepTime": false,
+   "targetBlank": false,
+   "tooltip": "Set the time range to this run's start \u2192 end (1 min either side)",
+   "url": "/d/obs-soak-runs?from=${run_from}&to=${run_to}"
+  },
   {
    "type": "dashboards",
    "tags": [
@@ -486,7 +593,7 @@
    },
    "targets": [
     {
-     "expr": "max by (clients, lasair_image, data_dir, dex_backend, load_profile, load_rate, sealed_ratio, jamswap_commit, secs, drain) (soak_info{run_id=\"$run_id\"})",
+     "expr": "last_over_time((max by (clients, lasair_image, data_dir, dex_backend, load_profile, load_rate, sealed_ratio, jamswap_commit, secs, drain) (soak_info{run_id=\"$run_id\"}))[$__range:$__interval] @ $at)",
      "refId": "A",
      "format": "table",
      "instant": true,
@@ -1391,7 +1498,7 @@
    "transparent": false,
    "options": {
     "mode": "markdown",
-    "content": "**This run's dashboards** (same net, run and time range): [Chain health](/d/obs-chain?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Network overview](/d/obs-overview?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [lasair validator duties](/d/obs-lasair?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [DEX](/d/obs-dex?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Memory](/d/obs-memory?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Logs](/d/obs-logs?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range})"
+    "content": "**This run's dashboards** (same net, run and time range): [Chain health](/d/obs-chain?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Network overview](/d/obs-overview?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [lasair validator duties](/d/obs-lasair?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [DEX](/d/obs-dex?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Memory](/d/obs-memory?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Node detail](/d/obs-node?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) (one node: why it stopped, its last words) \u00b7 [Logs](/d/obs-logs?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range})"
    },
    "id": 23,
    "gridPos": {
