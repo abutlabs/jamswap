@@ -55,11 +55,11 @@ Both nets are GP 0.8.0 and run on amd64 and arm64. lasair6 pulls the published
 ### How the DEX reaches the chain
 
 The off-chain builder uses one client-neutral interface,
-[`offchain/chain.py`](offchain/chain.py): the **JIP-2** node RPC on pj6 (spec-valid
-GP 0.8.0 work-packages, reads at the best or finalized block, a runtime deploy through
-the chain's Bootstrap service), or **lasair's JAMNP-S bridges** on lasair6 (CE-133
-submit, CE-129 reads, the service seeded into genesis) while lasair has no JIP-2 server.
-The service blob is the same on both, and one scenario run on lasair and on PolkaJam
+[`offchain/chain.py`](offchain/chain.py), the **JIP-2** node RPC: spec-valid GP 0.8.0
+work-packages and reads at the best or finalized block, on pj6 through a PolkaJam node
+(with a runtime deploy through the chain's Bootstrap service) and on lasair6 through
+lasair's `lasair-reader` (the service seeded into genesis). The service blob is the
+same on both, and one scenario run on lasair and on PolkaJam
 leaves byte-identical service state ([`docs/DIFFERENTIAL_TESTNET.md`](docs/DIFFERENTIAL_TESTNET.md)).
 
 ## What makes it special

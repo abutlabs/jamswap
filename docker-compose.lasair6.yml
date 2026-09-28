@@ -130,7 +130,9 @@ services:
     environment: { <<: *mesh-env, INDEX: "5", IDENTITY: "105", PORT: "40065" }
     networks: { lasnet: { ipv4_address: 172.29.0.15 } }
 
-  # CE-133 submit bridge: each work-item goes to ONE validator's builder endpoint
+  # CE-133 submit bridge of the dex's jamnp backend (LASAIR_DEX_BACKEND=jamnp, for a
+  # lasair image whose reader serves no JIP-2), and of the differential harness
+  # (docs/DIFFERENTIAL_TESTNET.md). Each work-item goes to ONE validator's builder endpoint
   # (blake2b(payload) mod 6; each node's builder ALPN port = its PORT+1), failing over
   # around the ring on a CE-133 error. Fanning every item to all six made up to six
   # copies accumulate (a deposit was credited 3×; the service now credits each deposit
@@ -155,9 +157,11 @@ services:
     restart: unless-stopped
 
   # lasair-reader, one per node: HTTP /read (CE-129, proven against the block's state
-  # root) and, on the same port, the JIP-2 node RPC over a WebSocket (lasair#68).
-  # `reader` follows lm0 and serves the dex; reader1..reader5 follow lm1..lm5, so
-  # netwatch reads every node by hash (./dex soak: one head, finality, state parity).
+  # root) and, on the same port, the JIP-2 node RPC over a WebSocket (lasair#68), whose
+  # submitWorkPackage goes to the first of LASAIR_RPC_GUARANTORS (every node's builder
+  # endpoint, PORT+1) that takes it. `reader` follows lm0 and is the dex's node;
+  # reader1..reader5 follow lm1..lm5, so netwatch reads every node by hash (./dex soak:
+  # one head, finality, state parity).
   reader: &reader
     image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}
     depends_on: { spec-init: { condition: service_completed_successfully } }
@@ -173,6 +177,7 @@ services:
       LASAIR_NODE_PORT: "40060"
       LASAIR_CHAIN_SPEC: /shared/spec.json
       LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_RPC_GUARANTORS: "172.29.0.10:40061,172.29.0.11:40062,172.29.0.12:40063,172.29.0.13:40064,172.29.0.14:40065,172.29.0.15:40066"
     networks: { lasnet: {} }
     restart: unless-stopped
   reader1:
@@ -211,14 +216,23 @@ services:
     build:
       context: .
       dockerfile: offchain/Dockerfile
-    depends_on: [builder, reader]
+    depends_on: [reader]
     environment:
+      # the DEX on lm0's JIP-2, served by its lasair-reader (lasair#68): heads, finality
+      # and state read at the finalized block (lasair#70), work-packages submitted to
+      # lasair's guarantors (CE-133). The service stays seeded into genesis at 100: a
+      # lasair guarantor refines only the service it hosts.
+      CHAIN_BACKEND: ${LASAIR_DEX_BACKEND:-jip2}
+      CHAIN_RPC: ws://reader:19990
+      CHAIN_SPEC: /shared/spec.json   # the authorizer in the cores' pools
       SERVICE_ID: "100"
+      # the footprint is readable over JIP-2, so JAMKB backpressure is live: keep the
+      # reserve topped up (server.py, reserve keeper)
+      RESERVE_TOPUP: "1"
+      # LASAIR_DEX_BACKEND=jamnp (a lasair image older than 2.1.0): the builder and reader
+      # bridges over HTTP, heads and finality from lm0's Prometheus gauges
       BUILDER_URL: http://builder:19980
       READER_URL: http://reader:19990
-      # lasair node Prometheus gauges (lasair_finalized_height/_block_height) so the
-      # DEX can stamp each fill's settle height and expose β via /api/finality — the
-      # UI shows fills as "Finalizing" until β catches up, then "Final".
       NODE_METRICS_URL: http://lm0:9615/metrics
       PORT: "8080"
       PYTHONUNBUFFERED: "1"

@@ -20,14 +20,16 @@
 #   ./dex down NET=pj6
 #   ./dex nets                 # the profiles;  ./dex gen  regenerates nets/compose/*.yml
 #
-# pj6 carries the DEX on JIP-2 (no lasair anywhere): up deploys the service at startup
-# and waits for the API; load/noload drive its load generator, and
+# The DEX nets (lasair6, pj6, lasair-pj) run the DEX on JIP-2: on lasair's reader, or on
+# PolkaJam with the service deployed at startup (pj6). load/noload drive the load
+# generator, and
 #
 #   ./dex soak NET=pj6 [SECS]  # A1-A4 (docs/NETS.md): load + netwatch for SECS (600),
 #                              # then state parity and the soak verdict; exit 0 iff all pass
 #
 # Keys: every validator holds only its own key. LASAIR_DEV_ALL_KEYS=1 puts the lasair
 # nodes in lasair's devnet mode instead (each derives every dev secret).
+# LASAIR_DEX_BACKEND=jamnp: the DEX on lasair's HTTP bridges (a lasair image before 2.1.0).
 # JAVAJAM_RUNNER=native|docker (default native on macOS, whose Docker can't run it).
 #
 set -euo pipefail
@@ -145,10 +147,10 @@ case "$cmd" in
       echo "  keys: LASAIR_DEV_ALL_KEYS=$LASAIR_DEV_ALL_KEYS$([ -z "$NET_LASAIR_SET" ] && echo " (no lasair node: every key held only by its own node)")"
       echo "  one head + finality: ./dex heads NET=$NET"
       if [ -n "$URL" ]; then
-        # the API opens once the service is deployed (jip2), the markets are listed, the
+        # the API opens once the service is deployed (gateway), the markets are listed, the
         # dev accounts are funded and the treasury's reserve has landed: a minute or two;
         # then fills are durable once the net finalizes (available: true)
-        echo "DEX starting ($([ "$NET_DEX_BACKEND" = jip2 ] && echo "runtime deploy + setup" || echo "genesis service"))…"
+        echo "DEX starting ($([ "$NET_DEX_BACKEND" = gateway ] && echo "runtime deploy + setup" || echo "genesis service"))…"
         for _ in $(seq 1 120); do
           [ "$(_available)" = True ] && break
           sleep 5

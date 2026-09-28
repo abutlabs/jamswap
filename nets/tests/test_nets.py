@@ -154,8 +154,8 @@ class Netgen(unittest.TestCase):
         self.assertIn("@sha256:", jj["image"])
 
     def test_dex_backend_follows_the_layout(self):
-        self.assertEqual(netgen.dex_backend("lasair-pj"), "jamnp")   # lasair's bridges
-        self.assertEqual(netgen.dex_backend("pj6"), "jip2")
+        self.assertEqual(netgen.dex_backend("lasair-pj"), "reader")   # lasair-reader's JIP-2
+        self.assertEqual(netgen.dex_backend("pj6"), "gateway")
         self.assertIsNone(netgen.dex_backend("pj-javajam"))
 
     def test_jip2_dex_deploys_at_startup_with_no_bridge(self):
@@ -200,19 +200,27 @@ class Netgen(unittest.TestCase):
 
     def test_the_lasair_dex_stack(self):
         doc = netgen.compose("lasair-pj")["services"]
-        self.assertEqual(doc["dex"]["depends_on"], ["builder", "reader"])
+        # the dex on the first lasair node's reader over JIP-2, the service in genesis
+        self.assertEqual(doc["dex"]["depends_on"], ["reader"])
         env = doc["dex"]["environment"]
-        self.assertEqual((env["SERVICE_ID"], env["READER_URL"]), ("100", "http://reader:19990"))
+        self.assertEqual((env["CHAIN_BACKEND"], env["CHAIN_RPC"], env["CHAIN_SPEC"]),
+                         ("${LASAIR_DEX_BACKEND:-jip2}", "ws://reader:19990", "/shared/spec.json"))
+        self.assertEqual((env["SERVICE_ID"], env["RESERVE_TOPUP"]), ("100", "1"))
         self.assertEqual(doc["spec-init"]["environment"]["SERVICE"], "/work/jamswap-service.jam")
-        # the builder hands packages to lasair guarantors only (each node's port + 1)
+        # LASAIR_DEX_BACKEND=jamnp: lasair's HTTP bridges, still wired
+        self.assertEqual((env["BUILDER_URL"], env["READER_URL"], env["NODE_METRICS_URL"]),
+                         ("http://builder:19980", "http://reader:19990", "http://lm0:9615/metrics"))
         b = doc["builder"]["environment"]
         self.assertEqual(b["LASAIR_GUARANTOR_HOST"], "10.231.6.10,10.231.6.11,10.231.6.12")
         self.assertEqual(b["LASAIR_GUARANTOR_PORT"], "41601,41602,41603")
-        # a reader per lasair node: `reader` (the dex's) follows lm0
+        # a reader per lasair node: `reader` (the dex's) follows lm0; each submits to
+        # lasair guarantors only (each lasair node's port + 1)
         for svc, i in (("reader", 0), ("reader1", 1), ("reader2", 2)):
             e = doc[svc]["environment"]
             self.assertEqual((e["LASAIR_NODE_HOST"], e["LASAIR_NODE_PORT"]),
                              ("10.231.6.%d" % (10 + i), str(41600 + i)))
+            self.assertEqual(e["LASAIR_RPC_GUARANTORS"],
+                             "10.231.6.10:41601,10.231.6.11:41602,10.231.6.12:41603")
         self.assertNotIn("reader3", doc)
         self.assertEqual(doc["loadgen"]["environment"]["DEX_URL"], "http://dex:8080")
         nw = doc["netwatch"]["environment"]
@@ -222,6 +230,18 @@ class Netgen(unittest.TestCase):
             "pj4,polkajam,ws://pj4:42604", "pj5,polkajam,ws://pj5:42605"])
         self.assertEqual(nw["NETWATCH_VALIDATORS"], "lm0,lm1,lm2,pj3,pj4,pj5")
         self.assertEqual(doc["netwatch"]["depends_on"], ["reader", "reader1", "reader2"])
+
+    def test_lasair6_dex_is_on_its_reader_too(self):
+        # the hand-written lasair6 file follows the same rule as the generated lasair nets
+        if yaml is None:
+            self.skipTest("PyYAML not installed")
+        with open(os.path.join(os.path.dirname(netgen.HERE), "docker-compose.lasair6.yml")) as f:
+            doc = yaml.safe_load(f)["services"]
+        env = doc["dex"]["environment"]
+        self.assertEqual((env["CHAIN_BACKEND"], env["CHAIN_RPC"], env["SERVICE_ID"], env["RESERVE_TOPUP"]),
+                         ("${LASAIR_DEX_BACKEND:-jip2}", "ws://reader:19990", "100", "1"))
+        self.assertEqual(doc["reader"]["environment"]["LASAIR_RPC_GUARANTORS"],
+                         ",".join("172.29.0.%d:%d" % (10 + i, 40061 + i) for i in range(6)))
 
     def test_soakable_nets(self):
         self.assertTrue(netgen.soakable("lasair6"))

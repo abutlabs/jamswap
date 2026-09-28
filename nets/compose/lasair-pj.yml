@@ -9,10 +9,11 @@
 #   ./dex load NET=lasair-pj      start the load generator (up leaves it stopped)
 #   ./dex soak NET=lasair-pj 600  A1-A4: load + netwatch, then parity + soak verdict
 #
-# DEX http://localhost:8206 (lasair's bridges, SERVICE_ID 100 in genesis): jamnp-builder hands
-# each work-package to a lasair guarantor (CE-133), `reader` serves its reads.
-# Every lasair node has a lasair-reader serving JIP-2; netwatch reads each node
-# through it or its own RPC: 127.0.0.1:9306 (/metrics, /verdict).
+# DEX http://localhost:8206 (CHAIN_BACKEND=jip2, SERVICE_ID 100 in genesis) on the JIP-2 of
+# `reader`, the first lasair node's lasair-reader, which hands each work-package
+# to a lasair guarantor (CE-133). Every lasair node has a reader; netwatch reads
+# each node through it or its own RPC: 127.0.0.1:9306 (/metrics, /verdict).
+# LASAIR_DEX_BACKEND=jamnp: the dex on lasair's HTTP bridges (`builder`, `reader`).
 #
 #   i  client    service  JAMNP-S udp  RPC (host 127.0.0.1)
 #   0  lasair    lm0      41600        -  (logs)
@@ -257,6 +258,7 @@ services:
       LASAIR_NODE_PORT: "41600"
       LASAIR_CHAIN_SPEC: "/shared/spec.json"
       LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_RPC_GUARANTORS: "10.231.6.10:41601,10.231.6.11:41602,10.231.6.12:41603"
     networks:
       net: {}
     restart: "unless-stopped"
@@ -280,6 +282,7 @@ services:
       LASAIR_NODE_PORT: "41601"
       LASAIR_CHAIN_SPEC: "/shared/spec.json"
       LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_RPC_GUARANTORS: "10.231.6.10:41601,10.231.6.11:41602,10.231.6.12:41603"
     networks:
       net: {}
     restart: "unless-stopped"
@@ -303,6 +306,7 @@ services:
       LASAIR_NODE_PORT: "41602"
       LASAIR_CHAIN_SPEC: "/shared/spec.json"
       LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_RPC_GUARANTORS: "10.231.6.10:41601,10.231.6.11:41602,10.231.6.12:41603"
     networks:
       net: {}
     restart: "unless-stopped"
@@ -311,10 +315,13 @@ services:
       context: "../.."
       dockerfile: "offchain/Dockerfile"
     depends_on:
-      - "builder"
       - "reader"
     environment:
+      CHAIN_BACKEND: "${LASAIR_DEX_BACKEND:-jip2}"
+      CHAIN_RPC: "ws://reader:19990"
+      CHAIN_SPEC: "/shared/spec.json"
       SERVICE_ID: "100"
+      RESERVE_TOPUP: "1"
       BUILDER_URL: "http://builder:19980"
       READER_URL: "http://reader:19990"
       NODE_METRICS_URL: "http://lm0:9615/metrics"

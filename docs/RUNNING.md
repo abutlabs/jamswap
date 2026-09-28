@@ -12,14 +12,16 @@ which net is which.
 
 | Backend | Talks to | The service | Used on |
 |---|---|---|---|
-| `jip2` | a node's JIP-2 RPC at `CHAIN_RPC` (default `ws://localhost:19800`): heads and finality, service reads at the best or finalized block, and `submitWorkPackage` with a GP 0.8.0 work-package it builds (authorizer from the JIP-4 chain spec at `CHAIN_SPEC`) | deployed at startup through the Bootstrap service, or named by `SERVICE_ID` | pj6, any JIP-2 node |
-| `jamnp` (default) | lasair's bridges: `BUILDER_URL` (CE-133 submit), `READER_URL` (CE-129 read at the node's head), `NODE_METRICS_URL` (heads and finality from lasair's gauges) | seeded into genesis (`SERVICE_ID`) | lasair6, lasair-pj, the quickstart, the mixed net |
+| `jip2` | a node's JIP-2 RPC at `CHAIN_RPC` (default `ws://localhost:19800`): heads and finality, service reads at the best or finalized block, and `submitWorkPackage` with a GP 0.8.0 work-package it builds (authorizer from the JIP-4 chain spec at `CHAIN_SPEC`) | deployed at startup through the Bootstrap service, or named by `SERVICE_ID` | pj6 (a PolkaJam gateway node), lasair6 and lasair-pj (the first lasair node's `lasair-reader`, lasair ≥ 2.1.0), any JIP-2 node |
+| `jamnp` (default) | lasair's bridges: `BUILDER_URL` (CE-133 submit), `READER_URL` (CE-129 read at the node's head), `NODE_METRICS_URL` (heads and finality from lasair's gauges) | seeded into genesis (`SERVICE_ID`) | the quickstart, the mixed net; lasair6 and lasair-pj with `LASAIR_DEX_BACKEND=jamnp` (a lasair image before 2.1.0) |
 
 The service blob, `service/jamswap-service.jam` (GP 0.8.0), is the same on both.
-On `jamnp` the API opens once the default markets are listed on chain (`LIST_WAIT_SECS`,
-default 300): a net that has just started may refuse work for its first minute. Since
-2.1.0 lasair serves JIP-2 through `lasair-reader` (lasair#68, finalized reads lasair#70);
-moving the DEX on lasair nets from `jamnp` to it is #26.
+The API opens once the default markets are listed on chain (`LIST_WAIT_SECS`,
+default 300): a net that has just started may refuse work for its first minute. On a
+lasair net the DEX runs `jip2` on a `lasair-reader` (JIP-2 on its HTTP port, lasair#68;
+proven and finalized reads, lasair#70; `submitWorkPackage` to `LASAIR_RPC_GUARANTORS`)
+with `SERVICE_ID=100`: the service stays seeded into genesis, since a lasair guarantor
+refines only the service it hosts (#26).
 
 ## The DEX nets
 
@@ -62,7 +64,7 @@ too); `GENESIS_BALANCE` sets the funding per asset (display units, default 1,000
 the treasury's JAMKB reserve deposit has landed (`RESERVE_WAIT_SECS`, default 120), so the
 first order is not refused as under-reserved. How the Bootstrap instruction was
 established is in [`offchain/deploy.py`](../offchain/deploy.py). This path is verified on
-PolkaJam; lasair nets keep the genesis-seeded service on `jamnp` until #26.
+PolkaJam; lasair nets keep the genesis-seeded service (above).
 
 Point `CHAIN_RPC` at a node that forwards work-packages. A PolkaJam **validator**'s RPC
 does not (it answers `submitWorkPackage` with "Failed to submit work-package to even a
