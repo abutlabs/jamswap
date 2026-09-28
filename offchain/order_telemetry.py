@@ -63,6 +63,16 @@ metrics.describe("jamswap_order_clearing_slo",
                  "cleared / (cleared + missed) among MARKETABLE orders — the headline reliability SLO")
 metrics.describe("jamswap_order_open",
                  "orders currently live (placed but not yet terminal), by phase")
+metrics.describe("jamswap_order_open_stale",
+                 "live orders the soak verdict would call stuck open: no event for OPEN_GRACE s "
+                 "(resting ones: OPEN_GRACE s past their own expiry), by phase")
+metrics.describe("jamswap_order_open_oldest_seconds",
+                 "the longest any live order has gone without an event (resting ones: time past "
+                 "their expiry)")
+
+# an order silent this long is stuck open: soak_verdict.score's open_grace default, so the
+# live gauge and the verdict count the same orders
+OPEN_GRACE = 600
 
 _lock = threading.Lock()
 _orders = {}            # (market, account, oid) -> order lifecycle record
@@ -71,10 +81,15 @@ _slo = {"cleared": 0, "missed": 0}
 
 
 def _log(rec, event, **extra):
+    """Append one transition to the JSONL log; also the order's last event (and a resting
+    order's expiry), which is what the verdict judges an open order by."""
     line = {"ts": round(time.time(), 3), "event": event,
             "market": rec["market"], "account": rec["account"], "oid": rec["oid"],
             "marketable": rec["marketable"]}
     line.update(extra)
+    rec["last"] = line["ts"]
+    if extra.get("expires_at"):
+        rec["expires_at"] = extra["expires_at"]
     try:
         with open(ORDER_EVENTS_FILE, "a") as fh:
             fh.write(json.dumps(line) + "\n")
@@ -212,17 +227,29 @@ def is_open(market, account, oid):
         return (int(market), int(account), int(oid)) in _orders
 
 
-def snapshot():
-    """Live SLO + open-order counts for /api/orders_slo and the phase gauges."""
+def snapshot(now=None):
+    """Live SLO + open-order counts for /api/orders_slo and the phase gauges, and the open
+    orders the soak verdict would call stuck (see OPEN_GRACE)."""
+    now = time.time() if now is None else now
     with _lock:
         c, mi = _slo["cleared"], _slo["missed"]
-        phases = {}
+        phases, stale, oldest = {}, {}, 0.0
         for rec in _orders.values():
-            phases[rec["phase"]] = phases.get(rec["phase"], 0) + 1
+            ph = rec["phase"]
+            phases[ph] = phases.get(ph, 0) + 1
+            if ph == "rested":        # legitimately live on the book until its own expiry
+                late = now - rec["expires_at"] if rec.get("expires_at") else 0.0
+            else:
+                late = now - rec.get("last", rec["placed_at"])
+            oldest = max(oldest, late)
+            if late > OPEN_GRACE:
+                stale[ph] = stale.get(ph, 0) + 1
         open_n = len(_orders)
     for ph in ("placed", "rounded", "deferred", "rested"):
         metrics.set_gauge("jamswap_order_open", {"phase": ph}, phases.get(ph, 0))
+        metrics.set_gauge("jamswap_order_open_stale", {"phase": ph}, stale.get(ph, 0))
+    metrics.set_gauge("jamswap_order_open_oldest_seconds", None, oldest)
     total = c + mi
     return {"cleared": c, "missed": mi, "open": open_n, "phases": phases,
-            "slo": (c / total) if total else 1.0,
+            "stale": sum(stale.values()), "slo": (c / total) if total else 1.0,
             "marketable_terminal": total}

@@ -191,9 +191,9 @@
      "type": "loki",
      "uid": "loki"
     },
-    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\"",
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\" or reason!~\"killed|oom|crashed\"",
     "target": {
-     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\"",
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\" or reason!~\"killed|oom|crashed\"",
      "refId": "Anno",
      "queryType": "range"
     },
@@ -211,9 +211,9 @@
      "type": "loki",
      "uid": "loki"
     },
-    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\"",
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\" | reason=~\"killed|oom|crashed\"",
     "target": {
-     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\"",
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\" | reason=~\"killed|oom|crashed\"",
      "refId": "Anno",
      "queryType": "range"
     },
@@ -253,7 +253,7 @@
    "transparent": true,
    "options": {
     "mode": "markdown",
-    "content": "**Is the DEX turning offered load into cleared trades?** The load generator's offered operations (per second, by op) should be met by placed and cleared orders; its errors and busy replies are load the DEX turned away. The headline is the clearing SLO, the soak's own verdict (PASS \u2265 0.9999): the share of marketable orders that cleared."
+    "content": "**Is the DEX turning offered load into cleared trades?** The load generator's offered operations (per second, by op) should be met by placed and cleared orders; its errors and busy replies are load the DEX turned away. The headline is the soak's verdict (PASS \u2265 0.9999): of the orders that could trade, the share that did, counting an order stuck open (silent 10 min) as a miss. The DEX's own live figure counts only orders that reached an end, so it reads 1.0 while a backlog builds: watch **Orders open too long** beside it."
    },
    "id": 1,
    "gridPos": {
@@ -265,15 +265,15 @@
   },
   {
    "type": "stat",
-   "title": "Clearing SLO \u00b7 PASS \u2265 0.9999",
-   "description": "Marketable orders that cleared over all that reached a terminal state (offchain/order_telemetry.py).",
+   "title": "Clearing SLO (soak verdict) \u00b7 PASS \u2265 0.9999",
+   "description": "The soak's verdict (offchain/soak_verdict.py, pushed at the end of a soak): cleared \u00f7 (cleared + missed + stuck open) over the orders that could trade; an order with no end and no event for 10 min is stuck open. Empty until a soak of this run has judged it. Read as pushed by the range's end (a verdict comes at, or after, the run's end).",
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
    },
    "targets": [
     {
-     "expr": "last_over_time((min(jamswap_order_clearing_slo{net=\"$net\",run_id=\"$run_id\"}))[$__range:$__interval] @ $at)",
+     "expr": "max(soak_check_value{run_id=\"$run_id\",check=\"clearing_slo\"})",
      "refId": "A",
      "range": false,
      "instant": true
@@ -281,8 +281,8 @@
    ],
    "fieldConfig": {
     "defaults": {
-     "decimals": 3,
-     "noValue": "no data",
+     "decimals": 4,
+     "noValue": "no verdict yet",
      "color": {
       "mode": "thresholds"
      },
@@ -320,7 +320,116 @@
    "gridPos": {
     "x": 0,
     "y": 3,
-    "w": 5,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Cleared of settled orders (live, info)",
+   "description": "The DEX's running tally (offchain/order_telemetry.py): filled \u00f7 (filled + expired, lost, rejected, partially cancelled) over marketable orders that reached an end. An order that never reaches one is not in it, so a backlog leaves it at 1.0; the verdict counts those (Orders open too long).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "last_over_time((min(jamswap_order_clearing_slo{net=\"$net\",run_id=\"$run_id\"}))[$__range:$__interval] @ $at)",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 4,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 3,
+   "gridPos": {
+    "x": 4,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Orders open too long \u00b7 PASS = 0",
+   "description": "Live orders with no event for 10 min (resting ones: 10 min past their own expiry): what the verdict will count as stuck open, as it builds (jamswap_order_open_stale).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "last_over_time((sum(jamswap_order_open_stale{net=\"$net\",run_id=\"$run_id\"}))[$__range:$__interval] @ $at)",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 4,
+   "gridPos": {
+    "x": 8,
+    "y": 3,
+    "w": 4,
     "h": 4
    }
   },
@@ -377,11 +486,11 @@
      "values": false
     }
    },
-   "id": 3,
+   "id": 5,
    "gridPos": {
-    "x": 5,
+    "x": 12,
     "y": 3,
-    "w": 5,
+    "w": 3,
     "h": 4
    }
   },
@@ -437,11 +546,11 @@
      "values": false
     }
    },
-   "id": 4,
+   "id": 6,
    "gridPos": {
-    "x": 10,
+    "x": 15,
     "y": 3,
-    "w": 5,
+    "w": 3,
     "h": 4
    }
   },
@@ -497,11 +606,11 @@
      "values": false
     }
    },
-   "id": 5,
+   "id": 7,
    "gridPos": {
-    "x": 15,
+    "x": 18,
     "y": 3,
-    "w": 5,
+    "w": 3,
     "h": 4
    }
   },
@@ -546,11 +655,11 @@
      "values": false
     }
    },
-   "id": 6,
+   "id": 8,
    "gridPos": {
-    "x": 20,
+    "x": 21,
     "y": 3,
-    "w": 4,
+    "w": 3,
     "h": 4
    }
   },
@@ -600,7 +709,7 @@
      "sort": "desc"
     }
    },
-   "id": 7,
+   "id": 9,
    "gridPos": {
     "x": 0,
     "y": 7,
@@ -666,7 +775,7 @@
      "sort": "desc"
     }
    },
-   "id": 8,
+   "id": 10,
    "gridPos": {
     "x": 8,
     "y": 7,
@@ -726,7 +835,7 @@
      "sort": "desc"
     }
    },
-   "id": 9,
+   "id": 11,
    "gridPos": {
     "x": 16,
     "y": 7,
@@ -736,8 +845,8 @@
   },
   {
    "type": "timeseries",
-   "title": "Clearing SLO",
-   "description": "The soak's headline, live. Dashed: the target.",
+   "title": "Cleared of settled orders (live)",
+   "description": "The DEX's running tally over orders that reached an end (not the verdict: stuck-open orders are not in it). Dashed: the target.",
    "datasource": {
     "type": "prometheus",
     "uid": "prometheus"
@@ -745,7 +854,7 @@
    "targets": [
     {
      "expr": "jamswap_order_clearing_slo{net=\"$net\",run_id=\"$run_id\"}",
-     "legendFormat": "clearing SLO",
+     "legendFormat": "cleared of settled",
      "refId": "A",
      "range": true
     }
@@ -798,9 +907,117 @@
      "sort": "desc"
     }
    },
-   "id": 10,
+   "id": 12,
    "gridPos": {
     "x": 0,
+    "y": 15,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Orders open, and open too long",
+   "description": "Live orders by phase; those silent over 10 min, which the verdict will count as stuck open; and how long the oldest has gone without an event (right axis). A backlog shows here while it builds.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum by (phase) (jamswap_order_open{net=\"$net\",run_id=\"$run_id\"})",
+     "legendFormat": "open: {{phase}}",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "sum(jamswap_order_open_stale{net=\"$net\",run_id=\"$run_id\"})",
+     "legendFormat": "open too long (> 10 min silent)",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "max(jamswap_order_open_oldest_seconds{net=\"$net\",run_id=\"$run_id\"}) / 60",
+     "legendFormat": "oldest silent (min)",
+     "refId": "C",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "oldest.*"
+      },
+      "properties": [
+       {
+        "id": "custom.axisPlacement",
+        "value": "right"
+       },
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          6,
+          4
+         ]
+        }
+       },
+       {
+        "id": "unit",
+        "value": "m"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "open too long.*"
+      },
+      "properties": [
+       {
+        "id": "color",
+        "value": {
+         "mode": "fixed",
+         "fixedColor": "red"
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 13,
+   "gridPos": {
+    "x": 8,
     "y": 15,
     "w": 8,
     "h": 8
@@ -865,9 +1082,9 @@
      "sort": "desc"
     }
    },
-   "id": 11,
+   "id": 14,
    "gridPos": {
-    "x": 8,
+    "x": 16,
     "y": 15,
     "w": 8,
     "h": 8
@@ -925,10 +1142,10 @@
      "sort": "desc"
     }
    },
-   "id": 12,
+   "id": 15,
    "gridPos": {
-    "x": 16,
-    "y": 15,
+    "x": 0,
+    "y": 23,
     "w": 8,
     "h": 8
    }
@@ -991,9 +1208,9 @@
      "sort": "desc"
     }
    },
-   "id": 13,
+   "id": 16,
    "gridPos": {
-    "x": 0,
+    "x": 8,
     "y": 23,
     "w": 8,
     "h": 8
@@ -1058,9 +1275,9 @@
      "sort": "desc"
     }
    },
-   "id": 14,
+   "id": 17,
    "gridPos": {
-    "x": 8,
+    "x": 16,
     "y": 23,
     "w": 8,
     "h": 8
@@ -1147,10 +1364,10 @@
      "sort": "desc"
     }
    },
-   "id": 15,
+   "id": 18,
    "gridPos": {
-    "x": 16,
-    "y": 23,
+    "x": 0,
+    "y": 31,
     "w": 8,
     "h": 8
    }

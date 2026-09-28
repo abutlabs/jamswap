@@ -35,6 +35,7 @@ else:
 import soak_metrics  # noqa: E402
 
 SLO_TARGET = 0.9999       # nets/soak.py / offchain/soak_verdict.py --target
+OPEN_GRACE_MIN = 10       # offchain/order_telemetry.py OPEN_GRACE (= soak_verdict's open_grace), minutes
 
 
 def zero_if_up(expr, job):
@@ -49,30 +50,47 @@ def dex():
     L.add(text(
         "**Is the DEX turning offered load into cleared trades?** The load generator's offered "
         "operations (per second, by op) should be met by placed and cleared orders; its errors "
-        "and busy replies are load the DEX turned away. The headline is the clearing SLO, the "
-        "soak's own verdict (PASS ≥ %s): the share of marketable orders that cleared." % SLO_TARGET),
-          24, 3)
+        "and busy replies are load the DEX turned away. The headline is the soak's verdict "
+        "(PASS ≥ %s): of the orders that could trade, the share that did, counting an order "
+        "stuck open (silent %d min) as a miss. The DEX's own live figure counts only orders that "
+        "reached an end, so it reads 1.0 while a backlog builds: watch **Orders open too long** "
+        "beside it." % (SLO_TARGET, OPEN_GRACE_MIN)), 24, 3)
     turned = ("((sum(loadgen_op_errors_total{%s}) or vector(0)) + "
               "(sum(loadgen_ops_busy_total{%s}) or vector(0))) / sum(loadgen_ops_total{%s})"
               % (SEL, SEL, SEL))
-    L.add(stat("Clearing SLO · PASS ≥ %s" % SLO_TARGET, "min(jamswap_order_clearing_slo{%s})" % SEL,
-               "Marketable orders that cleared over all that reached a terminal state "
-               "(offchain/order_telemetry.py).", ">=", SLO_TARGET, unit="percentunit",
-               decimals=3), 5, 4)
+    verdict = stat("Clearing SLO (soak verdict) · PASS ≥ %s" % SLO_TARGET,
+                   'max(soak_check_value{%s,check="clearing_slo"})' % RUN,
+                   "The soak's verdict (offchain/soak_verdict.py, pushed at the end of a soak): "
+                   "cleared ÷ (cleared + missed + stuck open) over the orders that could trade; "
+                   "an order with no end and no event for %d min is stuck open. Empty until a "
+                   "soak of this run has judged it. Read as pushed by the range's end (a verdict "
+                   "comes at, or after, the run's end)." % OPEN_GRACE_MIN, ">=", SLO_TARGET,
+                   unit="percentunit", decimals=4, instant=True)
+    verdict["fieldConfig"]["defaults"]["noValue"] = "no verdict yet"
+    L.add(verdict, 4, 4)
+    L.add(stat("Cleared of settled orders (live, info)", "min(jamswap_order_clearing_slo{%s})" % SEL,
+               "The DEX's running tally (offchain/order_telemetry.py): filled ÷ (filled + expired, "
+               "lost, rejected, partially cancelled) over marketable orders that reached an end. An "
+               "order that never reaches one is not in it, so a backlog leaves it at 1.0; the "
+               "verdict counts those (Orders open too long).", unit="percentunit", decimals=4), 4, 4)
+    L.add(stat("Orders open too long · PASS = 0", "sum(jamswap_order_open_stale{%s})" % SEL,
+               "Live orders with no event for %d min (resting ones: %d min past their own "
+               "expiry): what the verdict will count as stuck open, as it builds "
+               "(jamswap_order_open_stale)." % (OPEN_GRACE_MIN, OPEN_GRACE_MIN), "==", 0), 4, 4)
     L.add(stat("Load turned away · PASS ≤ %g%%" % (100 * (1 - SLO_TARGET)), turned,
                "Errors plus busy (503) replies over operations offered, as the soak judges the "
                "offered load. Counts restart when the load generator restarts.",
-               "<=", 1 - SLO_TARGET, unit="percentunit", decimals=2), 5, 4)
+               "<=", 1 - SLO_TARGET, unit="percentunit", decimals=2), 3, 4)
     L.add(stat("Settle timeouts · PASS = 0",
                zero_if_up("sum(jamswap_settle_timeouts_total{%s})" % SEL, "dex"),
-               "Submitted operations whose effect never became visible on chain.", "==", 0), 5, 4)
+               "Submitted operations whose effect never became visible on chain.", "==", 0), 3, 4)
     L.add(stat("Settlements reverted · PASS = 0",
                zero_if_up("sum(jamswap_settle_reverted_total{%s})" % SEL, "dex"),
                "Settlements seen on chain and then erased by a re-org before the hold window.",
-               "==", 0), 5, 4)
+               "==", 0), 3, 4)
     L.add(stat("Clear latency p99, 10 min (info)",
                "histogram_quantile(0.99, sum by (le) (rate(jamswap_order_clear_latency_seconds_bucket{%s}[10m])))"
-               % SEL, "Placement to durable fill, 99th percentile.", unit="s", decimals=0), 4, 4)
+               % SEL, "Placement to durable fill, 99th percentile.", unit="s", decimals=0), 3, 4)
 
     L.newline()
     L.add(ts("Offered load (ops/s, by op)",
@@ -90,9 +108,20 @@ def dex():
               ("sum by (outcome) (rate(jamswap_order_terminal_total{%s}[1m]))" % SEL, "{{outcome}}")],
              "placed: orders the DEX accepted. Terminal outcomes: filled clears; expired is the "
              "failure the SLO counts."), 8, 8)
-    L.add(ts("Clearing SLO", [("jamswap_order_clearing_slo{%s}" % SEL, "clearing SLO")],
-             "The soak's headline, live. Dashed: the target.", unit="percentunit",
+    L.add(ts("Cleared of settled orders (live)", [("jamswap_order_clearing_slo{%s}" % SEL, "cleared of settled")],
+             "The DEX's running tally over orders that reached an end (not the verdict: stuck-open "
+             "orders are not in it). Dashed: the target.", unit="percentunit",
              threshold=SLO_TARGET, min0=False, max=1, decimals=4), 8, 8)
+    L.add(ts("Orders open, and open too long",
+             [("sum by (phase) (jamswap_order_open{%s})" % SEL, "open: {{phase}}"),
+              ("sum(jamswap_order_open_stale{%s})" % SEL, "open too long (> %d min silent)" % OPEN_GRACE_MIN),
+              ("max(jamswap_order_open_oldest_seconds{%s}) / 60" % SEL, "oldest silent (min)")],
+             "Live orders by phase; those silent over %d min, which the verdict will count as stuck "
+             "open; and how long the oldest has gone without an event (right axis). A backlog shows "
+             "here while it builds." % OPEN_GRACE_MIN,
+             overrides=[right_axis("oldest.*", "m"),
+                        {"matcher": {"id": "byRegexp", "options": "open too long.*"},
+                         "properties": [{"id": "color", "value": {"mode": "fixed", "fixedColor": RED}}]}]), 8, 8)
     L.add(ts("Clearing latency (s)",
              [("histogram_quantile(%s, sum by (le) (rate(jamswap_order_clear_latency_seconds_bucket{%s}[5m])))"
                % (q, SEL), "p%s" % int(float(q) * 100)) for q in ("0.5", "0.99")] +
