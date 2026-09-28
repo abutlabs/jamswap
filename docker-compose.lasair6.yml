@@ -53,6 +53,9 @@ x-mesh-env: &mesh-env
   SERVICE_ID: "100"
   GUARANTOR_OWN: "0,1,2,3,4,5"          # devnet mode only (LASAIR_DEV_ALL_KEYS=1)
   LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
+  # LASAIR_DATA_DIR=/data: durable storage (lasair >= 2.1.1; blocks below finality leave
+  # memory, lasair#57/#49). Unset: memory only
+  DATA_DIR: "${LASAIR_DATA_DIR:-}"
   # one slot every 6 s, JAM's slot time. A work-package's context is set when the builder
   # submits it (lasair#69): its anchor must still be one of the last 8 blocks, and its
   # lookup anchor within 24 slots, when the guarantee is reported. At 1 s a slot that

@@ -170,6 +170,9 @@ def svc_lasair(n, p, ctx):
            "INTERVAL": "6" if ctx["all_lasair"] else "1",
            "LASAIR_FINALITY": "${LASAIR_FINALITY:-grandpa}",
            "LASAIR_DEV_ALL_KEYS": "${LASAIR_DEV_ALL_KEYS:-0}",
+           # LASAIR_DATA_DIR=/data: durable storage (lasair >= 2.1.1; blocks below
+           # finality leave memory, lasair#57/#49). Unset: memory only, as before
+           "DATA_DIR": "${LASAIR_DATA_DIR:-}",
            # devnet mode only: sign guarantees as any lasair index of the layout
            "GUARANTOR_OWN": ctx["lasair_set"]}
     if p.get("dex"):
