@@ -90,11 +90,6 @@ Nothing to build: one lasair process from the published multi-arch image
 CE-133 builder and CE-129 reader bridges connect the DEX to it over JAMNP-S/QUIC. There
 is no finality, so fills are not durable: it is the 60-second demo, not a net.
 
-> **Broken with lasair 2.0.0 and 2.1.0 (2026-09-28):** a lasair started without
-> `--genesis-spec` builds its own genesis and dies at once (`Invalid_argument("Bytes.blit")`
-> in `Chain.patch_kv`), so `chain` restarts forever. Use `./dex up` until a lasair
-> release fixes it.
-
 The UI works as on the DEX nets: create an account, fund it in the Faucet tab (USDC,
 DOT, JAMKB across DOT/USDC, JAMKB/USDC and JAMKB/DOT), place a Limit or Market order
 (tick **🔒 Seal** to hide it), and watch the 6-second auctions clear it. The
@@ -141,7 +136,7 @@ mix of lasair, PolkaJam, JavaJAM and pbnjam, one command each.
 
 ```sh
 LASAIR_IMAGE=lasair:local docker compose up          # any lasair image, e.g. a local source build
-LASAIR_TAG=2.1.0 docker compose up                   # the quickstart's tag (default 2.1.0)
+LASAIR_TAG=2.1.1 docker compose up                   # the quickstart's tag (default 2.1.1)
 PJ_RELEASE=nightly-2026-09-22 docker compose -f docker-compose.mixed.yml up   # the PolkaJam release (default)
 ```
 

@@ -60,7 +60,7 @@ DEFAULT = "lasair6"
 
 # ---- per-client images (pinned) -------------------------------------------------
 PJ_RELEASE = "nightly-2026-09-22"            # mixed/Dockerfile.polkajam pins its sha256
-LASAIR_IMAGE = "ghcr.io/abutlabs/lasair:2.1.0"
+LASAIR_IMAGE = "ghcr.io/abutlabs/lasair:2.1.1"
 # docker.io/shimonchick/pbnjam-node:main-54226be (2026-09-25; linux/amd64 + arm64)
 PBNJAM_IMAGE = ("docker.io/shimonchick/pbnjam-node:main-54226be"
                 "@sha256:ceb5f651164d754280c4aa88f0cf3203f0f6115cb30eb1a3dd72788224aba1aa")

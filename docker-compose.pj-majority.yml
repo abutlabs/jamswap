@@ -23,7 +23,7 @@ x-polkajam: &polkajam
     context: .
     dockerfile: mixed/Dockerfile.polkajam
     args:
-      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.0}
+      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}
       PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-09-22}
   image: jamswap-pj-grandpa:local
   restart: unless-stopped

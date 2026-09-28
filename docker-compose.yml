@@ -17,10 +17,10 @@
 # same State_db over CE-129. See lasair/bin/{lasair_client,jamnp_builder,lasair_reader}.ml.
 #
 # All three chain-side services are the ONE `lasair` image (bundles lasair +
-# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=2.1.0, or point at any
+# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=2.1.1, or point at any
 # image (e.g. a local source build) with LASAIR_IMAGE=lasair:local — see the Makefile.
 #
-# Default = 2.1.0. service/jamswap-service.jam is a GP 0.8.0 build (tools/jam080), so it
+# Default = 2.1.1. service/jamswap-service.jam is a GP 0.8.0 build (tools/jam080), so it
 # needs lasair 2.x; the GP 0.7.2 line (lasair 1.x) ran the 0.7.2 build this repo carried
 # before 2026-09-24. lasair 2.0.0 takes a bare --own and rejects --dev-all-keys: run it
 # with LASAIR_TAG=2.0.0 only after dropping the "--dev-all-keys" line below.
@@ -32,7 +32,7 @@ x-lasair-genesis: &genesis
 
 services:
   chain:                              # one lasair process = all 6 validators + service host
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.0}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.1}}
     entrypoint: ["/usr/local/bin/lasair"]
     command:
       - "--dev-all-keys"              # devnet only: this one process holds all six dev keys
@@ -53,7 +53,7 @@ services:
     restart: unless-stopped
 
   builder:                            # CE-133 submit bridge (local HTTP /submit -> QUIC)
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.0}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.1}}
     entrypoint: ["/usr/local/bin/jamnp-builder"]
     environment:
       <<: *genesis
@@ -64,7 +64,7 @@ services:
     restart: unless-stopped
 
   reader:                             # CE-129 storage-read bridge (local HTTP /read -> QUIC)
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.0}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.1}}
     entrypoint: ["/usr/local/bin/lasair-reader"]
     environment:
       <<: *genesis
