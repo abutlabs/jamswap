@@ -191,9 +191,9 @@
      "type": "loki",
      "uid": "loki"
     },
-    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\"",
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\" or reason!~\"killed|oom|crashed\"",
     "target": {
-     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\"",
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=~\"run_begin|run_end|start|restart|die\" | during_run!=\"true\" or reason!~\"killed|oom|crashed\"",
      "refId": "Anno",
      "queryType": "range"
     },
@@ -211,9 +211,9 @@
      "type": "loki",
      "uid": "loki"
     },
-    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\"",
+    "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\" | reason=~\"killed|oom|crashed\"",
     "target": {
-     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\"",
+     "expr": "{source=\"lifecycle\", net=\"$net\", run_id=\"$run_id\"} | json | event=\"die\" | during_run=\"true\" | reason=~\"killed|oom|crashed\"",
      "refId": "Anno",
      "queryType": "range"
     },
