@@ -28,6 +28,7 @@ if [ "$ROLE" = "node" ]; then
         --finality-mode "${FINALITY_MODE:-dummy}"
         --rpc --rpc-listen-ip 0.0.0.0 --rpc-port "${RPC_PORT:?set RPC_PORT}")
   [ -n "${EXTERNAL_IP:-}" ] && args+=(--external-ip "$EXTERNAL_IP")
+  [ -n "${TELEMETRY:-}" ] && args+=(--telemetry "$TELEMETRY")
   echo "polkajam ordinary node: port=$PORT rpc=$RPC_PORT finality=${FINALITY_MODE:-dummy} bootnode=$BOOT"
   exec polkajam "${args[@]}"
 fi
@@ -53,6 +54,8 @@ args=(--chain "$SHARED/spec.json" run --temp --peer-id "$PID"
 # a net with a node running natively on the host addresses every validator at the
 # host's IP (nets/netgen.py): tell PolkaJam that is its external address too
 [ -n "${EXTERNAL_IP:-}" ] && args+=(--external-ip "$EXTERNAL_IP")
+# JIP-3 telemetry to HOST:PORT (./dex up points it at the observability stack's receiver)
+[ -n "${TELEMETRY:-}" ] && args+=(--telemetry "$TELEMETRY")
 
 echo "polkajam validator $INDEX: peer_id=$PID port=$PORT rpc=$RPC bootnode=$([ "$ISBOOT" = 1 ] && echo SELF || echo "$BOOT")"
 exec polkajam "${args[@]}"

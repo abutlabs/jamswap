@@ -41,6 +41,12 @@ services:
       RPC_BASE: "42500"
       HOST_IP: "${HOST_IP:-}"
       GENESIS_BALANCE: "0"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "spec-init"
+      org.abutlabs.obs.client: "jamswap"
+      org.abutlabs.obs.logs: "true"
   pj0:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -57,11 +63,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41500:41500/udp"
       - "127.0.0.1:42500:42500"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42500"
   pj1:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -78,11 +92,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41501:41501/udp"
       - "127.0.0.1:42501:42501"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42501"
   pj2:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -99,11 +121,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41502:41502/udp"
       - "127.0.0.1:42502:42502"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42502"
   pj3:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -120,11 +150,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41503:41503/udp"
       - "127.0.0.1:42503:42503"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42503"
   jj4:
     image: "${JAVAJAM_IMAGE:-ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b793208af25c0212f9f44e71e99322b70cc1ecc26281b9441cf55293f}"
     profiles:
@@ -161,6 +199,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41504:41504/udp"
       - "127.0.0.1:42504:42504"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "javajam"
+      org.abutlabs.obs.client: "javajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42504"
   jj5:
     image: "${JAVAJAM_IMAGE:-ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b793208af25c0212f9f44e71e99322b70cc1ecc26281b9441cf55293f}"
     profiles:
@@ -197,6 +242,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41505:41505/udp"
       - "127.0.0.1:42505:42505"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "javajam"
+      org.abutlabs.obs.client: "javajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42505"
 networks:
   net:
     driver: "bridge"

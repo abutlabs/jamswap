@@ -48,9 +48,10 @@ The rest of the verbs (add `NET=pj6` for pj6):
 ./dex rebuild   # only if you changed the on-chain service (service/src)
 ```
 
-To watch a net or a soak live in Grafana, start the obs stack once (`./dex obs up`,
-then http://localhost:3300); every `./dex up` after that prints its dashboard link
-([`monitor/README.md`](monitor/README.md)).
+To watch a net or a soak live in Grafana, start the observability stack once (`./dex obs
+up`, then http://localhost:3300); every `./dex up` after that prints its dashboard links.
+The stack is its own repository, [abutlabs/observability](https://github.com/abutlabs/observability)
+([`monitor/README.md`](monitor/README.md) says how jamswap plugs in).
 
 Both nets are GP 0.8.0 and run on amd64 and arm64. lasair6 pulls the published
 `ghcr.io/abutlabs/lasair:2.1.2`; pj6 builds a PolkaJam image from the public release
@@ -87,7 +88,7 @@ leaves byte-identical service state ([`docs/DIFFERENTIAL_TESTNET.md`](docs/DIFFE
 | Any JIP-2 node | `CHAIN_BACKEND=jip2 CHAIN_RPC=ws://… CHAIN_SPEC=… python3 offchain/server.py` | The DEX deploys itself on a chain with a Bootstrap service |
 | Single-node quickstart | `docker compose up` | One lasair process, UI at `:8080`, no finality — the 60-second demo |
 | Cross-client research nets | `./dex up NET=<net>` (`./dex nets` lists them) | lasair, PolkaJam, JavaJAM and pbnjam in one net — consensus research, not the DEX |
-| Monitoring | `./dex obs up` | Always-on Prometheus + Grafana (`:3300`) every net and soak reports into ([`monitor/README.md`](monitor/README.md)) |
+| Monitoring | `./dex obs up` | The observability stack (Grafana `:3300`, Prometheus, Loki), its own repo; every net and soak reports into it ([`monitor/README.md`](monitor/README.md)) |
 | Soak tests | `soak/run <net> <secs>` | A long run under trading load with a pass/fail report: what it proves, how to reproduce, results ([`soak/README.md`](soak/README.md)) |
 
 Every mode, with local source builds and platform notes:

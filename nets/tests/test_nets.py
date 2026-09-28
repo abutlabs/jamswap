@@ -113,7 +113,9 @@ class Netgen(unittest.TestCase):
             init = doc["services"]["spec-init"]
             self.assertEqual(init["build"]["target"], "with-lasair" if has else "polkajam", n)
             if not has:
-                self.assertNotIn("lasair", json.dumps(doc).replace("jamswap-polkajam", ""), n)
+                # (the net's own name, in its obs labels, may say "nolasair")
+                text = json.dumps(doc).replace("jamswap-polkajam", "").replace('"%s"' % n, "")
+                self.assertNotIn("lasair", text, n)
 
     def test_each_lasair_node_holds_only_its_own_key(self):
         doc = netgen.compose("lasair-pj")["services"]

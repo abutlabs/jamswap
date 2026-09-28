@@ -41,6 +41,12 @@ services:
       RPC_BASE: "42700"
       HOST_IP: "${HOST_IP:-}"
       GENESIS_BALANCE: "0"
+    labels:
+      org.abutlabs.obs.net: "nolasair"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "spec-init"
+      org.abutlabs.obs.client: "jamswap"
+      org.abutlabs.obs.logs: "true"
   pj0:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -57,11 +63,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41700:41700/udp"
       - "127.0.0.1:42700:42700"
+    labels:
+      org.abutlabs.obs.net: "nolasair"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42700"
   pj1:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -78,11 +92,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41701:41701/udp"
       - "127.0.0.1:42701:42701"
+    labels:
+      org.abutlabs.obs.net: "nolasair"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42701"
   jj2:
     image: "${JAVAJAM_IMAGE:-ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b793208af25c0212f9f44e71e99322b70cc1ecc26281b9441cf55293f}"
     profiles:
@@ -119,6 +141,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41702:41702/udp"
       - "127.0.0.1:42702:42702"
+    labels:
+      org.abutlabs.obs.net: "nolasair"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "javajam"
+      org.abutlabs.obs.client: "javajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42702"
   jj3:
     image: "${JAVAJAM_IMAGE:-ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b793208af25c0212f9f44e71e99322b70cc1ecc26281b9441cf55293f}"
     profiles:
@@ -155,6 +184,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41703:41703/udp"
       - "127.0.0.1:42703:42703"
+    labels:
+      org.abutlabs.obs.net: "nolasair"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "javajam"
+      org.abutlabs.obs.client: "javajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42703"
   pb4:
     image: "${PBNJAM_IMAGE:-docker.io/shimonchick/pbnjam-node:main-54226be@sha256:ceb5f651164d754280c4aa88f0cf3203f0f6115cb30eb1a3dd72788224aba1aa}"
     depends_on:
@@ -177,6 +213,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41704:41704/udp"
       - "127.0.0.1:42704:42704"
+    labels:
+      org.abutlabs.obs.net: "nolasair"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "pbnjam"
+      org.abutlabs.obs.client: "pbnjam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42704"
   pb5:
     image: "${PBNJAM_IMAGE:-docker.io/shimonchick/pbnjam-node:main-54226be@sha256:ceb5f651164d754280c4aa88f0cf3203f0f6115cb30eb1a3dd72788224aba1aa}"
     depends_on:
@@ -199,6 +242,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41705:41705/udp"
       - "127.0.0.1:42705:42705"
+    labels:
+      org.abutlabs.obs.net: "nolasair"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "pbnjam"
+      org.abutlabs.obs.client: "pbnjam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42705"
 networks:
   net:
     driver: "bridge"

@@ -41,6 +41,12 @@ services:
       RPC_BASE: "42400"
       HOST_IP: "${HOST_IP:-}"
       GENESIS_BALANCE: "0"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "spec-init"
+      org.abutlabs.obs.client: "jamswap"
+      org.abutlabs.obs.logs: "true"
   pj0:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -57,11 +63,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41400:41400/udp"
       - "127.0.0.1:42400:42400"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42400"
   pj1:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -78,11 +92,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41401:41401/udp"
       - "127.0.0.1:42401:42401"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42401"
   pj2:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -99,11 +121,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41402:41402/udp"
       - "127.0.0.1:42402:42402"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42402"
   jj3:
     image: "${JAVAJAM_IMAGE:-ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b793208af25c0212f9f44e71e99322b70cc1ecc26281b9441cf55293f}"
     profiles:
@@ -140,6 +170,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41403:41403/udp"
       - "127.0.0.1:42403:42403"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "javajam"
+      org.abutlabs.obs.client: "javajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42403"
   jj4:
     image: "${JAVAJAM_IMAGE:-ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b793208af25c0212f9f44e71e99322b70cc1ecc26281b9441cf55293f}"
     profiles:
@@ -176,6 +213,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41404:41404/udp"
       - "127.0.0.1:42404:42404"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "javajam"
+      org.abutlabs.obs.client: "javajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42404"
   jj5:
     image: "${JAVAJAM_IMAGE:-ghcr.io/methodfive/javajam:0.4.3@sha256:573c030b793208af25c0212f9f44e71e99322b70cc1ecc26281b9441cf55293f}"
     profiles:
@@ -212,6 +256,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41405:41405/udp"
       - "127.0.0.1:42405:42405"
+    labels:
+      org.abutlabs.obs.net: "pj-javajam"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "javajam"
+      org.abutlabs.obs.client: "javajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42405"
 networks:
   net:
     driver: "bridge"

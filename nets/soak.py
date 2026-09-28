@@ -19,14 +19,17 @@ with the dex, loadgen and netwatch services (every generated DEX net, and lasair
      to every order) would otherwise pass. At most 1 - target of it may be refused.
 
 Run it on a freshly started net (`./dex up`): the verdict judges the dex's whole order
-event log. With the obs stack running (monitor/README.md), the soak's start, load off,
-drain, every PASS/FAIL line of the verdict (with its threshold) and the overall result
-(a region over the soak) are annotated on the net's run in Grafana.
+event log. With the observability stack running (monitor/README.md), the soak's start,
+load off, drain, every PASS/FAIL line of the verdict (with its threshold) and the overall
+result (a region over the soak) are annotated on the net's run in Grafana, and the
+configuration, the progress (every minute) and the results go to its Pushgateway under
+the net's run id (nets/soak_metrics.py): the "Soak runs" dashboard shows them.
 
-Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>):
-poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl, dex.log, loadgen.log, verdict.txt,
-verdict.json, loadgen.txt, soak.log, and DONE (written last: each step's result). Exit 0
-iff the poll, the parity probe, the soak verdict and the offered load all pass.
+Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>): config.json
+(what ran, written first), poll.txt, chain.jsonl, parity.txt, parity.json,
+order_events.jsonl, dex.log, loadgen.log, verdict.txt, verdict.json, loadgen.txt,
+soak.log, and DONE (written last: each step's result). Exit 0 iff the poll, the parity
+probe, the soak verdict and the offered load all pass.
 """
 import argparse
 import json
@@ -41,6 +44,8 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import netgen  # noqa: E402
 import obsnet  # noqa: E402
+import profiles  # noqa: E402
+import soak_metrics  # noqa: E402
 
 NETWATCH = ["python3", "/netwatch/netwatch.py"]
 
@@ -52,6 +57,7 @@ class Soak:
                         "-f", netgen.compose_path(name)]
         os.makedirs(out, exist_ok=True)
         self._log = open(os.path.join(out, "soak.log"), "a")
+        self.run_id = None                      # the obs run the results are pushed under
 
     def log(self, msg):
         line = "%s %s" % (time.strftime("%H:%M:%S"), msg)
@@ -65,6 +71,16 @@ class Soak:
             obsnet.note(self.name, text, tags, start=start, end=end)
         except Exception as e:                  # noqa: BLE001 - observability is optional
             self.log("obs annotate failed: %s" % e)
+
+    def push(self, text):
+        """Push soak metrics to the obs Pushgateway under the run; never fails the soak."""
+        if not self.run_id:
+            return
+        try:
+            if not obsnet.push(self.name, self.run_id, text):
+                self.log("obs push failed (Pushgateway not reachable?)")
+        except Exception as e:                  # noqa: BLE001 - observability is optional
+            self.log("obs push failed: %s" % e)
 
     def path(self, name):
         return os.path.join(self.out, name)
@@ -112,6 +128,32 @@ def judge_load(counts, target):
     return out
 
 
+def soak_config(name, out, run_id):
+    """What this soak runs, as soak/report.py and the Soak runs dashboard show it."""
+    p = netgen.profile(name)
+    clients = p["clients"]
+    lasair = "lasair" in clients
+    try:
+        commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=REPO, text=True,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout.strip()
+    except OSError:
+        commit = ""
+    env = os.environ.get
+    return {
+        "net": name, "clients": clients,
+        "validators": "%d (one key each)" % len(clients.split(",")),
+        "lasair_image": env("LASAIR_IMAGE", profiles.LASAIR_IMAGE) if lasair else "none (no lasair node)",
+        "data_dir": env("LASAIR_DATA_DIR", ""),
+        "dex_backend": (env("LASAIR_DEX_BACKEND") or "jip2 through lasair-reader") if lasair
+        else "jip2 (a PolkaJam node)",
+        "load_profile": env("PROFILE", "trading"), "load_rate": env("RATE", "12"),
+        "sealed_ratio": env("SEALED_RATIO", "0.2"),
+        "load": "PROFILE=%s, RATE=%s pairs/min, SEALED_RATIO=%s" % (
+            env("PROFILE", "trading"), env("RATE", "12"), env("SEALED_RATIO", "0.2")),
+        "jamswap_commit": commit, "run_id": run_id or "", "out_dir": out,
+    }
+
+
 def wait_dex(url, timeout):
     """The DEX API answers /api/finality once the service is deployed and set up."""
     deadline = time.time() + timeout
@@ -148,12 +190,16 @@ def main(argv=None):
                                 "%s-%s" % (a.net, stamp))
     s = Soak(a.net, out)
     finality = ["--require-finality"] if p.get("finality") == "grandpa" else []
-    done = {"net": a.net, "secs": a.secs, "drain": a.drain, "started": stamp}
-    s.log("soak %s: %d s load + %d s drain -> %s" % (a.net, a.secs, a.drain, out))
     t_soak = time.time()
-    run_id = obsnet.ensure(a.net)
-    if run_id:
-        s.log("obs run %s: %s" % (run_id, obsnet.obs("link", run_id).stdout.strip()))
+    done = {"net": a.net, "secs": a.secs, "drain": a.drain, "started": stamp, "started_ts": t_soak}
+    s.log("soak %s: %d s load + %d s drain -> %s" % (a.net, a.secs, a.drain, out))
+    if obsnet.available():
+        s.run_id = obsnet.run_id(a.net)
+        s.log("obs run %s: %s" % (s.run_id, obsnet.obs("link", s.run_id, "-d", "soak-runs").stdout.strip()))
+    cfg = soak_config(a.net, out, s.run_id)
+    with open(s.path("config.json"), "w") as fh:
+        json.dump(cfg, fh, indent=1)
+    s.push(soak_metrics.start(cfg, a.secs, a.drain, t_soak))
     s.note("soak start: %d s load + %d s drain (%s)" % (a.secs, a.drain, out), "soak")
 
     url = netgen.dex_url_of(a.net)
@@ -182,12 +228,14 @@ def main(argv=None):
             s.note("soak: load on (netwatch poll %s)" % (" ".join(finality) or "finality auto"),
                    "soak,load")
             t_end = time.time() + a.secs
+            s.push(soak_metrics.progress("load", a.secs))
             while time.time() < t_end:
                 time.sleep(min(60, max(0, t_end - time.time())))
                 if poll.poll() is not None:
                     s.log("netwatch poll ended early (exit %s)" % poll.returncode)
                     break
                 s.log("  %d s of load left" % max(0, t_end - time.time()))
+                s.push(soak_metrics.progress("load", t_end - time.time()))
         finally:
             r = s.dc("exec", "-T", "loadgen", "python3", "-c", LOADGEN_METRICS, timeout=60,
                      check=False)
@@ -200,6 +248,7 @@ def main(argv=None):
                   % load)
             s.note("soak: load off, draining %d s (offered %d, refused %d, busy %d)"
                    % (a.drain, load["offered"], load["refused"], load["busy"]), "soak,load")
+            s.push(soak_metrics.progress("drain", 0))
         try:
             done["poll"] = poll.wait(timeout=a.drain + 300)
         except subprocess.TimeoutExpired:
@@ -208,6 +257,7 @@ def main(argv=None):
     s.log("netwatch poll: exit %s" % done["poll"])
     s.note("soak: drain done (netwatch poll exit %s); parity and verdict next" % done["poll"], "soak")
     s.dc("cp", "netwatch:" + chain_tmp, s.path("chain.jsonl"), timeout=60)
+    s.push(soak_metrics.progress("parity", 0))
 
     done["parity"] = s.run_to("parity.txt", s.compose + ["exec", "-T", "netwatch"] + NETWATCH + [
         "parity", "--service", str(sid), "--dex-url", "http://dex:8080", "--out", parity_tmp],
@@ -225,6 +275,7 @@ def main(argv=None):
     if os.path.exists(s.path("parity.json")):
         verdict += ["--parity", s.path("parity.json")]
     verdict += finality
+    s.push(soak_metrics.progress("verdict", 0))
     done["verdict"] = s.run_to("verdict.txt", verdict, timeout=300)
     s.run_to("verdict.json", verdict + ["--json"], timeout=300)
     s.log("soak_verdict: exit %s" % done["verdict"])
@@ -249,6 +300,12 @@ def main(argv=None):
         s.note(ln, "soak,verdict," + ("fail" if " FAIL" in ln else "pass"))
     with open(s.path("DONE"), "w") as fh:
         json.dump(done, fh, indent=2)
+    try:
+        with open(s.path("verdict.json")) as fh:
+            verdict_json = json.load(fh)
+    except (OSError, ValueError):
+        verdict_json = None
+    s.push(soak_metrics.result(done, verdict_json, float(a.target), time.time()))
     s.log("DONE %s: %s" % ("PASS" if done["pass"] else "FAIL", json.dumps(done)))
     s.note("soak %s: poll %s, parity %s, verdict %s, offered load %s (%s)" % (
         "PASS" if done["pass"] else "FAIL", done["poll"], done["parity"], done["verdict"],

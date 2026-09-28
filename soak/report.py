@@ -5,13 +5,15 @@
 
 DIR is what `./dex soak` (nets/soak.py) leaves in ~/.cache/jamswap/soak/<net>-<time>:
 DONE (each step's result), verdict.txt (the order and chain checks), loadgen.txt (what
-the load generator offered). config.json is what soak/run records before the run; without
-it the report says which settings it could not see. The report is plain markdown: what was
-tested, each check with its threshold and what it means, and links to the run's dashboards.
+the load generator offered), config.json (what ran, with the run id); without it the
+report says which settings it could not see. The report is plain markdown: what was
+tested, each check with its threshold and what it means, and links to the run's
+dashboards (the observability stack's `obs link`, the "Soak runs" dashboard first).
 """
 import argparse, json, os, re, sys
 
-GRAFANA = os.environ.get("OBS_GRAFANA", "http://localhost:3300")
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "nets"))
+import obsnet  # noqa: E402
 
 # Every check the soak makes: (label in verdict.txt, threshold, what it tells you).
 CHECKS = [
@@ -126,19 +128,15 @@ def main():
         w("")
     w("## Dashboards")
     w("")
-    if run_id:
-        rng = ""
-        rec = os.path.expanduser("~/.cache/jamswap/obs/runs/%s.json" % run_id)
-        if os.path.exists(rec):
-            r = json.load(open(rec))
-            s = int(r["start"] * 1000)
-            e = "%d" % int(r["end"] * 1000) if r.get("end") else "now"
-            rng = "&from=%d&to=%s" % (s, e)
-        for uid, name in (("obs-chain", "Chain health"), ("obs-lasair", "lasair validator duties"),
-                          ("obs-dex", "DEX"), ("obs-memory", "Memory")):
-            w("- [%s](%s/d/%s?orgId=1&var-net=%s&var-run_id=%s%s)" % (name, GRAFANA, uid, net, run_id, rng))
+    links = obsnet.links(run_id) if run_id else []
+    if links:
+        # the soak's own dashboard first, then the others in the stack's order
+        for name, u in sorted(links, key=lambda x: not x[0].endswith("Soak runs")):
+            w("- [%s](%s)" % (name, u))
         w("")
-        w("The links open the obs stack's Grafana on this machine (`monitor/obs`, `./dex obs up`).")
+        w("The links open the observability stack's Grafana on this machine (`./dex obs up`).")
+    elif run_id:
+        w("Run ID %s; no observability stack found (%s), so no links." % (run_id, obsnet.OBS_HOME))
     else:
         w("No run ID was recorded, so there are no dashboard links (runs before the obs stack).")
     w("")

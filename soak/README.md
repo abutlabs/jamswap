@@ -89,14 +89,21 @@ The step-by-step equivalent: `./dex up NET=<net>`, `./dex soak NET=<net> <secs>`
 
 ## Watch it live
 
-`./dex up` prints a Grafana link (the obs stack, `monitor/README.md`). Four dashboards,
-switched by the buttons at the top:
+`./dex up` prints the Grafana links (the observability stack, `monitor/README.md`). The
+**Soak runs** dashboard is the soak's own: pick a net and a run to see its configuration,
+its live phase and seconds of load left, and, at the end, one green or red tile per check
+with what was measured and what it had to reach; below, every soak so far side by side
+(net, image, duration, SLO, refused, sealed stuck, latency, PASS/FAIL). `nets/soak.py`
+pushes all of it to the stack's Pushgateway (`nets/soak_metrics.py`). Its links open the
+other dashboards for the same run:
 
-- **Chain health:** one head, finality lag per node.
+- **Network overview** and **Chain health:** every node, whatever its client; one head,
+  finality lag per node.
 - **lasair validator duties:** blocks authored, co-signing, guarantees, assurances,
   audits, refine time, packages expired.
 - **DEX:** offered, placed and refused orders, clearing SLO and latency, round sizes.
 - **Memory:** RSS and OCaml heap per node.
+- **Logs:** every container's output, and the PolkaJam nodes' JIP-3 events.
 
 Every pass/fail tile states its threshold, and the soak's start, drain and verdicts are
 marked on the graphs.
@@ -108,7 +115,7 @@ Each run writes `REPORT.md` into its folder, `~/.cache/jamswap/soak/<net>-<time>
 1. **What was tested:** the net, validators, lasair image, storage, load and duration.
 2. **Results:** every check with its threshold, the result and what it means.
 3. **Why orders were refused**, if any, from the load generator's log.
-4. **Dashboard links** for the run.
+4. **Dashboard links** for the run, the Soak runs dashboard first.
 5. **Reproduce:** the exact command.
 
 The same folder keeps the raw evidence: `verdict.txt`, `DONE`, `loadgen.log`, `dex.log`,

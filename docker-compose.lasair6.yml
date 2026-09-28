@@ -25,9 +25,24 @@
 # same keys the loadgen/UI wallets sign with. spec-init mints the shared genesis
 # (LAYOUT all-lasair) and writes /shared/genesis_hex + peers_<i>.txt.
 
+# The observability stack (abutlabs/observability; nets/obsnet.py) finds this net's
+# containers by these labels: it collects every one's logs, scrapes the ones with a
+# metrics port and polls the JIP-2 RPC the readers serve. `./dex up` sets OBS_RUN_ID;
+# the node label defaults to the compose service.
+x-obs: &obs
+  org.abutlabs.obs.net: lasair6
+  org.abutlabs.obs.run_id: ${OBS_RUN_ID:-}
+  org.abutlabs.obs.logs: "true"
+
 x-mesh: &mesh
   image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
   restart: unless-stopped
+  labels:
+    <<: *obs
+    org.abutlabs.obs.job: lasair
+    org.abutlabs.obs.client: lasair
+    org.abutlabs.obs.scrape: "true"
+    org.abutlabs.obs.port: "9615"
   # validator INDEX runs as dev account INDEX holding only its own key (DEV_VALIDATOR,
   # lasair#54), or, with LASAIR_DEV_ALL_KEYS=1, in lasair's devnet mode (OWN, default
   # INDEX: it derives every dev secret). lasair's mesh-entrypoint.sh makes the flags.
@@ -89,6 +104,7 @@ services:
         PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-09-22}
     image: jamswap-pj-mixed:local
     restart: "no"
+    labels: { <<: *obs, org.abutlabs.obs.job: spec-init, org.abutlabs.obs.client: jamswap }
     environment:
       ROLE: init
       SHARED: /shared
@@ -151,6 +167,12 @@ services:
         for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
         export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
         exec /usr/local/bin/jamnp-builder
+    labels:
+      <<: *obs
+      org.abutlabs.obs.job: builder
+      org.abutlabs.obs.client: lasair
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "19980"
     environment:
       LASAIR_GUARANTOR_HOST: 172.29.0.10,172.29.0.11,172.29.0.12,172.29.0.13,172.29.0.14,172.29.0.15
       LASAIR_GUARANTOR_PORT: "40061,40062,40063,40064,40065,40066"
@@ -175,6 +197,14 @@ services:
         for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
         export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
         exec /usr/local/bin/lasair-reader
+    # its JIP-2 RPC describes the node it follows (jip2.node): the JIP-2 exporter polls it
+    labels: &reader-labels
+      <<: *obs
+      org.abutlabs.obs.job: reader
+      org.abutlabs.obs.client: lasair
+      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2.node: lm0
+      org.abutlabs.obs.jip2.client: lasair
     environment: &reader-env
       LASAIR_NODE_HOST: 172.29.0.10
       LASAIR_NODE_PORT: "40060"
@@ -185,18 +215,23 @@ services:
     restart: unless-stopped
   reader1:
     <<: *reader
+    labels: { <<: *reader-labels, org.abutlabs.obs.jip2.node: lm1 }
     environment: { <<: *reader-env, LASAIR_NODE_HOST: 172.29.0.11, LASAIR_NODE_PORT: "40061" }
   reader2:
     <<: *reader
+    labels: { <<: *reader-labels, org.abutlabs.obs.jip2.node: lm2 }
     environment: { <<: *reader-env, LASAIR_NODE_HOST: 172.29.0.12, LASAIR_NODE_PORT: "40062" }
   reader3:
     <<: *reader
+    labels: { <<: *reader-labels, org.abutlabs.obs.jip2.node: lm3 }
     environment: { <<: *reader-env, LASAIR_NODE_HOST: 172.29.0.13, LASAIR_NODE_PORT: "40063" }
   reader4:
     <<: *reader
+    labels: { <<: *reader-labels, org.abutlabs.obs.jip2.node: lm4 }
     environment: { <<: *reader-env, LASAIR_NODE_HOST: 172.29.0.14, LASAIR_NODE_PORT: "40064" }
   reader5:
     <<: *reader
+    labels: { <<: *reader-labels, org.abutlabs.obs.jip2.node: lm5 }
     environment: { <<: *reader-env, LASAIR_NODE_HOST: 172.29.0.15, LASAIR_NODE_PORT: "40065" }
 
   # netwatch (offchain/netwatch.py): every node over its reader's JIP-2, one head,
@@ -205,6 +240,12 @@ services:
   netwatch:
     build: { context: ., dockerfile: monitor/Dockerfile }
     depends_on: [reader, reader1, reader2, reader3, reader4, reader5]
+    labels:
+      <<: *obs
+      org.abutlabs.obs.job: netwatch
+      org.abutlabs.obs.client: netwatch
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9106"
     environment:
       NETWATCH_NODES: >-
         lm0,lasair,ws://reader:19990 lm1,lasair,ws://reader1:19990
@@ -220,6 +261,12 @@ services:
       context: .
       dockerfile: offchain/Dockerfile
     depends_on: [reader]
+    labels:
+      <<: *obs
+      org.abutlabs.obs.job: dex
+      org.abutlabs.obs.client: dex
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "8080"
     environment:
       # the DEX on lm0's JIP-2, served by its lasair-reader (lasair#68): heads, finality
       # and state read at the finalized block (lasair#70), work-packages submitted to
@@ -270,6 +317,12 @@ services:
       dockerfile: offchain/Dockerfile
     depends_on: [dex]
     command: ["python3", "loadgen.py"]
+    labels:
+      <<: *obs
+      org.abutlabs.obs.job: loadgen
+      org.abutlabs.obs.client: loadgen
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9111"
     environment:
       DEX_URL: http://dex:8080
       PROFILE: ${PROFILE:-trading}

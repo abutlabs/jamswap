@@ -110,7 +110,9 @@ def svc_polkajam(n, p, ctx):
     s = {"image": ctx["pj_image"], "pull_policy": "never"}
     s.update(_node_common(n))
     s["environment"] = {"ROLE": "validator", "INDEX": str(n["index"]), "SHARED": "/shared",
-                        "FINALITY_MODE": p["finality"], "EXTERNAL_IP": "${HOST_IP:-}"}
+                        "FINALITY_MODE": p["finality"], "EXTERNAL_IP": "${HOST_IP:-}",
+                        # JIP-3: --telemetry HOST:PORT when set (./dex up sets OBS_JIP3)
+                        "TELEMETRY": "${OBS_JIP3:-}"}
     s["volumes"] = ["shared:/shared"]
     s["ports"] = [_udp(n), _rpc(n)]
     return s
@@ -359,7 +361,7 @@ def dex_services_gateway(p, ns, ctx):
             "depends_on": {"spec-init": {"condition": "service_completed_successfully"}},
             "environment": {"ROLE": "node", "SHARED": "/shared", "PORT": str(gw["port"]),
                             "RPC_PORT": str(gw["rpc"]), "FINALITY_MODE": p["finality"],
-                            "EXTERNAL_IP": "${HOST_IP:-}"},
+                            "EXTERNAL_IP": "${HOST_IP:-}", "TELEMETRY": "${OBS_JIP3:-}"},
             "volumes": ["shared:/shared"],
             "ports": [_udp(gw), _rpc(gw)],
             "networks": {"net": {}}, "restart": "unless-stopped"}
@@ -387,6 +389,49 @@ def dex_services_gateway(p, ns, ctx):
         "netwatch": _netwatch(p, ns, {n["service"]: _jip2_url(n) for n in rpc_nodes},
                               {"spec-init": {"condition": "service_completed_successfully"}}),
     }
+
+
+# ---- observability: container labels the obs stack discovers (nets/obsnet.py) --------
+OBS = "org.abutlabs.obs."
+# compose service kind -> (job, client, metrics port or None)
+OBS_KINDS = {"lasair": ("lasair", "lasair", 9615), "polkajam": ("polkajam", "polkajam", None),
+             "pbnjam": ("pbnjam", "pbnjam", None), "javajam": ("javajam", "javajam", None),
+             "builder": ("builder", "lasair", 19980), "reader": ("reader", "lasair", None),
+             "dex": ("dex", "dex", 8080), "loadgen": ("loadgen", "loadgen", 9111),
+             "netwatch": ("netwatch", "netwatch", 9106), "spec-init": ("spec-init", "jamswap", None)}
+
+
+def obs_labels(name, kind, jip2=None, jip2_node=None):
+    """The org.abutlabs.obs.* labels of one service: every service's logs are collected;
+    one with a metrics port is scraped; one with a JIP-2 RPC (jip2: its port) is polled by
+    the JIP-2 exporter (jip2_node: the node a proxy's RPC describes). The run id comes
+    from ./dex up (OBS_RUN_ID); the node label defaults to the compose service."""
+    job, client, port = OBS_KINDS[kind]
+    lb = {OBS + "net": name, OBS + "run_id": "${OBS_RUN_ID:-}", OBS + "job": job,
+          OBS + "client": client, OBS + "logs": "true"}
+    if port:
+        lb.update({OBS + "scrape": "true", OBS + "port": str(port)})
+    if jip2:
+        lb[OBS + "jip2"] = str(jip2)
+    if jip2_node:
+        lb.update({OBS + "jip2.node": jip2_node, OBS + "jip2.client": "lasair"})
+    return lb
+
+
+def label_services(name, services, ns):
+    """Attach obs_labels to every service of a generated net."""
+    by_service = {n["service"]: n for n in ns}
+    readers = {v: k for k, v in reader_services(ns).items()}
+    for svc, spec in services.items():
+        n = by_service.get(svc)
+        if n:
+            spec["labels"] = obs_labels(name, n["client"], jip2=n.get("rpc"))
+        elif svc in readers:
+            spec["labels"] = obs_labels(name, "reader", jip2=19990, jip2_node=readers[svc])
+        elif svc == "rpc":
+            spec["labels"] = obs_labels(name, "polkajam", jip2=gateway(profile(name))["rpc"])
+        elif svc in OBS_KINDS:
+            spec["labels"] = obs_labels(name, svc)
 
 
 def compose(name):
@@ -422,6 +467,7 @@ def compose(name):
         services.update(dex_services_reader(p, ns))
     elif backend == "gateway":
         services.update(dex_services_gateway(p, ns, ctx))
+    label_services(name, services, ns)
     return {"services": services,
             "networks": {"net": {"driver": "bridge",
                                  "ipam": {"config": [{"subnet": "10.231.%d.0/24" % p["net"]}]}}},

@@ -54,6 +54,12 @@ services:
       HOST_IP: "${HOST_IP:-}"
       SERVICE: "/work/jamswap-service.jam"
       SERVICE_ID: "100"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "spec-init"
+      org.abutlabs.obs.client: "jamswap"
+      org.abutlabs.obs.logs: "true"
   lm0:
     image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     entrypoint:
@@ -88,6 +94,14 @@ services:
       - "../../service/jamswap-service.jam:/work/jamswap-service.jam:ro"
     ports:
       - "${HOST_IP:-127.0.0.1}:41600:41600/udp"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "lasair"
+      org.abutlabs.obs.client: "lasair"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9615"
   lm1:
     image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     entrypoint:
@@ -122,6 +136,14 @@ services:
       - "../../service/jamswap-service.jam:/work/jamswap-service.jam:ro"
     ports:
       - "${HOST_IP:-127.0.0.1}:41601:41601/udp"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "lasair"
+      org.abutlabs.obs.client: "lasair"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9615"
   lm2:
     image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     entrypoint:
@@ -156,6 +178,14 @@ services:
       - "../../service/jamswap-service.jam:/work/jamswap-service.jam:ro"
     ports:
       - "${HOST_IP:-127.0.0.1}:41602:41602/udp"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "lasair"
+      org.abutlabs.obs.client: "lasair"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9615"
   pj3:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}-lasair"
     pull_policy: "never"
@@ -172,11 +202,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41603:41603/udp"
       - "127.0.0.1:42603:42603"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42603"
   pj4:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}-lasair"
     pull_policy: "never"
@@ -193,11 +231,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41604:41604/udp"
       - "127.0.0.1:42604:42604"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42604"
   pj5:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}-lasair"
     pull_policy: "never"
@@ -214,11 +260,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41605:41605/udp"
       - "127.0.0.1:42605:42605"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42605"
   builder:
     image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
@@ -241,6 +295,14 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "builder"
+      org.abutlabs.obs.client: "lasair"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "19980"
   reader:
     image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
@@ -265,6 +327,15 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "reader"
+      org.abutlabs.obs.client: "lasair"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2.node: "lm0"
+      org.abutlabs.obs.jip2.client: "lasair"
   reader1:
     image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
@@ -289,6 +360,15 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "reader"
+      org.abutlabs.obs.client: "lasair"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2.node: "lm1"
+      org.abutlabs.obs.jip2.client: "lasair"
   reader2:
     image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
@@ -313,6 +393,15 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "reader"
+      org.abutlabs.obs.client: "lasair"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2.node: "lm2"
+      org.abutlabs.obs.jip2.client: "lasair"
   dex:
     build:
       context: "../.."
@@ -346,6 +435,14 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "dex"
+      org.abutlabs.obs.client: "dex"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "8080"
   loadgen:
     build:
       context: "../.."
@@ -366,6 +463,14 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "loadgen"
+      org.abutlabs.obs.client: "loadgen"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9111"
   netwatch:
     build:
       context: "../.."
@@ -382,6 +487,14 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "lasair-pj"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "netwatch"
+      org.abutlabs.obs.client: "netwatch"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9106"
 networks:
   net:
     driver: "bridge"

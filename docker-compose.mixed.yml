@@ -23,6 +23,14 @@
 #   docker compose -f docker-compose.mixed.yml logs lm3 lm4 lm5 | grep -E "authored|STATUS"
 #   docker compose -f docker-compose.mixed.yml logs watch          # the rotation summary
 
+# The observability stack (abutlabs/observability; nets/obsnet.py) finds this net's
+# containers by these labels: it collects every one's logs, scrapes the ones with a
+# metrics port and polls the PolkaJam nodes' JIP-2 RPC. `./dex up` sets OBS_RUN_ID.
+x-obs: &obs
+  org.abutlabs.obs.net: mixed
+  org.abutlabs.obs.run_id: ${OBS_RUN_ID:-}
+  org.abutlabs.obs.logs: "true"
+
 x-polkajam: &polkajam
   build:
     context: .
@@ -37,6 +45,12 @@ x-polkajam: &polkajam
 x-mesh: &mesh
   image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
   restart: unless-stopped
+  labels:
+    <<: *obs
+    org.abutlabs.obs.job: lasair
+    org.abutlabs.obs.client: lasair
+    org.abutlabs.obs.scrape: "true"
+    org.abutlabs.obs.port: "9615"
   # validator INDEX holds only its own key (DEV_VALIDATOR, lasair#54), or, with
   # LASAIR_DEV_ALL_KEYS=1, runs lasair's devnet mode (OWN, default INDEX: every dev secret)
   entrypoint:
@@ -55,6 +69,7 @@ services:
   spec-init:
     <<: *polkajam
     restart: "no"
+    labels: { <<: *obs, org.abutlabs.obs.job: spec-init, org.abutlabs.obs.client: jamswap }
     environment:
       ROLE: init
       SHARED: /shared
@@ -70,6 +85,8 @@ services:
   pj0:
     <<: *polkajam
     depends_on: { spec-init: { condition: service_completed_successfully } }
+    labels: { <<: *obs, org.abutlabs.obs.job: polkajam, org.abutlabs.obs.client: polkajam,
+              org.abutlabs.obs.jip2: "19890" }
     environment: { ROLE: validator, INDEX: "0", SHARED: /shared }
     networks: { mixnet: { ipv4_address: 172.28.0.10 } }
     ports:
@@ -80,11 +97,15 @@ services:
   pj1:
     <<: *polkajam
     depends_on: { spec-init: { condition: service_completed_successfully } }
+    labels: { <<: *obs, org.abutlabs.obs.job: polkajam, org.abutlabs.obs.client: polkajam,
+              org.abutlabs.obs.jip2: "19891" }
     environment: { ROLE: validator, INDEX: "1", SHARED: /shared }
     networks: { mixnet: { ipv4_address: 172.28.0.11 } }
   pj2:
     <<: *polkajam
     depends_on: { spec-init: { condition: service_completed_successfully } }
+    labels: { <<: *obs, org.abutlabs.obs.job: polkajam, org.abutlabs.obs.client: polkajam,
+              org.abutlabs.obs.jip2: "19892" }
     environment: { ROLE: validator, INDEX: "2", SHARED: /shared }
     networks: { mixnet: { ipv4_address: 172.28.0.12 } }
 
@@ -150,6 +171,7 @@ services:
   #    one chain; lasair-authored blocks are re-derived by PolkaJam to the same root)
   watch:
     <<: *polkajam
+    labels: { <<: *obs, org.abutlabs.obs.job: watch, org.abutlabs.obs.client: jamswap }
     depends_on: [pj0]
     environment: { ROLE: watch, SHARED: /shared }
     networks: { mixnet: {} }
@@ -182,6 +204,12 @@ services:
         for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
         export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
         exec /usr/local/bin/jamnp-builder
+    labels:
+      <<: *obs
+      org.abutlabs.obs.job: builder
+      org.abutlabs.obs.client: lasair
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "19980"
     environment:
       # fan CE-133 out to ALL lasair nodes (each one's builder endpoint = PORT+1):
       # whichever lm node next authors on the winning branch reports the package
@@ -201,6 +229,7 @@ services:
         for _ in $$(seq 1 60); do [ -s /shared/genesis_hex ] && break; sleep 1; done
         export LASAIR_JAMNP_GENESIS_HEX=$$(cat /shared/genesis_hex)
         exec /usr/local/bin/lasair-reader
+    labels: { <<: *obs, org.abutlabs.obs.job: reader, org.abutlabs.obs.client: lasair }
     environment:
       LASAIR_NODE_HOST: 172.28.0.13        # any lasair node serves CE-129
       LASAIR_NODE_PORT: "40063"
@@ -213,6 +242,12 @@ services:
       context: .
       dockerfile: offchain/Dockerfile
     depends_on: [builder, reader]
+    labels:
+      <<: *obs
+      org.abutlabs.obs.job: dex
+      org.abutlabs.obs.client: dex
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "8080"
     environment:
       SERVICE_ID: "100"
       BUILDER_URL: http://builder:19980

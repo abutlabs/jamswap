@@ -48,6 +48,12 @@ services:
       RPC_BASE: "42100"
       HOST_IP: "${HOST_IP:-}"
       GENESIS_BALANCE: "0"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "spec-init"
+      org.abutlabs.obs.client: "jamswap"
+      org.abutlabs.obs.logs: "true"
   pj0:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -64,11 +70,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41100:41100/udp"
       - "127.0.0.1:42100:42100"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42100"
   pj1:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -85,11 +99,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41101:41101/udp"
       - "127.0.0.1:42101:42101"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42101"
   pj2:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -106,11 +128,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41102:41102/udp"
       - "127.0.0.1:42102:42102"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42102"
   pj3:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -127,11 +157,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41103:41103/udp"
       - "127.0.0.1:42103:42103"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42103"
   pj4:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -148,11 +186,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41104:41104/udp"
       - "127.0.0.1:42104:42104"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42104"
   pj5:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -169,11 +215,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41105:41105/udp"
       - "127.0.0.1:42105:42105"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42105"
   rpc:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -187,6 +241,7 @@ services:
       RPC_PORT: "42150"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
@@ -195,6 +250,13 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42150"
   dex:
     build:
       context: "../.."
@@ -227,6 +289,14 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "dex"
+      org.abutlabs.obs.client: "dex"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "8080"
   loadgen:
     build:
       context: "../.."
@@ -247,6 +317,14 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "loadgen"
+      org.abutlabs.obs.client: "loadgen"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9111"
   netwatch:
     build:
       context: "../.."
@@ -262,6 +340,14 @@ services:
     networks:
       net: {}
     restart: "unless-stopped"
+    labels:
+      org.abutlabs.obs.net: "pj6"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "netwatch"
+      org.abutlabs.obs.client: "netwatch"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.scrape: "true"
+      org.abutlabs.obs.port: "9106"
 networks:
   net:
     driver: "bridge"

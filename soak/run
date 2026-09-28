@@ -3,10 +3,12 @@
 #
 #   soak/run NET [SECS]          # e.g. soak/run lasair-pj 3600   (SECS default 600)
 #
-# Starts the obs stack if it is not up, brings the net up (./dex up), records the
-# configuration, runs the soak (./dex soak), tears the net down (./dex down) and writes
-# REPORT.md next to the soak's own files in ~/.cache/jamswap/soak/<net>-<time>/.
-# While it runs, watch it live: `./dex up` prints the dashboard link.
+# Starts the observability stack if it is not up, brings the net up (./dex up), runs the
+# soak (./dex soak: it records the configuration in config.json and, with the stack up,
+# pushes it, its progress and its verdict to the "Soak runs" dashboard), tears the net
+# down (./dex down) and writes REPORT.md next to the soak's own files in
+# ~/.cache/jamswap/soak/<net>-<time>/. While it runs, watch it live: `./dex up` prints
+# the dashboard links.
 #
 # Env passed through to the net: LASAIR_IMAGE (default: the pin in nets/profiles.py),
 # LASAIR_DATA_DIR (e.g. /data: durable storage), LASAIR_DEX_BACKEND, PROFILE, RATE,
@@ -16,37 +18,20 @@ cd "$(dirname "$0")/.."
 NET="${1:?usage: soak/run NET [SECS]}"; SECS="${2:-600}"
 CACHE="${JAMSWAP_CACHE:-$HOME/.cache/jamswap}"
 
-./dex obs status >/dev/null 2>&1 || ./dex obs up || echo "obs stack not available: the soak runs without dashboards"
-
-# the configuration, as it will run
-image="${LASAIR_IMAGE:-$(python3 -c 'import sys; sys.path.insert(0, "nets"); import profiles; print(profiles.LASAIR_IMAGE)')}"
-clients=$(python3 -c "import sys; sys.path.insert(0, 'nets'); import profiles; print(profiles.PROFILES['$NET']['clients'])")
+./dex obs ping >/dev/null 2>&1 || ./dex obs up || echo "observability stack not available: the soak runs without dashboards"
 
 ./dex up NET="$NET" || { echo "net did not come up"; exit 1; }
-run_id=$(python3 -c "import json; print(json.load(open('$CACHE/obs/nets/$NET.json'))['run_id'])" 2>/dev/null || echo "")
 
 ./dex soak NET="$NET" "$SECS"; rc=$?
 dir=$(ls -dt "$CACHE"/soak/"$NET"-*/ 2>/dev/null | head -1)
 dir="${dir%/}"
-
-python3 - "$dir/config.json" <<EOF
-import json, subprocess, sys
-cfg = {
-  "net": "$NET", "clients": "$clients",
-  "validators": "%d (%s)" % (len("$clients".split(",")), "one key each"),
-  "lasair_image": "$image" if "lasair" in "$clients" else "none (no lasair node)",
-  "data_dir": "${LASAIR_DATA_DIR:-}",
-  "dex_backend": "${LASAIR_DEX_BACKEND:-jip2 through lasair-reader}" if "lasair" in "$clients" else "jip2 (a PolkaJam node)",
-  "load": "PROFILE=${PROFILE:-trading}, RATE=${RATE:-12} pairs/min, SEALED_RATIO=${SEALED_RATIO:-0.2}",
-  "jamswap_commit": subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip(),
-  "run_id": "$run_id",
-}
-json.dump(cfg, open(sys.argv[1], "w"), indent=1)
-EOF
+run_id=$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('run_id', ''))" "$dir/config.json" 2>/dev/null || echo "")
 
 [ "${KEEP_UP:-0}" = 1 ] || ./dex down NET="$NET"
 python3 soak/report.py "$dir" > "$dir/REPORT.md"
 echo
 echo "report: $dir/REPORT.md"
-[ -n "$run_id" ] && ./dex obs link "$run_id" 2>/dev/null | tail -1
+if [ -n "$run_id" ]; then
+  echo "soak runs dashboard: $(./dex obs link "$run_id" -d soak-runs 2>/dev/null)"
+fi
 exit $rc

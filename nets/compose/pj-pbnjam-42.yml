@@ -41,6 +41,12 @@ services:
       RPC_BASE: "42300"
       HOST_IP: "${HOST_IP:-}"
       GENESIS_BALANCE: "0"
+    labels:
+      org.abutlabs.obs.net: "pj-pbnjam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "spec-init"
+      org.abutlabs.obs.client: "jamswap"
+      org.abutlabs.obs.logs: "true"
   pj0:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -57,11 +63,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41300:41300/udp"
       - "127.0.0.1:42300:42300"
+    labels:
+      org.abutlabs.obs.net: "pj-pbnjam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42300"
   pj1:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -78,11 +92,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41301:41301/udp"
       - "127.0.0.1:42301:42301"
+    labels:
+      org.abutlabs.obs.net: "pj-pbnjam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42301"
   pj2:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -99,11 +121,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41302:41302/udp"
       - "127.0.0.1:42302:42302"
+    labels:
+      org.abutlabs.obs.net: "pj-pbnjam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42302"
   pj3:
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}"
     pull_policy: "never"
@@ -120,11 +150,19 @@ services:
       SHARED: "/shared"
       FINALITY_MODE: "grandpa"
       EXTERNAL_IP: "${HOST_IP:-}"
+      TELEMETRY: "${OBS_JIP3:-}"
     volumes:
       - "shared:/shared"
     ports:
       - "${HOST_IP:-127.0.0.1}:41303:41303/udp"
       - "127.0.0.1:42303:42303"
+    labels:
+      org.abutlabs.obs.net: "pj-pbnjam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "polkajam"
+      org.abutlabs.obs.client: "polkajam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42303"
   pb4:
     image: "${PBNJAM_IMAGE:-docker.io/shimonchick/pbnjam-node:main-54226be@sha256:ceb5f651164d754280c4aa88f0cf3203f0f6115cb30eb1a3dd72788224aba1aa}"
     depends_on:
@@ -147,6 +185,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41304:41304/udp"
       - "127.0.0.1:42304:42304"
+    labels:
+      org.abutlabs.obs.net: "pj-pbnjam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "pbnjam"
+      org.abutlabs.obs.client: "pbnjam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42304"
   pb5:
     image: "${PBNJAM_IMAGE:-docker.io/shimonchick/pbnjam-node:main-54226be@sha256:ceb5f651164d754280c4aa88f0cf3203f0f6115cb30eb1a3dd72788224aba1aa}"
     depends_on:
@@ -169,6 +214,13 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41305:41305/udp"
       - "127.0.0.1:42305:42305"
+    labels:
+      org.abutlabs.obs.net: "pj-pbnjam-42"
+      org.abutlabs.obs.run_id: "${OBS_RUN_ID:-}"
+      org.abutlabs.obs.job: "pbnjam"
+      org.abutlabs.obs.client: "pbnjam"
+      org.abutlabs.obs.logs: "true"
+      org.abutlabs.obs.jip2: "42305"
 networks:
   net:
     driver: "bridge"

@@ -1,0 +1,1766 @@
+{
+ "uid": "obs-soak-runs",
+ "title": "Soak runs",
+ "tags": [
+  "obs"
+ ],
+ "timezone": "browser",
+ "refresh": "30s",
+ "time": {
+  "from": "now-7d",
+  "to": "now"
+ },
+ "editable": false,
+ "graphTooltip": 1,
+ "schemaVersion": 39,
+ "version": 1,
+ "templating": {
+  "list": [
+   {
+    "name": "net",
+    "label": "net",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "label_values(soak_info, net)",
+    "definition": "label_values(soak_info, net)",
+    "refresh": 2,
+    "sort": 1,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 0
+   },
+   {
+    "name": "run_id",
+    "label": "run_id",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "label_values(soak_info{net=\"$net\"}, run_id)",
+    "definition": "label_values(soak_info{net=\"$net\"}, run_id)",
+    "refresh": 2,
+    "sort": 2,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 0
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "name": "Annotations & Alerts",
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "type": "dashboard",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    }
+   },
+   {
+    "name": "run events",
+    "enable": true,
+    "hide": false,
+    "iconColor": "#5794F2",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "event"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   },
+   {
+    "name": "PASS",
+    "enable": true,
+    "hide": false,
+    "iconColor": "green",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "pass"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   },
+   {
+    "name": "FAIL",
+    "enable": true,
+    "hide": false,
+    "iconColor": "red",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "fail"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   }
+  ]
+ },
+ "links": [
+  {
+   "type": "dashboards",
+   "tags": [
+    "obs"
+   ],
+   "asDropdown": false,
+   "includeVars": true,
+   "keepTime": true,
+   "title": "obs"
+  }
+ ],
+ "panels": [
+  {
+   "type": "text",
+   "title": "",
+   "transparent": true,
+   "options": {
+    "mode": "markdown",
+    "content": "**A soak** runs a real JAM network for a long time under steady trading load, then checks that nothing was lost and the chain stayed healthy (`soak/run NET SECS`; `soak/README.md`). The load generator offers 12 crossing order pairs a minute, 20% of them sealed; the DEX batches them into rounds, each a work-package the validators guarantee, assure, audit and accumulate; after SECS of load, 180 s of drain let the last rounds settle; then every order's fate and the chain on every node are judged.\n\n**Read it top down.** Pick a net and a run: its verdict, phase and configuration first, then one tile per check, green when it passed, each showing what was measured and what it had to reach. A run passes only if every check passes. The links open the chain, lasair, DEX, memory and log dashboards for the same run. At the bottom, every soak so far, newest first: click a run id to open it here with its time range.\n\n| Check | Passes when |\n|---|---|\n| offered load | \u2264 0.01% of the offered orders turned away (refused or busy) |\n| clearing SLO | \u2265 0.9999 of the orders that could trade did |\n| SEALED zero-loss | no sealed order stuck between commit and reveal |\n| one head | every node agrees on the head, at every sample |\n| liveness | every node's best block advances |\n| finality | blocks finalized, no conflict, no stall of an epoch or more |\n| authoring | every validator authored blocks |\n| state parity | every node holds byte-identical DEX state at one finalized block |"
+   },
+   "id": 1,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 13
+   }
+  },
+  {
+   "type": "row",
+   "title": "The selected run",
+   "collapsed": false,
+   "panels": [],
+   "id": 2,
+   "gridPos": {
+    "x": 0,
+    "y": 13,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Verdict",
+   "description": "PASS only if every check below passed. Empty while the soak runs.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_pass{run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "running",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ]
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 3,
+   "gridPos": {
+    "x": 0,
+    "y": 14,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Phase",
+   "description": "starting, load, drain, parity, verdict, done.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (phase) (soak_phase{run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{phase}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 4,
+   "gridPos": {
+    "x": 4,
+    "y": 14,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Load left",
+   "description": "Seconds of load still to run (0 once draining).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_load_seconds_left{run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 5,
+   "gridPos": {
+    "x": 8,
+    "y": 14,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Duration",
+   "description": "The whole soak, start to verdict (running: so far).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_duration_seconds{run_id=\"$run_id\"}) or (time() - max(soak_started_timestamp_seconds{run_id=\"$run_id\"}))",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 6,
+   "gridPos": {
+    "x": 12,
+    "y": 14,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Last report",
+   "description": "Seconds since the soak last pushed. A running soak reports every minute; a large value on an unfinished run means it stopped.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "time() - max(push_time_seconds{job=\"soak\",run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 7,
+   "gridPos": {
+    "x": 16,
+    "y": 14,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Orders offered",
+   "description": "Operations the load generator offered.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_orders_offered{run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 8,
+   "gridPos": {
+    "x": 20,
+    "y": 14,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "table",
+   "title": "Configuration",
+   "description": "What ran: soak_info, pushed when the soak starts.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (clients, lasair_image, data_dir, dex_backend, load_profile, load_rate, sealed_ratio, jamswap_commit, secs, drain) (soak_info{run_id=\"$run_id\"})",
+     "refId": "A",
+     "format": "table",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "transformations": [
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "Value": true
+      },
+      "renameByName": {
+       "lasair_image": "lasair image",
+       "data_dir": "data dir",
+       "dex_backend": "DEX backend",
+       "load_profile": "load profile",
+       "load_rate": "pairs/min",
+       "sealed_ratio": "sealed",
+       "jamswap_commit": "jamswap",
+       "secs": "load s",
+       "drain": "drain s"
+      }
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm"
+   },
+   "id": 9,
+   "gridPos": {
+    "x": 0,
+    "y": 18,
+    "w": 24,
+    "h": 4
+   }
+  },
+  {
+   "type": "row",
+   "title": "Checks: green passed, red failed (measured \u00b7 what it had to reach)",
+   "collapsed": false,
+   "panels": [],
+   "id": 10,
+   "gridPos": {
+    "x": 0,
+    "y": 22,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "stat",
+   "title": "offered load",
+   "description": "Orders the DEX turned away (refused or busy) over orders offered.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"offered_load\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 11,
+   "gridPos": {
+    "x": 0,
+    "y": 23,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "clearing SLO",
+   "description": "Of the orders that could trade (met a clearing price), the share that did.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"clearing_slo\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 12,
+   "gridPos": {
+    "x": 6,
+    "y": 23,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "SEALED zero-loss",
+   "description": "Sealed (hidden) orders stuck between commit and reveal.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"sealed_zero_loss\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 13,
+   "gridPos": {
+    "x": 12,
+    "y": 23,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "one head",
+   "description": "Every node agreed on one head at every sample; a divergence must end within an epoch.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"one_head\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 14,
+   "gridPos": {
+    "x": 18,
+    "y": 23,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "liveness",
+   "description": "Every node's best block advanced during the soak.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"liveness\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 15,
+   "gridPos": {
+    "x": 0,
+    "y": 27,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "finality",
+   "description": "Blocks were finalized, never two at one slot, never going back, no stall of an epoch.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"finality\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 16,
+   "gridPos": {
+    "x": 6,
+    "y": 27,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "authoring",
+   "description": "Every validator authored blocks.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"authoring\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 17,
+   "gridPos": {
+    "x": 12,
+    "y": 27,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "state parity",
+   "description": "At one finalized block every node, whatever its client, holds byte-identical DEX state.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (check, measured, threshold) (soak_check{run_id=\"$run_id\",check=\"state_parity\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true,
+     "legendFormat": "{{measured}} \u00b7 need {{threshold}}"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "mappings": [
+      {
+       "type": "value",
+       "options": {
+        "0": {
+         "text": "FAIL",
+         "color": "red"
+        },
+        "1": {
+         "text": "PASS",
+         "color": "green"
+        }
+       }
+      }
+     ],
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value_and_name",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    },
+    "text": {
+     "titleSize": 13,
+     "valueSize": 28
+    }
+   },
+   "id": 18,
+   "gridPos": {
+    "x": 18,
+    "y": 27,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Clear latency p50",
+   "description": "Placement to settlement, median (information).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_clear_latency_seconds{run_id=\"$run_id\",quantile=\"0.5\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 19,
+   "gridPos": {
+    "x": 0,
+    "y": 31,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Clear latency p99",
+   "description": "Placement to settlement, 99th percentile (information).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_clear_latency_seconds{run_id=\"$run_id\",quantile=\"0.99\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 20,
+   "gridPos": {
+    "x": 6,
+    "y": 31,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Refused / busy",
+   "description": "Orders the DEX refused (busy replies in the offered-load tile).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_orders_refused{run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 21,
+   "gridPos": {
+    "x": 12,
+    "y": 31,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Finalized slots checked",
+   "description": "Finalized slots netwatch hash-checked across every node.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max(soak_finalized_slots{run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": false,
+     "instant": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "none",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 22,
+   "gridPos": {
+    "x": 18,
+    "y": 31,
+    "w": 6,
+    "h": 4
+   }
+  },
+  {
+   "type": "text",
+   "title": "Open",
+   "transparent": false,
+   "options": {
+    "mode": "markdown",
+    "content": "**This run's dashboards** (same net, run and time range): [Chain health](/d/obs-chain?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Network overview](/d/obs-overview?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [lasair validator duties](/d/obs-lasair?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [DEX](/d/obs-dex?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Memory](/d/obs-memory?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range}) \u00b7 [Logs](/d/obs-logs?orgId=1&var-net=$net&var-run_id=$run_id&${__url_time_range})"
+   },
+   "id": 23,
+   "gridPos": {
+    "x": 0,
+    "y": 35,
+    "w": 24,
+    "h": 3
+   }
+  },
+  {
+   "type": "row",
+   "title": "Every soak so far",
+   "collapsed": false,
+   "panels": [],
+   "id": 24,
+   "gridPos": {
+    "x": 0,
+    "y": 38,
+    "w": 24,
+    "h": 1
+   }
+  },
+  {
+   "type": "table",
+   "title": "Soak runs, newest first",
+   "description": "Every soak the Pushgateway holds (nets/soak.py pushes one group per run). Click a run id to open it above with its time range.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "max by (run_id, net, clients, lasair_image) (soak_info)",
+     "refId": "A",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_started_timestamp_seconds) * 1000",
+     "refId": "B",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_duration_seconds)",
+     "refId": "C",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_check_value{check=\"clearing_slo\"})",
+     "refId": "D",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_orders_refused)",
+     "refId": "E",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_sealed_stuck)",
+     "refId": "F",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_clear_latency_seconds{quantile=\"0.5\"})",
+     "refId": "G",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_clear_latency_seconds{quantile=\"0.99\"})",
+     "refId": "H",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_pass)",
+     "refId": "I",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) (soak_started_timestamp_seconds) * 1000 - 60000",
+     "refId": "J",
+     "format": "table",
+     "instant": true,
+     "range": false
+    },
+    {
+     "expr": "max by (run_id, net) ((soak_finished_timestamp_seconds or (soak_started_timestamp_seconds + soak_load_seconds + soak_drain_seconds + 900)) * 1000 + 60000)",
+     "refId": "K",
+     "format": "table",
+     "instant": true,
+     "range": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "align": "auto",
+      "cellOptions": {
+       "type": "auto"
+      }
+     }
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "started"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "dateTimeAsIso"
+       },
+       {
+        "id": "custom.width",
+        "value": 165
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "run_id"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 270
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "net"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 90
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^(clients|lasair image)$"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 150
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^(duration|clearing SLO|refused|sealed stuck|latency p50|latency p99|result)$"
+      },
+      "properties": [
+       {
+        "id": "custom.width",
+        "value": 106
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "duration"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "s"
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "latency.*"
+      },
+      "properties": [
+       {
+        "id": "unit",
+        "value": "s"
+       },
+       {
+        "id": "decimals",
+        "value": 0
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "clearing SLO"
+      },
+      "properties": [
+       {
+        "id": "decimals",
+        "value": 4
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-text"
+        }
+       },
+       {
+        "id": "thresholds",
+        "value": {
+         "mode": "absolute",
+         "steps": [
+          {
+           "color": "red",
+           "value": null
+          },
+          {
+           "color": "green",
+           "value": 0.9999
+          }
+         ]
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "result"
+      },
+      "properties": [
+       {
+        "id": "mappings",
+        "value": [
+         {
+          "type": "value",
+          "options": {
+           "0": {
+            "text": "FAIL",
+            "color": "red"
+           },
+           "1": {
+            "text": "PASS",
+            "color": "green"
+           }
+          }
+         }
+        ]
+       },
+       {
+        "id": "custom.cellOptions",
+        "value": {
+         "type": "color-background"
+        }
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "^(from|to)$"
+      },
+      "properties": [
+       {
+        "id": "custom.hidden",
+        "value": true
+       }
+      ]
+     },
+     {
+      "matcher": {
+       "id": "byName",
+       "options": "run_id"
+      },
+      "properties": [
+       {
+        "id": "links",
+        "value": [
+         {
+          "title": "Open this run",
+          "url": "/d/obs-soak-runs?orgId=1&var-net=${__data.fields.net}&var-run_id=${__value.raw}&from=${__data.fields.from}&to=${__data.fields.to}"
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   },
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true,
+       "Value #A": true
+      },
+      "indexByName": {
+       "Value #B": 0,
+       "run_id": 1,
+       "net": 2,
+       "clients": 3,
+       "lasair_image": 4,
+       "Value #C": 5,
+       "Value #D": 6,
+       "Value #E": 7,
+       "Value #F": 8,
+       "Value #G": 9,
+       "Value #H": 10,
+       "Value #I": 11,
+       "Value #J": 12,
+       "Value #K": 13
+      },
+      "renameByName": {
+       "Value #B": "started",
+       "lasair_image": "lasair image",
+       "Value #C": "duration",
+       "Value #D": "clearing SLO",
+       "Value #E": "refused",
+       "Value #F": "sealed stuck",
+       "Value #G": "latency p50",
+       "Value #H": "latency p99",
+       "Value #I": "result",
+       "Value #J": "from",
+       "Value #K": "to"
+      }
+     }
+    }
+   ],
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "sortBy": [
+     {
+      "displayName": "started",
+      "desc": true
+     }
+    ]
+   },
+   "id": 25,
+   "gridPos": {
+    "x": 0,
+    "y": 39,
+    "w": 24,
+    "h": 10
+   }
+  }
+ ]
+}

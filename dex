@@ -27,12 +27,15 @@
 #   ./dex soak NET=pj6 [SECS]  # A1-A4 (docs/NETS.md): load + netwatch for SECS (600),
 #                              # then state parity and the soak verdict; exit 0 iff all pass
 #
-# Observability (monitor/README.md): with the obs stack running (`./dex obs up`: Grafana
-# http://localhost:3300), `up` registers the net's metrics under a fresh run id and prints
-# its dashboard link; soak, load, noload and down annotate the run. Without obs, one line
-# says so and the net runs as before.
+# Observability (monitor/README.md): the observability stack is its own repo,
+# abutlabs/observability, at $OBS_HOME (default ../observability beside this checkout).
+# With it running (`./dex obs up`: Grafana http://localhost:3300), `up` gives the net's
+# containers a fresh run id (their org.abutlabs.obs.* labels: the stack discovers and
+# scrapes them by label, and collects their logs) and prints the dashboard links; soak,
+# load, noload and down annotate the run, and a soak pushes its results to the "Soak
+# runs" dashboard. Without the stack, one line says so and the net runs as before.
 #
-#   ./dex obs up|down|status   # the stack (monitor/obs/obs; any obs subcommand)
+#   ./dex obs up|down|status   # the stack ($OBS_HOME/obs; any obs subcommand)
 #   ./dex link NET=<name>      # dashboard links for the net's current run
 #
 # Keys: every validator holds only its own key. LASAIR_DEV_ALL_KEYS=1 puts the lasair
@@ -88,8 +91,21 @@ if [ -n "$NET_JAVAJAM" ]; then
   fi
 fi
 
-# the obs stack (nets/obsnet.py): never fails the verb that calls it
+# the observability stack (nets/obsnet.py): never fails the verb that calls it
+OBS_HOME="${OBS_HOME:-$(cd .. && pwd)/observability}"
+export OBS_HOME
 _obs() { python3 nets/obsnet.py "$1" "$NET" "${@:2}" || true; }
+# what compose puts on the net's containers: OBS_RUN_ID, the run id in their labels, and
+# OBS_JIP3, the JIP-3 endpoint the PolkaJam nodes report to (--telemetry). A re-up keeps
+# the running net's; a new net with the stack up gets a fresh run id and the stack's
+# receiver; without the stack both are empty. OBS_JIP3 set by hand (even empty) wins.
+_obs_begin() {
+  local OBS_JIP3_DEFAULT=""
+  eval "$(python3 nets/obsnet.py begin "$NET" 2>/dev/null | grep -E '^OBS_(RUN_ID|JIP3_DEFAULT)=[A-Za-z0-9_.:-]*$' || true)"
+  export OBS_RUN_ID="${OBS_RUN_ID:-}"
+  [ -n "${OBS_JIP3+x}" ] || OBS_JIP3=$OBS_JIP3_DEFAULT
+  export OBS_JIP3
+}
 
 _finality() { curl -s --max-time 5 "$URL/api/finality" 2>/dev/null; }
 _market() {
@@ -133,6 +149,7 @@ case "$cmd" in
     ;;
 
   up)
+    _obs_begin
     if [ "$NET_GENERATED" = 1 ]; then
       python3 nets/netgen.py check || { echo "run ./dex gen"; exit 1; }
       "${COMPOSE[@]}" build -q
@@ -204,7 +221,7 @@ case "$cmd" in
           echo "✓ loadgen OFF — trade manually at $URL";;
 
   down)
-    _obs down                                    # first: Prometheus leaves the net's network
+    _obs down                                    # annotate the end; the run ends
     "${COMPOSE[@]}" down -v --remove-orphans
     if [ -n "$NET_JAVAJAM" ] && [ -d "$STATE" ]; then
       nets/javajam-native.sh stop "$STATE"
@@ -232,7 +249,9 @@ case "$cmd" in
 
   soak)   exec python3 nets/soak.py "$NET" --secs "${2:-600}";;
 
-  obs)    shift; exec monitor/obs/obs "$@";;
+  obs)    shift
+          [ -x "$OBS_HOME/obs" ] || { echo "no observability stack at $OBS_HOME: check out abutlabs/observability there, or set OBS_HOME"; exit 1; }
+          exec "$OBS_HOME/obs" "$@";;
   link)   exec python3 nets/obsnet.py link "$NET";;
 
   nets)   python3 nets/netgen.py list;;
