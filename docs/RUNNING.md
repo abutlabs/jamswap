@@ -138,7 +138,7 @@ mix of lasair, PolkaJam, JavaJAM and pbnjam, one command each.
 
 ```sh
 LASAIR_IMAGE=lasair:local docker compose up          # any lasair image, e.g. a local source build
-LASAIR_TAG=2.1.1 docker compose up                   # the quickstart's tag (default 2.1.1)
+LASAIR_TAG=2.1.2 docker compose up                   # the quickstart's tag (default 2.1.2)
 PJ_RELEASE=nightly-2026-09-22 docker compose -f docker-compose.mixed.yml up   # the PolkaJam release (default)
 ```
 

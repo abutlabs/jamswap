@@ -43,7 +43,7 @@ next `up`; only a change to `service/src` needs `./dex rebuild`.
 | `lasair-pj` | lasair ×3, PolkaJam ×3 | 0.8.0 | GRANDPA, shared: both clients count each other's votes | **runs**: JIP-2 through lasair-reader, service in genesis; A1–A4 pass (10-min soak), state parity across both clients; UI :8206 | #20, #26 |
 | `nolasair` | PolkaJam ×2, JavaJAM ×2, pbnjam ×2 | 0.8.0 | GRANDPA | none in the profile yet; not run: needs #18, #19 | #21 |
 
-Versions: lasair `ghcr.io/abutlabs/lasair:2.1.1`, PolkaJam `nightly-2026-09-22` (0.1.29),
+Versions: lasair `ghcr.io/abutlabs/lasair:2.1.2`, PolkaJam `nightly-2026-09-22` (0.1.29),
 JavaJAM 0.4.3, pbnjam-node `main-54226be` (the image does not state its GP version;
 likely 0.8.0, see #19). Status as of 2026-09-27 (lasair6, lasair-pj: 2026-09-28) on an Apple M1 Pro; details
 [below](#what-the-clients-did-2026-09-26). `lasair6` and `mixed` are hand-written
@@ -109,7 +109,7 @@ The shared genesis is minted by [`nets/genesis.py`](../nets/genesis.py) in the
 
 | Client | Image / binary (pinned) | Started as validator *i* | RPC (host) |
 |---|---|---|---|
-| lasair | `${LASAIR_IMAGE}` (default `ghcr.io/abutlabs/lasair:2.1.1`) | mesh entrypoint, `DEV_VALIDATOR=i`, `WALL=1` next to wall-clock clients | JIP-2 through the node's own `lasair-reader` (lasair#68) on DEX nets; `./dex heads` reads its `STATUS` log line |
+| lasair | `${LASAIR_IMAGE}` (default `ghcr.io/abutlabs/lasair:2.1.2`) | mesh entrypoint, `DEV_VALIDATOR=i`, `WALL=1` next to wall-clock clients | JIP-2 through the node's own `lasair-reader` (lasair#68) on DEX nets; `./dex heads` reads its `STATUS` log line |
 | PolkaJam | `jamswap-polkajam:<PJ_RELEASE>`, built by `mixed/Dockerfile.polkajam` (target `polkajam`): the release tarball fetched at build time, sha256-pinned per release and arch | `mixed/pj-entrypoint.sh`: `--peer-id`, `--key-seed-file pj_i.seed`, `--finality-mode`, `--bootnode` | `127.0.0.1:42000+100·net+i` |
 | pbnjam | `docker.io/shimonchick/pbnjam-node:main-54226be@sha256:ceb5f651…` | `--chain /shared/spec.json --dev-validator i --rpc-port … --temp` (its documented flags; `--help` can't run, see below) | same |
 | JavaJAM (macOS) | native: release zip 0.4.3 + Temurin JRE 25.0.4.1, fetched at run time into `~/.cache/jamswap` (sha256-checked) by [`nets/javajam-native.sh`](../nets/javajam-native.sh) | `run --chain <spec> --dev-validator i --port … --rpc --finality-mode …` | same |
@@ -208,7 +208,7 @@ Only the service differs: it is seeded into genesis, not deployed at startup.
 there the reader answers at its head only, so the DEX gates reveals and receipts by
 comparing heights with lm0's finalized gauge, and the footprint reads 0.
 
-With the dex on JIP-2 (2026-09-28, `ghcr.io/abutlabs/lasair:2.1.1`, `./dex soak 600`,
+With the dex on JIP-2 (2026-09-28, `ghcr.io/abutlabs/lasair:2.1.2`, `./dex soak 600`,
 another net sharing the CPU):
 
 ```
@@ -263,7 +263,7 @@ the chain's activity statistics credit all six validators with guarantees (22–
 and assurances (40 each). The digest is read on every node at the same finalized block,
 and after the run PolkaJam's `stateRoot` for its finalized block equals lasair's. That
 run had the dex on lasair's HTTP bridges; with the dex on the reader's JIP-2 (#26;
-`ghcr.io/abutlabs/lasair:2.1.1`, another net sharing the CPU) the same soak passes too:
+`ghcr.io/abutlabs/lasair:2.1.2`, another net sharing the CPU) the same soak passes too:
 SLO 1.000000 (234 cleared, 0 missed; 7 resting, 3 open), sealed zero-loss (24 seen, 21
 terminal, 0 stuck), one head 130/130, 104 finalized slots hash-checked, state parity
 `248d6f808bb103f0` on lm0–lm2 and pj3–pj5 (97 keys, final slot 9140069), 240 orders

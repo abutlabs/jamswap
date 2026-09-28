@@ -35,7 +35,7 @@ services:
       target: "with-lasair"
       args:
         PJ_RELEASE: "${PJ_RELEASE:-nightly-2026-09-22}"
-        MESH_IMAGE: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+        MESH_IMAGE: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}-lasair"
     restart: "no"
     volumes:
@@ -55,7 +55,7 @@ services:
       SERVICE: "/work/jamswap-service.jam"
       SERVICE_ID: "100"
   lm0:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     entrypoint:
       - "bash"
       - "-c"
@@ -89,7 +89,7 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41600:41600/udp"
   lm1:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     entrypoint:
       - "bash"
       - "-c"
@@ -123,7 +123,7 @@ services:
     ports:
       - "${HOST_IP:-127.0.0.1}:41601:41601/udp"
   lm2:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     entrypoint:
       - "bash"
       - "-c"
@@ -220,7 +220,7 @@ services:
       - "${HOST_IP:-127.0.0.1}:41605:41605/udp"
       - "127.0.0.1:42605:42605"
   builder:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"
@@ -242,7 +242,7 @@ services:
       net: {}
     restart: "unless-stopped"
   reader:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"
@@ -266,7 +266,7 @@ services:
       net: {}
     restart: "unless-stopped"
   reader1:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"
@@ -290,7 +290,7 @@ services:
       net: {}
     restart: "unless-stopped"
   reader2:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"

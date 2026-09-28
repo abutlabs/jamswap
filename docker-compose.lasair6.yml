@@ -26,7 +26,7 @@
 # (LAYOUT all-lasair) and writes /shared/genesis_hex + peers_<i>.txt.
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
   restart: unless-stopped
   # validator INDEX runs as dev account INDEX holding only its own key (DEV_VALIDATOR,
   # lasair#54), or, with LASAIR_DEV_ALL_KEYS=1, in lasair's devnet mode (OWN, default
@@ -85,7 +85,7 @@ services:
       context: .
       dockerfile: mixed/Dockerfile.polkajam
       args:
-        MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}
+        MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
         PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-09-22}
     image: jamswap-pj-mixed:local
     restart: "no"
@@ -142,7 +142,7 @@ services:
   # nonce once and refuses a copied carry-commit, jamswap#7/#5).
   # LASAIR_BUILDER_FANOUT=all restores the fan-out.
   builder:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -166,7 +166,7 @@ services:
   # reader1..reader5 follow lm1..lm5, so netwatch reads every node by hash (./dex soak:
   # one head, finality, state parity).
   reader: &reader
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.1}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
