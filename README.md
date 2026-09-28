@@ -49,7 +49,7 @@ The rest of the verbs (add `NET=pj6` for pj6):
 ```
 
 Both nets are GP 0.8.0 and run on amd64 and arm64. lasair6 pulls the published
-`ghcr.io/abutlabs/lasair:2.0.0`; pj6 builds a PolkaJam image from the public release
+`ghcr.io/abutlabs/lasair:2.1.0`; pj6 builds a PolkaJam image from the public release
 (`nightly-2026-09-22`, sha256-pinned), fetched on your machine and never committed here.
 
 ### How the DEX reaches the chain

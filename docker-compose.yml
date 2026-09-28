@@ -17,12 +17,13 @@
 # same State_db over CE-129. See lasair/bin/{lasair_client,jamnp_builder,lasair_reader}.ml.
 #
 # All three chain-side services are the ONE `lasair` image (bundles lasair +
-# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=2.0.0, or point at any
+# jamnp-builder + lasair-reader). Pin a version with LASAIR_TAG=2.1.0, or point at any
 # image (e.g. a local source build) with LASAIR_IMAGE=lasair:local — see the Makefile.
 #
-# Default = 2.0.0, the first GP 0.8.0 client. service/jamswap-service.jam is a GP 0.8.0
-# build (tools/jam080), so it needs lasair 2.x; the GP 0.7.2 line (lasair 1.x) ran the
-# 0.7.2 build this repo carried before 2026-09-24.
+# Default = 2.1.0. service/jamswap-service.jam is a GP 0.8.0 build (tools/jam080), so it
+# needs lasair 2.x; the GP 0.7.2 line (lasair 1.x) ran the 0.7.2 build this repo carried
+# before 2026-09-24. lasair 2.0.0 takes a bare --own and rejects --dev-all-keys: run it
+# with LASAIR_TAG=2.0.0 only after dropping the "--dev-all-keys" line below.
 
 x-lasair-genesis: &genesis
   # first 4 bytes of blake2b256("lasair-mixed-network-genesis-v1\0") — the client's
@@ -31,10 +32,11 @@ x-lasair-genesis: &genesis
 
 services:
   chain:                              # one lasair process = all 6 validators + service host
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.0.0}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.0}}
     entrypoint: ["/usr/local/bin/lasair"]
     command:
-      - "--own"
+      - "--dev-all-keys"              # devnet only: this one process holds all six dev keys
+      - "--own"                       # (lasair >= 2.1.0 takes --own only with it, lasair#54)
       - "0,1,2,3,4,5"
       - "--service"
       - "/work/jamswap-service.jam"
@@ -51,19 +53,18 @@ services:
     restart: unless-stopped
 
   builder:                            # CE-133 submit bridge (local HTTP /submit -> QUIC)
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.0.0}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.0}}
     entrypoint: ["/usr/local/bin/jamnp-builder"]
     environment:
       <<: *genesis
       LASAIR_GUARANTOR_HOST: chain
       LASAIR_GUARANTOR_PORT: "40011"
-      LASAIR_NODE_RPC: ""             # no code-hash lookup: guarantor resolves service by id
       LASAIR_BUILDER_HTTP_PORT: "19980"
     depends_on: [chain]
     restart: unless-stopped
 
   reader:                             # CE-129 storage-read bridge (local HTTP /read -> QUIC)
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.0.0}}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:${LASAIR_TAG:-2.1.0}}
     entrypoint: ["/usr/local/bin/lasair-reader"]
     environment:
       <<: *genesis

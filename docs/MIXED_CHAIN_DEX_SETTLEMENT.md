@@ -139,7 +139,7 @@ give the chain a few epochs, or just re-run `verify`.
 
 `docker-compose.mixed-dex.yml` overlays the equal-split base:
 
-- `lm3` gets `OWN=1,2,3,4,5` and `GUARANTOR_OWN=1,2,3,4,5` — it authors the
+- `lm3` gets `LASAIR_DEV_ALL_KEYS=1`, `OWN=1,2,3,4,5` and `GUARANTOR_OWN=1,2,3,4,5` — it authors the
   lasair-dominant canonical chain and signs assurances as any assigned validator.
 - `lm4`, `lm5`, `pj1`, `pj2` are gated behind an unused compose profile so they never
   start (they would equivocate on the indices lm3 now authors).
@@ -147,7 +147,9 @@ give the chain a few epochs, or just re-run `verify`.
   authors negligibly.
 
 `--guarantor-own` (lasair client-v1.6.6) is the key knob: it decouples the
-**assurance-signing set** from the **authoring set** (`--own`), so the guarantor can
+**assurance-signing set** from the **authoring set** (`--own`; since lasair 2.1.0 both
+exist only in its devnet mode, `--dev-all-keys`, lasair#54 — the overlay sets
+`LASAIR_DEV_ALL_KEYS=1` on `lm3` for it), so the guarantor can
 sign as the full lasair set without equivocating on block production
 (`bin/lasair_client.ml:259`, `guarantor_set`).
 
