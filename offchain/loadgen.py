@@ -101,7 +101,13 @@ def op(name, fn):
             metrics.inc("loadgen_ops_busy_total", {"op": name})
         else:
             metrics.inc("loadgen_op_errors_total", {"op": name})
-            print("op %s failed: %s" % (name, e))
+            # the dex says why in the body ({"error": ...}); without it a refusal
+            # (open-order cap, insufficient funds, ...) reads as a bare "400"
+            try:
+                why = json.loads(e.read() or b"{}").get("error", "")
+            except Exception:
+                why = ""
+            print("op %s failed: %s%s" % (name, e, (": " + why) if why else ""))
     except Exception as e:
         metrics.inc("loadgen_op_errors_total", {"op": name})
         print("op %s failed: %s" % (name, e))
