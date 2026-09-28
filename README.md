@@ -88,6 +88,7 @@ leaves byte-identical service state ([`docs/DIFFERENTIAL_TESTNET.md`](docs/DIFFE
 | Single-node quickstart | `docker compose up` | One lasair process, UI at `:8080`, no finality — the 60-second demo |
 | Cross-client research nets | `./dex up NET=<net>` (`./dex nets` lists them) | lasair, PolkaJam, JavaJAM and pbnjam in one net — consensus research, not the DEX |
 | Monitoring | `./dex obs up` | Always-on Prometheus + Grafana (`:3300`) every net and soak reports into ([`monitor/README.md`](monitor/README.md)) |
+| Soak tests | `soak/run <net> <secs>` | A long run under trading load with a pass/fail report: what it proves, how to reproduce, results ([`soak/README.md`](soak/README.md)) |
 
 Every mode, with local source builds and platform notes:
 [`docs/RUNNING.md`](docs/RUNNING.md). Every net, its clients, GP version, finality and
