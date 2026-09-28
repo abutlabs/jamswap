@@ -1,0 +1,1014 @@
+{
+ "uid": "obs-lasair",
+ "title": "lasair validator duties",
+ "tags": [
+  "obs"
+ ],
+ "timezone": "browser",
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "editable": false,
+ "graphTooltip": 1,
+ "schemaVersion": 39,
+ "version": 1,
+ "templating": {
+  "list": [
+   {
+    "name": "net",
+    "label": "net",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "label_values(up{run_id!=\"\"}, net)",
+    "definition": "label_values(up{run_id!=\"\"}, net)",
+    "refresh": 2,
+    "sort": 1,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 0
+   },
+   {
+    "name": "run_id",
+    "label": "run_id",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "label_values(up{net=\"$net\"}, run_id)",
+    "definition": "label_values(up{net=\"$net\"}, run_id)",
+    "refresh": 2,
+    "sort": 2,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 0
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "name": "Annotations & Alerts",
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "type": "dashboard",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    }
+   },
+   {
+    "name": "run events",
+    "enable": true,
+    "hide": false,
+    "iconColor": "#5794F2",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "event"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   },
+   {
+    "name": "PASS",
+    "enable": true,
+    "hide": false,
+    "iconColor": "green",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "pass"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   },
+   {
+    "name": "FAIL",
+    "enable": true,
+    "hide": false,
+    "iconColor": "red",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "fail"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   }
+  ]
+ },
+ "links": [
+  {
+   "type": "dashboards",
+   "tags": [
+    "obs"
+   ],
+   "asDropdown": false,
+   "includeVars": true,
+   "keepTime": true,
+   "title": "obs"
+  }
+ ],
+ "panels": [
+  {
+   "type": "text",
+   "title": "",
+   "transparent": true,
+   "options": {
+    "mode": "markdown",
+    "content": "**Is every lasair validator doing its whole job?** Each line is one lasair node, in events per minute. Authoring, co-signing (CE-134), distributing guarantees (CE-135), guaranteeing (CE-133), assuring and auditing should all move while work flows; the panels titled *refusals* and *failures* should stay at zero."
+   },
+   "id": 1,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 3
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Silent authors (none in 5 min) \u00b7 PASS = 0",
+   "description": "lasair nodes that authored no block in the last 5 minutes (~50 slots).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "count(lasair_blocks_authored_total{net=\"$net\",run_id=\"$run_id\"}) - (count(increase(lasair_blocks_authored_total{net=\"$net\",run_id=\"$run_id\"}[5m]) > 0) or vector(0))",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 2,
+   "gridPos": {
+    "x": 0,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "CE-134 mismatched \u00b7 PASS = 0",
+   "description": "Co-signers that refined the same package to a different report: non-determinism.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(lasair_ce134_mismatched_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"lasair\"}) * 0)",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 3,
+   "gridPos": {
+    "x": 4,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Refine failures \u00b7 PASS = 0",
+   "description": "Work-packages the guarantor pipeline failed to refine.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(lasair_guarantor_refine_failed_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"lasair\"}) * 0)",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 4,
+   "gridPos": {
+    "x": 8,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Own blocks rejected \u00b7 PASS = 0",
+   "description": "Blocks a lasair node authored and then rejected on its own import.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(lasair_authored_rejected_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"lasair\"}) * 0)",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 5,
+   "gridPos": {
+    "x": 12,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Audit judgments rejected \u00b7 PASS = 0",
+   "description": "Audit judgments received from other validators that failed validation.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(lasair_audit_judgments_rejected_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"lasair\"}) * 0)",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 6,
+   "gridPos": {
+    "x": 16,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Work guaranteed (CE-133) \u00b7 PASS > 0",
+   "description": "Work-packages lasair guaranteed this run. 0 means no work reached a lasair guarantor (or none was sent).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(lasair_ce133_guaranteed_total{net=\"$net\",run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 7,
+   "gridPos": {
+    "x": 20,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Blocks authored per minute",
+   "description": "Blocks each lasair node sealed and published.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "60 * rate(lasair_blocks_authored_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 8,
+   "gridPos": {
+    "x": 0,
+    "y": 7,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "CE-134 co-signing per minute",
+   "description": "co-signed: shares this node signed for another guarantor. answers: co-signatures other validators returned to it.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "60 * rate(lasair_ce134_cosigned_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} co-signed",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "60 * rate(lasair_ce134_answers_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} answers received",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 9,
+   "gridPos": {
+    "x": 8,
+    "y": 7,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "CE-134 refusals per minute (should stay 0)",
+   "description": "refused: co-sign requests this node turned down, by reason. answers refused: requests it sent that others turned down.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum by (node, reason) (60 * rate(lasair_ce134_refused_total{net=\"$net\",run_id=\"$run_id\"}[2m]))",
+     "legendFormat": "{{node}} refused: {{reason}}",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "60 * rate(lasair_ce134_answers_refused_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} answers refused",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 10,
+   "gridPos": {
+    "x": 16,
+    "y": 7,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "CE-133 guaranteed and CE-135 included per minute",
+   "description": "CE-133: work-packages this node guaranteed. CE-135: guarantees it received that a block it authored included.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "60 * rate(lasair_ce133_guaranteed_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} CE-133 guaranteed",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "60 * rate(lasair_ce135_included_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} CE-135 included",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 11,
+   "gridPos": {
+    "x": 0,
+    "y": 15,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Assurances per minute",
+   "description": "signed: availability assurances this node made. included: assurances carried by blocks it authored.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "60 * rate(lasair_assurances_signed_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} signed",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "60 * rate(lasair_assurances_included_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} included",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 12,
+   "gridPos": {
+    "x": 8,
+    "y": 15,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Audits per minute",
+   "description": "Work-reports each node audited, and the audit judgments all lasair nodes sent and received (rejected and duplicate should stay near 0).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "60 * rate(lasair_audit_reports_audited_total{net=\"$net\",run_id=\"$run_id\"}[2m])",
+     "legendFormat": "{{node}} reports audited",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "sum(60 * rate(lasair_audit_judgments_sent_total{net=\"$net\",run_id=\"$run_id\"}[2m]))",
+     "legendFormat": "judgments sent (all nodes)",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "sum(60 * rate(lasair_audit_judgments_received_total{net=\"$net\",run_id=\"$run_id\"}[2m]))",
+     "legendFormat": "judgments received (all nodes)",
+     "refId": "C",
+     "range": true
+    },
+    {
+     "expr": "sum(60 * rate(lasair_audit_judgments_rejected_total{net=\"$net\",run_id=\"$run_id\"}[2m]))",
+     "legendFormat": "judgments rejected (all nodes)",
+     "refId": "D",
+     "range": true
+    },
+    {
+     "expr": "sum(60 * rate(lasair_audit_judgments_duplicate_total{net=\"$net\",run_id=\"$run_id\"}[2m]))",
+     "legendFormat": "judgments duplicate (all nodes)",
+     "refId": "E",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 13,
+   "gridPos": {
+    "x": 16,
+    "y": 15,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Guarantor pipeline",
+   "description": "ready: packages refined and waiting to be guaranteed. held: packages held back. busy: 1 while a refine runs.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "lasair_guarantor_ready{net=\"$net\",run_id=\"$run_id\"}",
+     "legendFormat": "{{node}} ready",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "lasair_guarantor_held{net=\"$net\",run_id=\"$run_id\"}",
+     "legendFormat": "{{node}} held",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "lasair_guarantor_busy{net=\"$net\",run_id=\"$run_id\"}",
+     "legendFormat": "{{node}} busy",
+     "refId": "C",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "decimals": 0,
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 14,
+   "gridPos": {
+    "x": 0,
+    "y": 23,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Refine seconds (average per package)",
+   "description": "Mean refine time over 5 minutes: rate of the sum over rate of the count.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "rate(lasair_guarantor_refine_seconds_sum{net=\"$net\",run_id=\"$run_id\"}[5m]) / rate(lasair_guarantor_refine_seconds_count{net=\"$net\",run_id=\"$run_id\"}[5m])",
+     "legendFormat": "{{node}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "s",
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 15,
+   "gridPos": {
+    "x": 12,
+    "y": 23,
+    "w": 12,
+    "h": 8
+   }
+  }
+ ]
+}

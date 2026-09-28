@@ -1475,6 +1475,7 @@ metrics.describe("jamswap_inflight_orders", "orders inside a round awaiting dura
 metrics.describe("jamswap_settle_reverted_total", "settlements observed on-chain then ERASED by a re-org before the hold window passed")
 metrics.describe("jamswap_round_abandoned_total", "rounds released without settling, by reason (book-moved / commit-gone / seq-floor = dead; timeout = never included)")
 metrics.describe("jamswap_round_late_landed_total", "released rounds that settled after all (seen by their landed-round marker, then finalized)")
+metrics.describe("jamswap_round_orders", "orders per assembled round (sealed + public; the resting book not counted), per market")
 
 def _stats_poller():
     while True:
@@ -1840,6 +1841,7 @@ def _assemble_round(m, base, quote, now, raw, pruned, shrank, plan, resting_orde
            "consumed": [_consumed_entry(o) for o in sealed],
            "set_key": set_key, "minseq": minseq}
     detail = f"market {m}: {len(sealed)} sealed + {len(public)} public, vol {disp(clearing['volume'])}"
+    metrics.observe("jamswap_round_orders", {"market": str(m)}, len(sealed) + len(public))
     return rec, payload, detail, None
 def short(a):
     return (a[:6] + "…" + a[-4:]) if a and len(a) > 12 else a

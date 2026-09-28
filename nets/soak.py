@@ -19,7 +19,11 @@ with the dex, loadgen and netwatch services (every generated DEX net, and lasair
      to every order) would otherwise pass. At most 1 - target of it may be refused.
 
 Run it on a freshly started net (`./dex up`): the verdict judges the dex's whole order
-event log. Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>):
+event log. With the obs stack running (monitor/README.md), the soak's start, load off,
+drain, every PASS/FAIL line of the verdict (with its threshold) and the overall result
+(a region over the soak) are annotated on the net's run in Grafana.
+
+Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>):
 poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl, dex.log, loadgen.log, verdict.txt,
 verdict.json, loadgen.txt, soak.log, and DONE (written last: each step's result). Exit 0
 iff the poll, the parity probe, the soak verdict and the offered load all pass.
@@ -36,6 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import netgen  # noqa: E402
+import obsnet  # noqa: E402
 
 NETWATCH = ["python3", "/netwatch/netwatch.py"]
 
@@ -53,6 +58,13 @@ class Soak:
         print(line, flush=True)
         self._log.write(line + "\n")
         self._log.flush()
+
+    def note(self, text, tags, start=None, end=None):
+        """Annotate the net's obs run (nets/obsnet.py); never fails the soak."""
+        try:
+            obsnet.note(self.name, text, tags, start=start, end=end)
+        except Exception as e:                  # noqa: BLE001 - observability is optional
+            self.log("obs annotate failed: %s" % e)
 
     def path(self, name):
         return os.path.join(self.out, name)
@@ -138,6 +150,11 @@ def main(argv=None):
     finality = ["--require-finality"] if p.get("finality") == "grandpa" else []
     done = {"net": a.net, "secs": a.secs, "drain": a.drain, "started": stamp}
     s.log("soak %s: %d s load + %d s drain -> %s" % (a.net, a.secs, a.drain, out))
+    t_soak = time.time()
+    run_id = obsnet.ensure(a.net)
+    if run_id:
+        s.log("obs run %s: %s" % (run_id, obsnet.obs("link", run_id).stdout.strip()))
+    s.note("soak start: %d s load + %d s drain (%s)" % (a.secs, a.drain, out), "soak")
 
     url = netgen.dex_url_of(a.net)
     fin = wait_dex(url, a.ready_timeout)
@@ -162,6 +179,8 @@ def main(argv=None):
         try:
             s.dc("start", "loadgen", timeout=60)
             s.log("loadgen on; netwatch poll running (%s)" % (" ".join(finality) or "finality auto"))
+            s.note("soak: load on (netwatch poll %s)" % (" ".join(finality) or "finality auto"),
+                   "soak,load")
             t_end = time.time() + a.secs
             while time.time() < t_end:
                 time.sleep(min(60, max(0, t_end - time.time())))
@@ -179,12 +198,15 @@ def main(argv=None):
             s.dc("stop", "loadgen", timeout=60, check=False)
             s.log("loadgen off; draining. offered %(offered)d, refused %(refused)d, busy %(busy)d"
                   % load)
+            s.note("soak: load off, draining %d s (offered %d, refused %d, busy %d)"
+                   % (a.drain, load["offered"], load["refused"], load["busy"]), "soak,load")
         try:
             done["poll"] = poll.wait(timeout=a.drain + 300)
         except subprocess.TimeoutExpired:
             poll.kill()
             done["poll"] = "timeout"
     s.log("netwatch poll: exit %s" % done["poll"])
+    s.note("soak: drain done (netwatch poll exit %s); parity and verdict next" % done["poll"], "soak")
     s.dc("cp", "netwatch:" + chain_tmp, s.path("chain.jsonl"), timeout=60)
 
     done["parity"] = s.run_to("parity.txt", s.compose + ["exec", "-T", "netwatch"] + NETWATCH + [
@@ -216,12 +238,22 @@ def main(argv=None):
             lines = fh.read().splitlines()
         print("\n".join(lines[-40:] if f == "poll.txt" else lines))
     ld = done["load"]
-    print("\n==> offered load   : %s  (%d orders offered, %d refused, %d busy; at most %g%% may "
-          "be turned away)" % ("PASS" if ld["pass"] else "FAIL", ld["offered"], ld["refused"],
-                               ld["busy"], 100 * (1 - float(a.target))))
+    load_line = ("offered load   : %s  (%d orders offered, %d refused, %d busy; at most %g%% may "
+                 "be turned away)" % ("PASS" if ld["pass"] else "FAIL", ld["offered"],
+                                      ld["refused"], ld["busy"], 100 * (1 - float(a.target))))
+    print("\n==> " + load_line)
+    # every verdict line, each with the threshold it was judged against
+    with open(s.path("verdict.txt")) as fh:
+        lines = [ln.strip() for ln in fh if " PASS" in ln or " FAIL" in ln]
+    for ln in lines + [load_line]:
+        s.note(ln, "soak,verdict," + ("fail" if " FAIL" in ln else "pass"))
     with open(s.path("DONE"), "w") as fh:
         json.dump(done, fh, indent=2)
     s.log("DONE %s: %s" % ("PASS" if done["pass"] else "FAIL", json.dumps(done)))
+    s.note("soak %s: poll %s, parity %s, verdict %s, offered load %s (%s)" % (
+        "PASS" if done["pass"] else "FAIL", done["poll"], done["parity"], done["verdict"],
+        "PASS" if done["load"]["pass"] else "FAIL", out),
+        "soak,verdict," + ("pass" if done["pass"] else "fail"), start=t_soak, end=time.time())
     return 0 if done["pass"] else 1
 
 

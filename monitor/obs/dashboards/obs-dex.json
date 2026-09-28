@@ -1,0 +1,1052 @@
+{
+ "uid": "obs-dex",
+ "title": "DEX",
+ "tags": [
+  "obs"
+ ],
+ "timezone": "browser",
+ "refresh": "10s",
+ "time": {
+  "from": "now-1h",
+  "to": "now"
+ },
+ "editable": false,
+ "graphTooltip": 1,
+ "schemaVersion": 39,
+ "version": 1,
+ "templating": {
+  "list": [
+   {
+    "name": "net",
+    "label": "net",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "label_values(up{run_id!=\"\"}, net)",
+    "definition": "label_values(up{run_id!=\"\"}, net)",
+    "refresh": 2,
+    "sort": 1,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 0
+   },
+   {
+    "name": "run_id",
+    "label": "run_id",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": "label_values(up{net=\"$net\"}, run_id)",
+    "definition": "label_values(up{net=\"$net\"}, run_id)",
+    "refresh": 2,
+    "sort": 2,
+    "includeAll": false,
+    "multi": false,
+    "current": {},
+    "options": [],
+    "hide": 0
+   }
+  ]
+ },
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "name": "Annotations & Alerts",
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "type": "dashboard",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    }
+   },
+   {
+    "name": "run events",
+    "enable": true,
+    "hide": false,
+    "iconColor": "#5794F2",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "event"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   },
+   {
+    "name": "PASS",
+    "enable": true,
+    "hide": false,
+    "iconColor": "green",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "pass"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   },
+   {
+    "name": "FAIL",
+    "enable": true,
+    "hide": false,
+    "iconColor": "red",
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "target": {
+     "type": "tags",
+     "tags": [
+      "$run_id",
+      "fail"
+     ],
+     "matchAny": false,
+     "limit": 500
+    }
+   }
+  ]
+ },
+ "links": [
+  {
+   "type": "dashboards",
+   "tags": [
+    "obs"
+   ],
+   "asDropdown": false,
+   "includeVars": true,
+   "keepTime": true,
+   "title": "obs"
+  }
+ ],
+ "panels": [
+  {
+   "type": "text",
+   "title": "",
+   "transparent": true,
+   "options": {
+    "mode": "markdown",
+    "content": "**Is the DEX turning offered load into cleared trades?** The load generator's offered operations (per second, by op) should be met by placed and cleared orders; its errors and busy replies are load the DEX turned away. The headline is the clearing SLO, the soak's own verdict (PASS \u2265 0.9999): the share of marketable orders that cleared."
+   },
+   "id": 1,
+   "gridPos": {
+    "x": 0,
+    "y": 0,
+    "w": 24,
+    "h": 3
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Clearing SLO \u00b7 PASS \u2265 0.9999",
+   "description": "Marketable orders that cleared over all that reached a terminal state (offchain/order_telemetry.py).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "min(jamswap_order_clearing_slo{net=\"$net\",run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 3,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "red",
+        "value": null
+       },
+       {
+        "color": "green",
+        "value": 0.9999
+       }
+      ]
+     },
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 2,
+   "gridPos": {
+    "x": 0,
+    "y": 3,
+    "w": 5,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Load turned away \u00b7 PASS \u2264 0.01%",
+   "description": "Errors plus busy (503) replies over operations offered, as the soak judges the offered load. Counts restart when the load generator restarts.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "((sum(loadgen_op_errors_total{net=\"$net\",run_id=\"$run_id\"}) or vector(0)) + (sum(loadgen_ops_busy_total{net=\"$net\",run_id=\"$run_id\"}) or vector(0))) / sum(loadgen_ops_total{net=\"$net\",run_id=\"$run_id\"})",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 2,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 0.00010000099999998899
+       }
+      ]
+     },
+     "unit": "percentunit"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 3,
+   "gridPos": {
+    "x": 5,
+    "y": 3,
+    "w": 5,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Settle timeouts \u00b7 PASS = 0",
+   "description": "Submitted operations whose effect never became visible on chain.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(jamswap_settle_timeouts_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0)",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 4,
+   "gridPos": {
+    "x": 10,
+    "y": 3,
+    "w": 5,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Settlements reverted \u00b7 PASS = 0",
+   "description": "Settlements seen on chain and then erased by a re-org before the hold window.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(jamswap_settle_reverted_total{net=\"$net\",run_id=\"$run_id\"}) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0)",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "thresholds"
+     },
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "green",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 1e-09
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 5,
+   "gridPos": {
+    "x": 15,
+    "y": 3,
+    "w": 5,
+    "h": 4
+   }
+  },
+  {
+   "type": "stat",
+   "title": "Clear latency p99, 10 min (info)",
+   "description": "Placement to durable fill, 99th percentile.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.99, sum by (le) (rate(jamswap_order_clear_latency_seconds_bucket{net=\"$net\",run_id=\"$run_id\"}[10m])))",
+     "refId": "A",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "decimals": 0,
+     "noValue": "no data",
+     "color": {
+      "mode": "fixed",
+      "fixedColor": "text"
+     },
+     "unit": "s"
+    },
+    "overrides": []
+   },
+   "options": {
+    "graphMode": "area",
+    "colorMode": "background",
+    "textMode": "value",
+    "justifyMode": "center",
+    "reduceOptions": {
+     "calcs": [
+      "lastNotNull"
+     ],
+     "fields": "",
+     "values": false
+    }
+   },
+   "id": 6,
+   "gridPos": {
+    "x": 20,
+    "y": 3,
+    "w": 4,
+    "h": 4
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Offered load (ops/s, by op)",
+   "description": "Operations the load generator offered to the DEX API.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum by (op) (rate(loadgen_ops_total{net=\"$net\",run_id=\"$run_id\"}[1m]))",
+     "legendFormat": "{{op}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "normal",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 7,
+   "gridPos": {
+    "x": 0,
+    "y": 7,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Turned away (ops/s, by op)",
+   "description": "error: the DEX refused or failed the call. busy: the chain was at capacity.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "(sum(rate(loadgen_op_errors_total{net=\"$net\",run_id=\"$run_id\"}[1m])) or vector(0)) + (sum(rate(loadgen_ops_busy_total{net=\"$net\",run_id=\"$run_id\"}[1m])) or vector(0)) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"loadgen\"}) * 0)",
+     "legendFormat": "all ops",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "sum by (op) (rate(loadgen_op_errors_total{net=\"$net\",run_id=\"$run_id\"}[1m]))",
+     "legendFormat": "{{op}} error",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "sum by (op) (rate(loadgen_ops_busy_total{net=\"$net\",run_id=\"$run_id\"}[1m]))",
+     "legendFormat": "{{op}} busy (503)",
+     "refId": "C",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 8,
+   "gridPos": {
+    "x": 8,
+    "y": 7,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Orders placed and terminal (per s)",
+   "description": "placed: orders the DEX accepted. Terminal outcomes: filled clears; expired is the failure the SLO counts.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(rate(jamswap_order_placed_total{net=\"$net\",run_id=\"$run_id\"}[1m]))",
+     "legendFormat": "placed",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "sum by (outcome) (rate(jamswap_order_terminal_total{net=\"$net\",run_id=\"$run_id\"}[1m]))",
+     "legendFormat": "{{outcome}}",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 9,
+   "gridPos": {
+    "x": 16,
+    "y": 7,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Clearing SLO",
+   "description": "The soak's headline, live. Dashed: the target.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "jamswap_order_clearing_slo{net=\"$net\",run_id=\"$run_id\"}",
+     "legendFormat": "clearing SLO",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "thresholdsStyle": {
+       "mode": "dashed"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "percentunit",
+     "decimals": 4,
+     "max": 1,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "transparent",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 0.9999
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 10,
+   "gridPos": {
+    "x": 0,
+    "y": 15,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Clearing latency (s)",
+   "description": "Order placement to durable fill (p50, p99), and submit to visible-on-chain per op.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.5, sum by (le) (rate(jamswap_order_clear_latency_seconds_bucket{net=\"$net\",run_id=\"$run_id\"}[5m])))",
+     "legendFormat": "p50",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "histogram_quantile(0.99, sum by (le) (rate(jamswap_order_clear_latency_seconds_bucket{net=\"$net\",run_id=\"$run_id\"}[5m])))",
+     "legendFormat": "p99",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "histogram_quantile(0.5, sum by (le, op) (rate(jamswap_settle_latency_seconds_bucket{net=\"$net\",run_id=\"$run_id\"}[5m])))",
+     "legendFormat": "settle p50 {{op}}",
+     "refId": "C",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "unit": "s",
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 11,
+   "gridPos": {
+    "x": 8,
+    "y": 15,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Refused (per min, by op)",
+   "description": "Submissions every guarantor refused (CE-133 queue at cap), and API server errors.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum by (op) (60 * rate(jamswap_refused_total{net=\"$net\",run_id=\"$run_id\"}[2m]))",
+     "legendFormat": "{{op}} refused by every guarantor",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "sum by (route) (60 * rate(jamswap_api_requests_total{net=\"$net\",run_id=\"$run_id\",code=~\"5..\"}[2m]))",
+     "legendFormat": "{{route}} 5xx",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 12,
+   "gridPos": {
+    "x": 16,
+    "y": 15,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Round sizes",
+   "description": "Mean orders per assembled round (sealed + public), orders inside a round awaiting settlement, and orders waiting for the next round.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum by (market) (rate(jamswap_round_orders_sum{net=\"$net\",run_id=\"$run_id\"}[5m])) / sum by (market) (rate(jamswap_round_orders_count{net=\"$net\",run_id=\"$run_id\"}[5m]))",
+     "legendFormat": "market {{market}} orders per round",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "jamswap_inflight_orders{net=\"$net\",run_id=\"$run_id\"}",
+     "legendFormat": "market {{market}} in flight",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "jamswap_mempool_orders{net=\"$net\",run_id=\"$run_id\"}",
+     "legendFormat": "market {{market}} in mempool",
+     "refId": "C",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 13,
+   "gridPos": {
+    "x": 0,
+    "y": 23,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Rounds abandoned and late-landed (per 10 min)",
+   "description": "Rounds released without settling, by reason, and released rounds that settled after all.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "sum(increase(jamswap_round_abandoned_total{net=\"$net\",run_id=\"$run_id\"}[10m])) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0)",
+     "legendFormat": "abandoned (all reasons)",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "sum by (reason) (increase(jamswap_round_abandoned_total{net=\"$net\",run_id=\"$run_id\"}[10m]))",
+     "legendFormat": "abandoned: {{reason}}",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "sum(increase(jamswap_round_late_landed_total{net=\"$net\",run_id=\"$run_id\"}[10m])) or on() (sum(up{net=\"$net\",run_id=\"$run_id\",job=\"dex\"}) * 0)",
+     "legendFormat": "late landed",
+     "refId": "C",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "decimals": 0,
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 14,
+   "gridPos": {
+    "x": 8,
+    "y": 23,
+    "w": 8,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Treasury reserve (JAMKB)",
+   "description": "The treasury's JAMKB reserve against its target (display units), and the top-ups the keeper sent.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "jamswap_treasury_jamkb_atomic{net=\"$net\",run_id=\"$run_id\"} / 1e4",
+     "legendFormat": "reserve",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "jamswap_treasury_reserve_target_atomic{net=\"$net\",run_id=\"$run_id\"} / 1e4",
+     "legendFormat": "target",
+     "refId": "B",
+     "range": true
+    },
+    {
+     "expr": "sum(jamswap_reserve_topups_total{net=\"$net\",run_id=\"$run_id\"})",
+     "legendFormat": "top-ups sent (count)",
+     "refId": "C",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "min": 0
+    },
+    "overrides": [
+     {
+      "matcher": {
+       "id": "byRegexp",
+       "options": "top-ups.*"
+      },
+      "properties": [
+       {
+        "id": "custom.axisPlacement",
+        "value": "right"
+       },
+       {
+        "id": "custom.lineStyle",
+        "value": {
+         "fill": "dash",
+         "dash": [
+          6,
+          4
+         ]
+        }
+       }
+      ]
+     }
+    ]
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 15,
+   "gridPos": {
+    "x": 16,
+    "y": 23,
+    "w": 8,
+    "h": 8
+   }
+  }
+ ]
+}

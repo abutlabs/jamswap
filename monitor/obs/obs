@@ -1,0 +1,444 @@
+#!/usr/bin/env python3
+"""obs: the always-on Prometheus + Grafana that every lasair and jamswap run reports into.
+
+    obs up                       start (or update) the stack; re-attach registered Docker nets
+    obs down [--wipe]            stop it (the data is kept unless --wipe)
+    obs status [-v]              URLs, registered nets, target health (-v: every target)
+    obs ping                     exit 0 iff Prometheus and Grafana both answer
+
+    obs new-run <net>            print a fresh run id, <net>-<UTC yyyymmddTHHMMSSZ>
+    obs register <net> <run_id> <job> <target>... [--label k=v]... [--network N]...
+                 [--project P]...
+        target = [node@]host:port[/path]: node defaults to the host, the path to
+        /metrics, the client label to the job (override: --label client=lasair).
+        One file per (net, job); a new run_id for the net drops the net's old targets.
+        --network connects Prometheus to that Docker network (scrape containers by
+        name); --project connects it to every network of that compose project.
+        Native processes on this machine: host.docker.internal:<port>.
+    obs unregister <net>         drop the net's targets, detach its networks, end the run
+    obs current <net>            print the net's registered run id (exit 1 if none)
+
+    obs annotate <run_id> <text> [--tags a,b] [--start T] [--end T]
+        A Grafana annotation tagged with the run id (and its net): a point at --start
+        (default now), a region when --end is given. T = now | start (the run's start) |
+        unix seconds | unix ms. Tag pass or fail to draw it green or red; anything else
+        is a run event.
+    obs link <run_id> [--dashboard chain|lasair|dex|memory] [--all]
+        the dashboard URL with the run's time range and variables
+
+Every series carries net, run_id, job, node and client. State (file_sd targets, the
+registered nets, the runs) lives in $OBS_STATE (default ~/.cache/jamswap/obs). Ports:
+OBS_GRAFANA_PORT (3300), OBS_PROMETHEUS_PORT (9390), bound to OBS_BIND (127.0.0.1).
+Grafana admin (for annotations): admin / $OBS_GRAFANA_PASSWORD (default obs).
+Stdlib only.
+"""
+import argparse
+import base64
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+STATE = os.environ.get("OBS_STATE") or os.path.join(
+    os.environ.get("JAMSWAP_CACHE") or os.path.expanduser("~/.cache/jamswap"), "obs")
+GRAFANA = "http://localhost:%s" % os.environ.get("OBS_GRAFANA_PORT", "3300")
+PROMETHEUS = "http://localhost:%s" % os.environ.get("OBS_PROMETHEUS_PORT", "9390")
+GRAFANA_AUTH = ("admin", os.environ.get("OBS_GRAFANA_PASSWORD", "obs"))
+PROM_CONTAINER = os.environ.get("OBS_PROMETHEUS_CONTAINER", "obs-prometheus")
+COMPOSE = ["docker", "compose", "-p", "obs", "-f", os.path.join(HERE, "docker-compose.yml")]
+
+# dashboard short name -> Grafana uid (monitor/obs/gen_dashboards.py)
+DASHBOARDS = {"chain": "obs-chain", "lasair": "obs-lasair", "dex": "obs-dex",
+              "memory": "obs-memory"}
+NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
+TARGET = re.compile(r"^(?:(?P<node>[A-Za-z0-9_.:-]+)@)?(?P<host>[A-Za-z0-9_.-]+):(?P<port>\d+)"
+                    r"(?P<path>/\S*)?$")
+
+
+def die(msg, code=2):
+    print("obs: " + msg, file=sys.stderr)
+    sys.exit(code)
+
+
+def check_name(kind, v):
+    if not NAME.match(v or ""):
+        die("bad %s %r: letters, digits and _ . : - only" % (kind, v))
+    return v
+
+
+# ---- state files ---------------------------------------------------------------------
+def _path(*parts):
+    return os.path.join(STATE, *parts)
+
+
+def _read(path):
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _write(path, obj):
+    """Atomically: Prometheus re-reads a target file the moment it changes."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(obj, fh, indent=1)
+        fh.write("\n")
+    os.replace(tmp, path)
+
+
+def net_file(net):
+    return _path("nets", net + ".json")
+
+
+def run_file(run_id):
+    return _path("runs", run_id + ".json")
+
+
+def target_files(net):
+    return sorted(glob.glob(_path("targets", glob.escape(net) + "--*.json")))
+
+
+def parse_target(spec):
+    m = TARGET.match(spec)
+    if not m:
+        die("bad target %r: want [node@]host:port[/path]" % spec)
+    return {"node": m["node"] or m["host"], "addr": "%s:%s" % (m["host"], m["port"]),
+            "path": m["path"] or "/metrics"}
+
+
+def file_sd(net, run_id, job, targets, labels):
+    """One file_sd group per target: each carries its own node label."""
+    groups = []
+    for t in targets:
+        lb = {"net": net, "run_id": run_id, "job": job, "node": t["node"], "client": job}
+        lb.update(labels)
+        if t["path"] != "/metrics":
+            lb["__metrics_path__"] = t["path"]
+        groups.append({"targets": [t["addr"]], "labels": lb})
+    return groups
+
+
+# ---- HTTP ----------------------------------------------------------------------------
+def http(method, url, body=None, auth=None, timeout=5):
+    req = urllib.request.Request(url, method=method,
+                                 data=None if body is None else json.dumps(body).encode())
+    req.add_header("Content-Type", "application/json")
+    if auth:
+        req.add_header("Authorization", "Basic " + base64.b64encode(
+            ("%s:%s" % auth).encode()).decode())
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+    return json.loads(raw) if raw.strip().startswith((b"{", b"[")) else raw.decode()
+
+
+def alive(timeout=2):
+    """(prometheus up, grafana up)"""
+    out = []
+    for url in (PROMETHEUS + "/-/ready", GRAFANA + "/api/health"):
+        try:
+            http("GET", url, timeout=timeout)
+            out.append(True)
+        except (OSError, ValueError):
+            out.append(False)
+    return tuple(out)
+
+
+# ---- Docker --------------------------------------------------------------------------
+def docker(*args):
+    return subprocess.run(["docker"] + list(args), stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True)
+
+
+def prometheus_running():
+    r = docker("inspect", "-f", "{{.State.Running}}", PROM_CONTAINER)
+    return r.returncode == 0 and r.stdout.strip() == "true"
+
+
+def project_networks(project):
+    r = docker("network", "ls", "--filter", "label=com.docker.compose.project=" + project,
+               "--format", "{{.Name}}")
+    return [n for n in r.stdout.split() if n]
+
+
+def connect(network):
+    """Attach Prometheus to a Docker network; True if attached (now or already)."""
+    r = docker("network", "connect", network, PROM_CONTAINER)
+    if r.returncode == 0 or "already exists" in r.stderr:
+        return True
+    print("obs: cannot join network %s: %s" % (network, r.stderr.strip()), file=sys.stderr)
+    return False
+
+
+def disconnect(network):
+    docker("network", "disconnect", network, PROM_CONTAINER)
+
+
+# ---- commands ------------------------------------------------------------------------
+def cmd_up(a):
+    os.makedirs(_path("targets"), exist_ok=True)
+    env = dict(os.environ, OBS_STATE=STATE)
+    r = subprocess.run(COMPOSE + ["up", "-d", "--remove-orphans"], env=env)
+    if r.returncode:
+        sys.exit(r.returncode)
+    deadline = time.time() + 120
+    while alive() != (True, True):
+        if time.time() > deadline:
+            die("stack started but does not answer; docker logs obs-prometheus / obs-grafana", 1)
+        time.sleep(1)
+    # a recreated Prometheus container has lost the networks `register` attached
+    for f in sorted(glob.glob(_path("nets", "*.json"))):
+        rec = _read(f) or {}
+        for n in rec.get("networks", []):
+            connect(n)
+    print("obs up: Grafana %s  (anonymous view; admin for writes)" % GRAFANA)
+    print("        Prometheus %s  (retention %s / %s)" % (
+        PROMETHEUS, os.environ.get("OBS_RETENTION_TIME", "30d"),
+        os.environ.get("OBS_RETENTION_SIZE", "5GB")))
+    return 0
+
+
+def cmd_down(a):
+    env = dict(os.environ, OBS_STATE=STATE)
+    r = subprocess.run(COMPOSE + ["down"] + (["-v"] if a.wipe else []), env=env)
+    return r.returncode
+
+
+def cmd_ping(a):
+    return 0 if alive() == (True, True) else 1
+
+
+def cmd_new_run(a):
+    print("%s-%s" % (check_name("net", a.net), time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())))
+    return 0
+
+
+def _end_run(run_id):
+    rec = _read(run_file(run_id))
+    if rec and not rec.get("end"):
+        rec["end"] = time.time()
+        _write(run_file(run_id), rec)
+
+
+def cmd_register(a):
+    net, run_id, job = check_name("net", a.net), check_name("run_id", a.run_id), check_name("job", a.job)
+    labels = {}
+    for kv in a.label or []:
+        k, sep, v = kv.partition("=")
+        if not sep or not re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", k):
+            die("bad --label %r: want k=v" % kv)
+        if k in ("net", "run_id", "job", "node"):
+            die("--label %s is set by register itself" % k)
+        labels[k] = v
+    targets = [parse_target(t) for t in a.targets]
+
+    rec = _read(net_file(net)) or {}
+    if rec.get("run_id") and rec["run_id"] != run_id:
+        # a new run of the net: its previous run's targets go, and that run ends
+        for f in target_files(net):
+            os.remove(f)
+        _end_run(rec["run_id"])
+        rec = {}
+    networks = list(rec.get("networks", []))
+    for n in (a.network or []) + [n for p in (a.project or []) for n in project_networks(p)]:
+        if n not in networks:
+            networks.append(n)
+    running = prometheus_running()
+    if running:
+        networks = [n for n in networks if connect(n)]
+    _write(_path("targets", "%s--%s.json" % (net, job)), file_sd(net, run_id, job, targets, labels))
+    jobs = sorted(set(rec.get("jobs", [])) | {job})
+    _write(net_file(net), {"net": net, "run_id": run_id, "networks": networks, "jobs": jobs,
+                           "since": rec.get("since") or time.time()})
+    if not os.path.exists(run_file(run_id)):
+        _write(run_file(run_id), {"run_id": run_id, "net": net, "start": time.time(), "end": None})
+    print("obs: %s %s: %s %s%s" % (net, run_id, job, " ".join(t["node"] for t in targets),
+                                   "" if running else "  (Prometheus not running: `obs up`)"))
+    return 0
+
+
+def cmd_unregister(a):
+    net = check_name("net", a.net)
+    rec = _read(net_file(net))
+    for f in target_files(net):
+        os.remove(f)
+    if not rec:
+        return 0
+    if prometheus_running():
+        for n in rec.get("networks", []):
+            disconnect(n)
+    if rec.get("run_id"):
+        _end_run(rec["run_id"])
+    os.remove(net_file(net))
+    print("obs: %s unregistered (run %s)" % (net, rec.get("run_id")))
+    return 0
+
+
+def cmd_current(a):
+    rec = _read(net_file(check_name("net", a.net)))
+    if not rec or not rec.get("run_id"):
+        return 1
+    print(rec["run_id"])
+    return 0
+
+
+def _run(run_id):
+    """The run's record; for a run this machine never registered, the net from its series."""
+    rec = _read(run_file(run_id))
+    if rec:
+        return rec
+    try:
+        q = urllib.parse.urlencode({"match[]": 'up{run_id="%s"}' % run_id})
+        series = http("GET", PROMETHEUS + "/api/v1/series?" + q)["data"]
+        if series:
+            return {"run_id": run_id, "net": series[0].get("net"), "start": None, "end": None}
+    except (OSError, ValueError, KeyError):
+        pass
+    return {"run_id": run_id, "net": None, "start": None, "end": None}
+
+
+def _ms(v, run):
+    if v in (None, "now"):
+        return int(time.time() * 1000)
+    if v == "start":
+        if not run.get("start"):
+            die("run %s has no recorded start" % run["run_id"])
+        return int(run["start"] * 1000)
+    try:
+        x = float(v)
+    except ValueError:
+        die("bad time %r: now | start | unix seconds | unix ms" % v)
+    return int(x if x > 1e11 else x * 1000)
+
+
+def cmd_annotate(a):
+    run = _run(check_name("run_id", a.run_id))
+    extra = [t.strip() for t in (a.tags or "").split(",") if t.strip()]
+    tags = ["obs", a.run_id] + ([run["net"]] if run.get("net") else []) + extra
+    if not {"pass", "fail"} & set(extra):
+        tags.append("event")
+    body = {"time": _ms(a.start, run), "tags": tags, "text": a.text}
+    if a.end:
+        body["timeEnd"] = _ms(a.end, run)
+    try:
+        r = http("POST", GRAFANA + "/api/annotations", body, auth=GRAFANA_AUTH)
+    except urllib.error.HTTPError as e:
+        die("Grafana refused the annotation: %s %s" % (e.code, e.read().decode()[:200]), 1)
+    except OSError as e:
+        die("Grafana unreachable at %s: %s" % (GRAFANA, e), 1)
+    if a.verbose:
+        print("annotation %s: %s" % (r.get("id"), a.text))
+    return 0
+
+
+def link(run_id, dashboard="chain"):
+    run = _run(run_id)
+    q = {"orgId": "1", "var-run_id": run_id}
+    if run.get("net"):
+        q["var-net"] = run["net"]
+    if run.get("start"):
+        q["from"] = str(int(run["start"] * 1000) - 60_000)
+        if run.get("end"):
+            q["to"] = str(int(run["end"] * 1000) + 60_000)
+        else:
+            q["to"], q["refresh"] = "now", "10s"
+    else:
+        q["from"], q["to"] = "now-6h", "now"
+    return "%s/d/%s?%s" % (GRAFANA, DASHBOARDS[dashboard], urllib.parse.urlencode(q))
+
+
+def cmd_link(a):
+    check_name("run_id", a.run_id)
+    for d in (DASHBOARDS if a.all else [a.dashboard]):
+        print(("%-7s " % d if a.all else "") + link(a.run_id, d))
+    return 0
+
+
+def cmd_status(a):
+    prom, graf = alive()
+    print("Grafana    %s  %s" % (GRAFANA, "up" if graf else "DOWN"))
+    print("Prometheus %s  %s" % (PROMETHEUS, "up" if prom else "DOWN"))
+    targets = []
+    if prom:
+        try:
+            targets = http("GET", PROMETHEUS + "/api/v1/targets?state=active")["data"]["activeTargets"]
+        except (OSError, ValueError, KeyError):
+            pass
+    nets = [_read(f) or {} for f in sorted(glob.glob(_path("nets", "*.json")))]
+    if not nets:
+        print("no net registered")
+    for rec in nets:
+        mine = [t for t in targets if t["labels"].get("run_id") == rec.get("run_id")]
+        jobs = {}
+        for t in mine:
+            up, n = jobs.get(t["labels"]["job"], (0, 0))
+            jobs[t["labels"]["job"]] = (up + (t["health"] == "up"), n + 1)
+        print("%-14s %s  %s" % (rec.get("net"), rec.get("run_id"),
+                                "  ".join("%s %d/%d up" % (j, u, n) for j, (u, n) in sorted(jobs.items()))))
+        if a.verbose:
+            for t in sorted(mine, key=lambda t: (t["labels"]["job"], t["labels"]["node"])):
+                print("    %-9s %-10s %-9s %-4s %s %s" % (
+                    t["labels"]["job"], t["labels"]["node"], t["labels"].get("client", ""),
+                    t["health"], t["scrapeUrl"], t.get("lastError", "")))
+    return 0
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="obs", description=__doc__.split("\n\n")[0],
+                                 formatter_class=argparse.RawDescriptionHelpFormatter,
+                                 epilog=__doc__.split("\n\n", 1)[1])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("up").set_defaults(fn=cmd_up)
+    p = sub.add_parser("down")
+    p.add_argument("--wipe", action="store_true", help="also delete the data volumes")
+    p.set_defaults(fn=cmd_down)
+    p = sub.add_parser("status")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.set_defaults(fn=cmd_status)
+    sub.add_parser("ping").set_defaults(fn=cmd_ping)
+    p = sub.add_parser("new-run")
+    p.add_argument("net")
+    p.set_defaults(fn=cmd_new_run)
+    p = sub.add_parser("register")
+    p.add_argument("net")
+    p.add_argument("run_id")
+    p.add_argument("job")
+    p.add_argument("targets", nargs="+")
+    p.add_argument("--label", action="append")
+    p.add_argument("--network", action="append")
+    p.add_argument("--project", action="append")
+    p.set_defaults(fn=cmd_register)
+    p = sub.add_parser("unregister")
+    p.add_argument("net")
+    p.set_defaults(fn=cmd_unregister)
+    p = sub.add_parser("current")
+    p.add_argument("net")
+    p.set_defaults(fn=cmd_current)
+    p = sub.add_parser("annotate")
+    p.add_argument("run_id")
+    p.add_argument("text")
+    p.add_argument("--tags", default="")
+    p.add_argument("--start")
+    p.add_argument("--end")
+    p.add_argument("-v", "--verbose", action="store_true")
+    p.set_defaults(fn=cmd_annotate)
+    p = sub.add_parser("link")
+    p.add_argument("run_id")
+    p.add_argument("--dashboard", "-d", choices=sorted(DASHBOARDS), default="chain")
+    p.add_argument("--all", action="store_true", help="every dashboard, one per line")
+    p.set_defaults(fn=cmd_link)
+    a = ap.parse_args(argv)
+    return a.fn(a)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

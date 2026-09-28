@@ -48,6 +48,10 @@ The rest of the verbs (add `NET=pj6` for pj6):
 ./dex rebuild   # only if you changed the on-chain service (service/src)
 ```
 
+To watch a net or a soak live in Grafana, start the obs stack once (`./dex obs up`,
+then http://localhost:3300); every `./dex up` after that prints its dashboard link
+([`monitor/README.md`](monitor/README.md)).
+
 Both nets are GP 0.8.0 and run on amd64 and arm64. lasair6 pulls the published
 `ghcr.io/abutlabs/lasair:2.1.2`; pj6 builds a PolkaJam image from the public release
 (`nightly-2026-09-22`, sha256-pinned), fetched on your machine and never committed here.
@@ -83,7 +87,7 @@ leaves byte-identical service state ([`docs/DIFFERENTIAL_TESTNET.md`](docs/DIFFE
 | Any JIP-2 node | `CHAIN_BACKEND=jip2 CHAIN_RPC=ws://… CHAIN_SPEC=… python3 offchain/server.py` | The DEX deploys itself on a chain with a Bootstrap service |
 | Single-node quickstart | `docker compose up` | One lasair process, UI at `:8080`, no finality — the 60-second demo |
 | Cross-client research nets | `./dex up NET=<net>` (`./dex nets` lists them) | lasair, PolkaJam, JavaJAM and pbnjam in one net — consensus research, not the DEX |
-| Monitoring | `make monitor` | Prometheus + Grafana on `:3010` |
+| Monitoring | `./dex obs up` | Always-on Prometheus + Grafana (`:3300`) every net and soak reports into ([`monitor/README.md`](monitor/README.md)) |
 
 Every mode, with local source builds and platform notes:
 [`docs/RUNNING.md`](docs/RUNNING.md). Every net, its clients, GP version, finality and

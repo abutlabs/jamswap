@@ -27,6 +27,14 @@
 #   ./dex soak NET=pj6 [SECS]  # A1-A4 (docs/NETS.md): load + netwatch for SECS (600),
 #                              # then state parity and the soak verdict; exit 0 iff all pass
 #
+# Observability (monitor/README.md): with the obs stack running (`./dex obs up`: Grafana
+# http://localhost:3300), `up` registers the net's metrics under a fresh run id and prints
+# its dashboard link; soak, load, noload and down annotate the run. Without obs, one line
+# says so and the net runs as before.
+#
+#   ./dex obs up|down|status   # the stack (monitor/obs/obs; any obs subcommand)
+#   ./dex link NET=<name>      # dashboard links for the net's current run
+#
 # Keys: every validator holds only its own key. LASAIR_DEV_ALL_KEYS=1 puts the lasair
 # nodes in lasair's devnet mode instead (each derives every dev secret).
 # LASAIR_DEX_BACKEND=jamnp: the DEX on lasair's HTTP bridges (a lasair image before 2.1.0).
@@ -79,6 +87,9 @@ if [ -n "$NET_JAVAJAM" ]; then
     export JAVAJAM_IMAGE
   fi
 fi
+
+# the obs stack (nets/obsnet.py): never fails the verb that calls it
+_obs() { python3 nets/obsnet.py "$1" "$NET" "${@:2}" || true; }
 
 _finality() { curl -s --max-time 5 "$URL/api/finality" 2>/dev/null; }
 _market() {
@@ -141,6 +152,7 @@ case "$cmd" in
       "${COMPOSE[@]}" up -d
       # manual trading by default, as on lasair6
       if [ -n "$NET_DEX_BACKEND" ]; then "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true; fi
+      _obs up
       echo "✓ $NET up: validators (index order) = $NET_CLIENTS"
       if [ "$JJ_NATIVE" = 1 ]; then echo "  JavaJAM: native processes; every validator addressed at host $HOST_IP"
       elif [ -n "$NET_JAVAJAM" ]; then echo "  JavaJAM: containers ($JAVAJAM_IMAGE)"; fi
@@ -158,6 +170,7 @@ case "$cmd" in
         done
         echo
         if [ "$(_available)" = True ]; then
+          _obs note "DEX ready at $URL" --tags dex
           echo "✓ DEX ready → $URL   (loadgen is OFF; './dex load NET=$NET' to drive it)"
         else
           echo "DEX not answering at $URL after 10 min: './dex logs NET=$NET dex'"
@@ -170,6 +183,7 @@ case "$cmd" in
     "${COMPOSE[@]}" build -q spec-init
     "${COMPOSE[@]}" up -d
     "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true   # manual trading by default
+    _obs up
     if [ "$NET" = lasair6 ]; then
       echo "net starting — warming up (Safrole tickets + finality bootstrap, ~5 min)…"
       for i in $(seq 1 60); do
@@ -184,10 +198,13 @@ case "$cmd" in
     fi
     ;;
 
-  load)   "${COMPOSE[@]}" start loadgen; echo "✓ loadgen ON (PROFILE from compose; sealed crossing pairs)";;
-  noload) "${COMPOSE[@]}" stop loadgen;  echo "✓ loadgen OFF — trade manually at $URL";;
+  load)   "${COMPOSE[@]}" start loadgen; _obs note "loadgen on" --tags load
+          echo "✓ loadgen ON (PROFILE from compose; sealed crossing pairs)";;
+  noload) "${COMPOSE[@]}" stop loadgen; _obs note "loadgen off" --tags load
+          echo "✓ loadgen OFF — trade manually at $URL";;
 
   down)
+    _obs down                                    # first: Prometheus leaves the net's network
     "${COMPOSE[@]}" down -v --remove-orphans
     if [ -n "$NET_JAVAJAM" ] && [ -d "$STATE" ]; then
       nets/javajam-native.sh stop "$STATE"
@@ -214,6 +231,9 @@ case "$cmd" in
     ;;
 
   soak)   exec python3 nets/soak.py "$NET" --secs "${2:-600}";;
+
+  obs)    shift; exec monitor/obs/obs "$@";;
+  link)   exec python3 nets/obsnet.py link "$NET";;
 
   nets)   python3 nets/netgen.py list;;
   gen)    python3 nets/netgen.py write && python3 nets/netgen.py check && echo "✓ nets/compose/*.yml regenerated";;
