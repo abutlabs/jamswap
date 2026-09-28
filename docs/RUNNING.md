@@ -13,16 +13,22 @@ which net is which.
 | Backend | Talks to | The service | Used on |
 |---|---|---|---|
 | `jip2` | a node's JIP-2 RPC at `CHAIN_RPC` (default `ws://localhost:19800`): heads and finality, service reads at the best or finalized block, and `submitWorkPackage` with a GP 0.8.0 work-package it builds (authorizer from the JIP-4 chain spec at `CHAIN_SPEC`) | deployed at startup through the Bootstrap service, or named by `SERVICE_ID` | pj6, any JIP-2 node |
-| `jamnp` (default) | lasair's bridges: `BUILDER_URL` (CE-133 submit), `READER_URL` (CE-129 read at the node's head), `NODE_METRICS_URL` (heads and finality from lasair's gauges) | seeded into genesis (`SERVICE_ID`) | lasair6, the quickstart, the mixed net |
+| `jamnp` (default) | lasair's bridges: `BUILDER_URL` (CE-133 submit), `READER_URL` (CE-129 read at the node's head), `NODE_METRICS_URL` (heads and finality from lasair's gauges) | seeded into genesis (`SERVICE_ID`) | lasair6, lasair-pj, the quickstart, the mixed net |
 
 The service blob, `service/jamswap-service.jam` (GP 0.8.0), is the same on both.
-`jamnp` retires once lasair serves JIP-2 (lasair#68).
+On `jamnp` the API opens once the default markets are listed on chain (`LIST_WAIT_SECS`,
+default 300): a net that has just started may refuse work for its first minute. Since
+2.1.0 lasair serves JIP-2 through `lasair-reader` (lasair#68, finalized reads lasair#70);
+moving the DEX on lasair nets from `jamnp` to it is #26.
 
 ## The DEX nets
 
-`./dex up` starts lasair6 (six lasair validators) and `./dex up NET=pj6` starts pj6
-(six PolkaJam validators, no lasair). Both finalize under GRANDPA; the README has the
-walkthrough and [`NETS.md`](NETS.md) the details. For pj6:
+`./dex up` starts lasair6 (six lasair validators), `./dex up NET=pj6` pj6 (six PolkaJam
+validators, no lasair) and `./dex up NET=lasair-pj` lasair-pj (three of each, lasair
+guaranteeing the DEX's work). All finalize under GRANDPA, and every validator holds only
+its own key (`LASAIR_DEV_ALL_KEYS=1` puts lasair nodes in lasair's devnet mode instead);
+the README has the walkthrough and [`NETS.md`](NETS.md) the details. Every verb takes
+`NET=`; for pj6:
 
 ```sh
 ./dex up NET=pj6              # builds, mints genesis, deploys + sets up → http://localhost:8201
@@ -56,8 +62,7 @@ too); `GENESIS_BALANCE` sets the funding per asset (display units, default 1,000
 the treasury's JAMKB reserve deposit has landed (`RESERVE_WAIT_SECS`, default 120), so the
 first order is not refused as under-reserved. How the Bootstrap instruction was
 established is in [`offchain/deploy.py`](../offchain/deploy.py). This path is verified on
-PolkaJam; lasair nets keep the genesis-seeded service, since lasair has no Bootstrap
-service or JIP-2 server yet (lasair#73, lasair#68).
+PolkaJam; lasair nets keep the genesis-seeded service on `jamnp` until #26.
 
 Point `CHAIN_RPC` at a node that forwards work-packages. A PolkaJam **validator**'s RPC
 does not (it answers `submitWorkPackage` with "Failed to submit work-package to even a
@@ -80,10 +85,15 @@ docker compose up            # trading UI at http://localhost:8080
 ```
 
 Nothing to build: one lasair process from the published multi-arch image
-(`ghcr.io/abutlabs/lasair`) authors all six dev validators' slots and hosts the
-service, seeded into genesis; lasair's CE-133 builder and CE-129 reader bridges connect
-the DEX to it over JAMNP-S/QUIC. There is no finality, so fills are not durable: it is
-the 60-second demo, not a net.
+(`ghcr.io/abutlabs/lasair`) authors all six dev validators' slots in lasair's devnet mode
+(`--dev-all-keys --own 0,…,5`) and hosts the service, seeded into genesis; lasair's
+CE-133 builder and CE-129 reader bridges connect the DEX to it over JAMNP-S/QUIC. There
+is no finality, so fills are not durable: it is the 60-second demo, not a net.
+
+> **Broken with lasair 2.0.0 and 2.1.0 (2026-09-28):** a lasair started without
+> `--genesis-spec` builds its own genesis and dies at once (`Invalid_argument("Bytes.blit")`
+> in `Chain.patch_kv`), so `chain` restarts forever. Use `./dex up` until a lasair
+> release fixes it.
 
 The UI works as on the DEX nets: create an account, fund it in the Faucet tab (USDC,
 DOT, JAMKB across DOT/USDC, JAMKB/USDC and JAMKB/DOT), place a Limit or Market order
@@ -131,7 +141,7 @@ mix of lasair, PolkaJam, JavaJAM and pbnjam, one command each.
 
 ```sh
 LASAIR_IMAGE=lasair:local docker compose up          # any lasair image, e.g. a local source build
-LASAIR_TAG=2.0.0 docker compose up                   # the quickstart's tag (default 2.0.0)
+LASAIR_TAG=2.1.0 docker compose up                   # the quickstart's tag (default 2.1.0)
 PJ_RELEASE=nightly-2026-09-22 docker compose -f docker-compose.mixed.yml up   # the PolkaJam release (default)
 ```
 

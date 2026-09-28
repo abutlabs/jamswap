@@ -34,12 +34,11 @@ are baked into the shared genesis by `nets/genesis.py`, and lasair dials peers b
 ## Keys
 
 Every validator is the standard JAM dev account of its index (JIP-5; `nets/devkeys.py`),
-and each client holds its own: PolkaJam loads dev seed `i`. lasair is the exception
-until lasair#62: with `LASAIR_DEV_ALL_KEYS=1` (the default here) a lasair node signs
-guarantees as any lasair index (`GUARANTOR_OWN=3,4,5`), and lasair ≤ 2.x also derives
-every dev secret and assures for any validator, PolkaJam's included.
-`LASAIR_DEV_ALL_KEYS=0 ./dex up NET=mixed` narrows the guarantees to the node's own index
-(see `docs/NETS.md`, "Keys per client").
+and each client holds only its own: PolkaJam loads dev seed `i`, lasair runs
+`DEV_VALIDATOR=i` (`--dev-validator i`, lasair ≥ 2.1.0). `LASAIR_DEV_ALL_KEYS=1 ./dex up
+NET=mixed` puts the lasair nodes in lasair's devnet mode instead (`--dev-all-keys`: every
+dev secret, guarantees as any lasair index `GUARANTOR_OWN=3,4,5`); see `docs/NETS.md`,
+"Keys per client".
 
 ## Compliance
 

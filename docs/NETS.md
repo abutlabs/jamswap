@@ -1,12 +1,15 @@
 # Which net is which
 
-The DEX runs on two nets today. Both are GP 0.8.0, both finalize under GRANDPA, and
-each is a single client:
+The DEX runs on three nets today. All are GP 0.8.0, all finalize under GRANDPA, and on
+all of them every validator holds only its own key:
 
 - **`lasair6`** (the `./dex` default): six lasair validators. The DEX reaches them
   through lasair's JAMNP-S builder and reader bridges ([below](#the-dex-on-lasair-lasair6)).
 - **`pj6`**: six stock PolkaJam validators and no lasair anywhere. The DEX reaches them
   over JIP-2 and deploys its service at startup ([below](#the-dex-on-jip-2-pj6-17)).
+- **`lasair-pj`**: three lasair and three PolkaJam validators on one chain, one
+  finality. lasair guarantees the DEX's work, co-signed by either client
+  ([below](#the-dex-on-lasair-and-polkajam-lasair-pj-20)).
 
 The other nets are cross-client research: do different clients keep one head, finalize
 together and hold the same state? None of them is a DEX net today.
@@ -30,19 +33,19 @@ next `up`; only a change to `service/src` needs `./dex rebuild`.
 
 | Net | Clients (validators 0..5) | GP | Finality | DEX | Issue |
 |---|---|---|---|---|---|
-| `lasair6` | lasair ×6 | 0.8.0 | GRANDPA (lasair, jam-np PR #6 draft) | **runs**: lasair's bridges, service in genesis; UI :8081 | #12 |
+| `lasair6` | lasair ×6 | 0.8.0 | GRANDPA (lasair, jam-np PR #6 draft) | **runs**: lasair's bridges, service in genesis; A1–A4 pass (10-min soak); UI :8081 | #12 |
 | `pj6` | PolkaJam ×6 | 0.8.0 | GRANDPA (PolkaJam) | **runs**: JIP-2, runtime deploy; A1–A4 pass (10-min and 1-hour soaks); UI :8201 | #17 |
 | `mixed` | PolkaJam ×3, lasair ×3 | 0.8.0 | none shared (PolkaJam runs `dummy`) | UI on :8090 through lasair's bridges; does not settle (no shared finality; a 45-min run in 2026-07 cleared nothing) | #2 |
 | `pj-javajam` | PolkaJam ×3, JavaJAM ×3 | 0.8.0 | GRANDPA on both: one head, but finality stays at genesis | none | #18 |
 | `pj-javajam-42` | PolkaJam ×4, JavaJAM ×2 | 0.8.0 | GRANDPA on both; not run yet | none | #18 |
 | `pj-pbnjam` | PolkaJam ×5, pbnjam ×1 | 0.8.0 (pbnjam: unconfirmed) | GRANDPA: the five PolkaJam nodes finalize alone (5 of 6) | none; the pbnjam image does not start | #19 |
 | `pj-pbnjam-42` | PolkaJam ×4, pbnjam ×2 | 0.8.0 (pbnjam: unconfirmed) | GRANDPA | none; blocked on the pbnjam image | #19 |
-| `lasair-pj-javajam` | lasair ×2, PolkaJam ×2, JavaJAM ×2 | 0.8.0 | GRANDPA | configured (lasair's bridges), not run: needs lasair#54, #60, #66 | #20 |
+| `lasair-pj` | lasair ×3, PolkaJam ×3 | 0.8.0 | GRANDPA, shared: both clients count each other's votes | **runs**: lasair's bridges, service in genesis; A1–A4 pass (10-min soak), state parity across both clients; UI :8206 | #20 |
 | `nolasair` | PolkaJam ×2, JavaJAM ×2, pbnjam ×2 | 0.8.0 | GRANDPA | none in the profile yet; not run: needs #18, #19 | #21 |
 
-Versions: lasair `ghcr.io/abutlabs/lasair:2.0.0`, PolkaJam `nightly-2026-09-22` (0.1.29),
+Versions: lasair `ghcr.io/abutlabs/lasair:2.1.0`, PolkaJam `nightly-2026-09-22` (0.1.29),
 JavaJAM 0.4.3, pbnjam-node `main-54226be` (the image does not state its GP version;
-likely 0.8.0, see #19). Status as of 2026-09-27 on an Apple M1 Pro; details
+likely 0.8.0, see #19). Status as of 2026-09-27 (lasair6, lasair-pj: 2026-09-28) on an Apple M1 Pro; details
 [below](#what-the-clients-did-2026-09-26). `lasair6` and `mixed` are hand-written
 compose files; the others are generated from [`nets/profiles.py`](../nets/profiles.py).
 
@@ -50,8 +53,8 @@ compose files; the others are generated from [`nets/profiles.py`](../nets/profil
 
 | File | Net | UI | What it's for |
 |---|---|---|---|
-| `docker-compose.lasair6.yml` | 6× lasair, GRANDPA | :8081 | The DEX on lasair (`./dex up`). |
-| `nets/compose/<net>.yml` | per-index client layouts | pj6: :8201 | **Generated** nets (below), including `pj6`, the DEX on PolkaJam. `./dex up NET=<net>`. |
+| `docker-compose.lasair6.yml` | 6× lasair, GRANDPA | :8081 | The DEX on lasair (`./dex up`, `./dex soak`). |
+| `nets/compose/<net>.yml` | per-index client layouts | pj6: :8201, lasair-pj: :8206 | **Generated** nets (below), including `pj6`, the DEX on PolkaJam, and `lasair-pj`, the DEX on both. `./dex up NET=<net>`. |
 | `docker-compose.yml` | one lasair process | :8080 | Quickstart demo: one command, nothing to build. No finality, so fills are not durable. |
 | `docker-compose.mixed.yml` | 3× lasair + 3× PolkaJam | :8090 | Consensus research: two clients co-authoring one chain. No shared finality; not a settlement net. |
 | `docker-compose.mixed-dex.yml` | mixed, lasair-dominant | (overlay) | Historical (2026-07, GP 0.7.2): lasair authors nearly every block so trades settle; not re-verified at GP 0.8.0. |
@@ -72,7 +75,7 @@ them. Add `NET=<name>` to any `./dex` verb (default `lasair6`):
 ./dex logs NET=pj6 pj3      # a node's log (native JavaJAM nodes too)
 ./dex down NET=pj6          # tear down, wipe the chain, stop native nodes
 ./dex gen                   # regenerate nets/compose/*.yml after editing nets/
-# nets with the JIP-2 DEX (pj6):
+# the DEX nets (lasair6, pj6, lasair-pj):
 ./dex load NET=pj6          # start the load generator (up leaves it stopped); noload stops it
 ./dex soak NET=pj6 3600     # A1-A4 in one command (below); default 600 s
 ```
@@ -83,7 +86,8 @@ A layout is one client per validator index: `lasair`, `pj` (`polkajam`), `pbnjam
 `javajam` (`jj`); tiny = 6. Validator *i* is always the **standard JAM dev account i**
 (JIP-5: seed = `u32-LE(i)` × 8), whichever client runs it, and that client holds exactly
 that key: JavaJAM and pbnjam start with `--dev-validator i`, PolkaJam loads dev seed *i*
-(`--key-seed-file`, same keys as its `--dev-validator i`), lasair runs `OWN=i`.
+(`--key-seed-file`, same keys as its `--dev-validator i`), lasair runs `DEV_VALIDATOR=i`
+(`--dev-validator i`, lasair#54).
 
 The shared genesis is minted by [`nets/genesis.py`](../nets/genesis.py) in the
 `spec-init` container, with no lasair binary unless lasair is in the layout:
@@ -105,7 +109,7 @@ The shared genesis is minted by [`nets/genesis.py`](../nets/genesis.py) in the
 
 | Client | Image / binary (pinned) | Started as validator *i* | RPC (host) |
 |---|---|---|---|
-| lasair | `${LASAIR_IMAGE}` (default `ghcr.io/abutlabs/lasair:2.0.0`) | mesh entrypoint, `OWN=i`, `WALL=1` next to wall-clock clients | none yet (lasair#68): the probe reads its `STATUS` log line |
+| lasair | `${LASAIR_IMAGE}` (default `ghcr.io/abutlabs/lasair:2.1.0`) | mesh entrypoint, `DEV_VALIDATOR=i`, `WALL=1` next to wall-clock clients | JIP-2 through the node's own `lasair-reader` (lasair#68) on DEX nets; `./dex heads` reads its `STATUS` log line |
 | PolkaJam | `jamswap-polkajam:<PJ_RELEASE>`, built by `mixed/Dockerfile.polkajam` (target `polkajam`): the release tarball fetched at build time, sha256-pinned per release and arch | `mixed/pj-entrypoint.sh`: `--peer-id`, `--key-seed-file pj_i.seed`, `--finality-mode`, `--bootnode` | `127.0.0.1:42000+100·net+i` |
 | pbnjam | `docker.io/shimonchick/pbnjam-node:main-54226be@sha256:ceb5f651…` | `--chain /shared/spec.json --dev-validator i --rpc-port … --temp` (its documented flags; `--help` can't run, see below) | same |
 | JavaJAM (macOS) | native: release zip 0.4.3 + Temurin JRE 25.0.4.1, fetched at run time into `~/.cache/jamswap` (sha256-checked) by [`nets/javajam-native.sh`](../nets/javajam-native.sh) | `run --chain <spec> --dev-validator i --port … --rpc --finality-mode …` | same |
@@ -131,21 +135,20 @@ heap (~110 MB resident per node on a tiny net). Each node runs in its own sessio
 
 ### Keys per client
 
-The target: **no node signs as another client's validator.** PolkaJam, JavaJAM and pbnjam
-already hold only their own dev key. lasair ≤ 2.x is the exception — to guarantee and
-assure on its own it derives every dev secret — until lasair#54 (one key per
-validator), lasair#60 (CE-134/135 co-guaranteeing) and lasair#62 (assurances) reach a
-published image. That is an explicit, per-net switch:
+**No node signs as another validator.** Every client holds only its own dev key,
+lasair too since 2.1.0: one key per process (lasair#54), guarantees co-signed by the
+core's other validators over CE-134/135 whatever their client (lasair#60), and
+assurances as itself (lasair#62). lasair's devnet mode stays behind one switch, which
+`./dex` passes to every lasair net (lasair6, mixed and the generated ones); the node's
+entrypoint wrapper turns it into lasair's flags:
 
-| `LASAIR_DEV_ALL_KEYS` | lasair nodes sign guarantees as | Default on |
+| `LASAIR_DEV_ALL_KEYS` | a lasair node runs | it signs as |
 |---|---|---|
-| `1` | every **lasair** index of the layout (`GUARANTOR_OWN` = the lasair set; lasair6: all six, mixed: 3,4,5) | nets with a lasair node |
-| `0` | their own index only (`./dex` sets `LASAIR_GUARANTOR_OWN=` empty) | nets with no lasair node (forced: nothing to share) |
+| `0` (default) | `DEV_VALIDATOR=i` → `--dev-validator i` | validator *i* only |
+| `1` | `OWN=i` → `--dev-all-keys --own i` (devnet only) | any lasair index of the layout for guarantees (`GUARANTOR_OWN`), any validator for assurances |
 
-With lasair 2.0.0, `0` narrows **guarantees** only: that release still derives every dev
-secret and assures for any validator. The switch is also passed to each lasair node as
-`LASAIR_DEV_ALL_KEYS`, for a lasair#54 entrypoint to choose `--dev-all-keys` or
-`--dev-validator i`. Expect `0` to stop settlement until lasair#60/#62.
+A lasair image older than 2.1.0 has neither `--dev-validator` nor `--dev-all-keys`: run
+it with `LASAIR_DEV_ALL_KEYS=1` (its entrypoint then passes a bare `--own i`).
 
 ### Checking a net: `./dex heads`
 
@@ -160,22 +163,84 @@ a finalizing net finality advanced on every node with no conflicting finalized b
 ### The DEX on lasair: lasair6
 
 `./dex up` runs `docker-compose.lasair6.yml`: six lasair validators (dev accounts 0..5,
-chain-paced `WALL=0`, `LASAIR_FINALITY=grandpa`) and the DEX on the chain adapter's
-`jamnp` backend, because lasair serves no JIP-2 yet (lasair#68):
+each holding only its own key, `LASAIR_FINALITY=grandpa`, chain-paced `WALL=0` at one
+slot every 6 s) and the DEX on the chain adapter's `jamnp` backend:
 
 | Service | What it is |
 |---|---|
 | `lm0`..`lm5` | the validators; `spec-init` mints their genesis with the service in it |
-| `builder` | `jamnp-builder`, lasair's CE-133 bridge: HTTP `/submit` → a work-package to the lasair nodes. Its packages are accepted only by lasair's own CE-133 endpoint until they are spec-valid (lasair#69) |
-| `reader` | `lasair-reader`, lasair's CE-129 bridge: HTTP `/read` → a state read at lm0's head |
-| `dex` | `offchain/server.py` with `SERVICE_ID=100` (seeded into genesis: lasair has no Bootstrap service yet, lasair#73), heads and finality from lm0's Prometheus gauges, `SETTLE_HOLD_SECS=0`; UI on `:8081` |
+| `builder` | `jamnp-builder`, lasair's CE-133 bridge: HTTP `/submit` → a spec-valid work-package (lasair#69) to a lasair guarantor, which the core's other two validators co-sign (CE-134/135) |
+| `reader`, `reader1`..`reader5` | `lasair-reader` on lm0..lm5: HTTP `/read` (CE-129, proven against the block's state root) and the JIP-2 node RPC on the same port (lasair#68). The dex reads through `reader` |
+| `dex` | `offchain/server.py` with `SERVICE_ID=100` (seeded into genesis), heads and finality from lm0's Prometheus gauges, `SETTLE_HOLD_SECS=0`; UI on `:8081` |
 | `loadgen` | `offchain/loadgen.py` (`./dex load`) |
+| `netwatch` | every node over its reader's JIP-2 (`127.0.0.1:9300`); `./dex soak` runs A1–A4 as on pj6 |
+
+**Why 6 s slots.** Since lasair#69 the builder sets a package's context when it submits
+it: the anchor must still be among the last 8 blocks, and the lookup anchor within 24
+slots, when the guarantee is reported. lasair6 used to author a slot a second; at that
+pace the window is 8 s, while a 48-order round takes 15–100 s to refine on a laptop (all
+three co-guarantors refine it, and the auditors again). The large rounds expired
+unreported (`anchor_too_old`, `lookup_anchor_too_old`) and settlement stalled after the
+first minute: SLO 0.26 in a 10-minute soak (2026-09-28). At 6 s the same soak passes:
+
+```
+clearing SLO        : 1.000000  (target 0.9999)  PASS
+  cleared           : 242
+  missed            : 0  (expired/lost 0, stuck-open 0)
+SEALED zero-loss    : PASS  (seen 23, terminal 23, stuck-open 0)
+clear latency       : p50 59.0s  p99 143.7s
+one head            : PASS  (hash (JIP-2 nodes); 130/130 samples ok, max lag 1 slots, 0 divergence episode(s))
+finality            : PASS  (finalizing, required; 0 conflict(s), 0 regression(s), longest stall 2 slots vs 12, 134 finalized slots hash-checked)
+authoring (pi)      : PASS  (blocks per validator {'0': 46, '1': 39, '2': 29, '3': 41, '4': 35, '5': 38})
+state parity        : PASS  (all digests agree; service 100, 74 keys at final slot 229 0x23f56642 (from lm0), attempt 1)
+VERDICT (orders + chain): PASS
+offered load        : PASS  (240 orders offered, 0 refused, 0 busy)
+```
+
+(`./dex soak 600`, lasair 2.1.0 = local build of 96b40ca, Apple M1 Pro; every validator
+credited with 19–22 guarantees and 36–39 assurances, each signed as itself.)
 
 Two differences from pj6 follow from the backend. The reader answers at its head only,
 so the DEX gates reveals and receipts by comparing block heights with the finalized
-height, where on JIP-2 it reads the finalized state itself; #26 moves lasair6 to finalized reads
-once the default image carries lasair#70. And lasair reports a service footprint of 0,
+height, where on JIP-2 it reads the finalized state itself; #26 moves the DEX on lasair
+to JIP-2 through its reader, which reads at the finalized block (lasair#70). And the
+jamnp backend cannot read the service footprint,
 so the JAMKB backpressure that pj6 needs a reserve keeper for is not live here.
+
+### The DEX on lasair and PolkaJam: lasair-pj (#20)
+
+`./dex up NET=lasair-pj` runs lasair on validators 0–2 and stock PolkaJam on 3–5, each
+holding only its own key, on one genesis (`polkajam gen-spec`, the service written into
+it by lasair). lasair runs wall-clock (`WALL=1`) next to PolkaJam and both run the jam-np
+PR #6 GRANDPA draft; 5 of 6 votes finalize, so neither client finalizes without the
+other. The DEX stack is lasair6's: `jamnp-builder` hands each work-package to a lasair
+guarantor only (CE-133), which shares it with the core's other two validators over
+CE-134 whatever their client and collects their signatures (CE-135). Every lasair node
+has its own `lasair-reader`, so netwatch reads all six nodes over JIP-2 by hash, and
+`./dex soak NET=lasair-pj` runs A1–A4 exactly as on pj6.
+
+Result (2026-09-28, Apple M1 Pro; lasair 2.1.0 = local build of 96b40ca, PolkaJam
+nightly-2026-09-22; fresh net; loadgen trading at RATE 12, 20 % of sells sealed):
+
+```
+clearing SLO        : 1.000000  (target 0.9999)  PASS
+  cleared           : 237
+  missed            : 0  (expired/lost 0, stuck-open 0)
+SEALED zero-loss    : PASS  (seen 19, terminal 18, stuck-open 0)
+one head            : PASS  (hash (JIP-2 nodes); 130/130 samples ok, max lag 2 slots, 0 divergence episode(s))
+finality            : PASS  (finalizing, required; 0 conflict(s), 0 regression(s), longest stall 1.0 slots vs 12, 131 finalized slots hash-checked)
+authoring (pi)      : PASS  (blocks per validator {'0': 23, '1': 21, '2': 24, '3': 20, '4': 19, '5': 27})
+state parity        : PASS  (all digests agree; service 100, 74 keys at final slot 9137257 0xe652ea42 (from lm0), attempt 1)
+  lm0 lm1 lm2 (lasair), pj3 pj4 pj5 (polkajam): 2db0b150650ea02f  present 51  (pinned)
+VERDICT (orders + chain): PASS
+offered load        : PASS  (240 orders offered, 0 refused, 0 busy)
+```
+
+Every DEX work-package was guaranteed by lasair; 78 of the 84 guarantees lasair made
+carry a PolkaJam co-signature (e.g. validators `[0,4,5]`: one lasair, two PolkaJam), and
+the chain's activity statistics credit all six validators with guarantees (22–30 each)
+and assurances (40 each). The digest is read on every node at the same finalized block,
+and after the run PolkaJam's `stateRoot` for its finalized block equals lasair's.
 
 ### The DEX on JIP-2: pj6 (#17)
 
@@ -293,22 +358,22 @@ still work; `./dex` wraps the DEX nets so you don't have to remember
 ## Watching any net: `netwatch` (one head, finality, state parity)
 
 Every net is judged by the same client-neutral tool, `offchain/netwatch.py` (issue #15).
-It reads each node through its public interface only — JIP-2 (`ws://…`) where the node
-serves it, lasair's Prometheus gauges (`http://…/metrics`) until lasair does (lasair#68)
-— and answers the epic's shared acceptance: **A1** one head (best blocks agree by hash
+It reads each node through its public interface only — JIP-2 (`ws://…`), which a lasair
+node serves through its own `lasair-reader` (lasair#68: `ws://reader…:19990`), or a
+node's Prometheus gauges (`http://…/metrics`) where neither is running — and answers the epic's shared acceptance: **A1** one head (best blocks agree by hash
 within `--max-lag` slots; no fork, lag or outage longer than one epoch) and liveness,
 **A2** the finalized head advances on every node with one hash per slot, **A3** the
 service state digests the same on every node at the common finalized head (`parity`).
 
 A node is `NAME,CLIENT,URL[,READER]`; `CLIENT` is a label (dashboards and verdicts group
-by it), the URL scheme picks the reader, and `READER` is lasair's CE-129 bridge for
-`parity` (it reads at its own head, so lasair parity is best-effort until #26 moves the
-jamnp backend to finalized reads; a lasair node without a reader of its own is skipped
-and listed — lasair6's one reader follows lm0, so name it on lm0 only).
+by it), the URL scheme picks the reader. On JIP-2 every node is compared by hash and
+`parity` reads every node at the same finalized block. A metrics-only node is compared by
+slot and height, and `READER` is its CE-129 bridge for `parity`, read at the reader's
+head (not pinned; a node without a reader of its own is skipped and listed).
 
 ```bash
-# all-lasair (lasair6): by slot/height, parity through the one reader (follows lm0)
-NETWATCH_NODES="lm0,lasair,http://lm0:9615/metrics,http://reader:19990 lm1,lasair,http://lm1:9615/metrics …"
+# lasair (lasair6, lasair-pj): each node through its own lasair-reader's JIP-2
+NETWATCH_NODES="lm0,lasair,ws://reader:19990 lm1,lasair,ws://reader1:19990 …"
 # all-PolkaJam / JavaJAM / pbnjam: JIP-2 on each node's RPC port
 NETWATCH_NODES="pj0,polkajam,ws://pj0:19800 pj1,polkajam,ws://pj1:19800 jj0,javajam,ws://jj0:19800 …"
 
@@ -349,9 +414,11 @@ supermajority, 5 of 6 on these nets.
 - **`mixed`** (3 : 3) has no shared finality gadget: PolkaJam runs `dummy`. The DEX
   does not settle there (a 45-minute run in 2026-07: 138
   work-items guaranteed, volume 0; [`SOAK_RELIABILITY.md`](SOAK_RELIABILITY.md)).
-- A mixed net finalizes only when its clients count each other's votes. `pj-javajam` is
-  the first try: each client logs GRANDPA messages from the other, but finality stays
-  at genesis (#18).
+- A mixed net finalizes only when its clients count each other's votes. **`lasair-pj`**
+  (3 : 3) does: 5 of 6 votes need both clients, and the finalized head advanced on all
+  six nodes with one hash per slot (131 finalized slots hash-checked in a 10-minute soak,
+  #20). `pj-javajam` does not: each client logs GRANDPA messages from the other, but
+  finality stays at genesis (#18).
 
 **What the specs say.** The Graypaper names GRANDPA and the vote data (the best block's
 header plus its posterior state root) and requires a block to be audited before it is
