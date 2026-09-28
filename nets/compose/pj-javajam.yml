@@ -15,8 +15,7 @@
 #   4  javajam   jj4      41404        42404  (native on macOS)
 #   5  javajam   jj5      41405        42405  (native on macOS)
 #
-# Keys: validator i is standard dev account i and only its own node signs as it,
-# with no exception: no lasair node, no shared keys.
+# Keys: validator i is standard dev account i and only its own node signs as it.
 
 services:
   spec-init:

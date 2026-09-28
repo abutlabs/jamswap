@@ -3,7 +3,7 @@
 #
 # 6x PolkaJam, GRANDPA + the DEX on JIP-2: no lasair node at all.
 #
-#   ./dex up NET=pj6        start it (JavaJAM runs natively on macOS)
+#   ./dex up NET=pj6        start it
 #   ./dex heads NET=pj6     one head + finality across every node's RPC
 #   ./dex down NET=pj6      tear down, wipe the chain
 #   ./dex load NET=pj6      start the load generator (up leaves it stopped)
@@ -22,8 +22,7 @@
 #   4  polkajam  pj4      41104        42104
 #   5  polkajam  pj5      41105        42105
 #
-# Keys: validator i is standard dev account i and only its own node signs as it,
-# with no exception: no lasair node, no shared keys.
+# Keys: validator i is standard dev account i and only its own node signs as it.
 
 services:
   spec-init:

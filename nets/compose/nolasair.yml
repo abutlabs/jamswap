@@ -15,8 +15,7 @@
 #   4  pbnjam    pb4      41704        42704
 #   5  pbnjam    pb5      41705        42705
 #
-# Keys: validator i is standard dev account i and only its own node signs as it,
-# with no exception: no lasair node, no shared keys.
+# Keys: validator i is standard dev account i and only its own node signs as it.
 
 services:
   spec-init:

@@ -11,7 +11,7 @@ One adapter per client says how to run it as validator i on the shared genesis
 (nets/genesis.py mints it in `spec-init`):
 
   client   image (pinned)                           started as
-  lasair   ${LASAIR_IMAGE}                          mesh-entrypoint OWN=i (dev account i)
+  lasair   ${LASAIR_IMAGE}                          mesh-entrypoint DEV_VALIDATOR=i (its key only)
   pj       jamswap-polkajam (built: the release     pj-entrypoint: --peer-id + dev seed i
            tarball fetched + sha256-checked)
   pbnjam   shimonchick/pbnjam-node@sha256           --chain spec --dev-validator i
@@ -78,11 +78,6 @@ def nodes(name):
                      ip="10.231.%d.%d" % (p["net"], 10 + i))
         out.append(n)
     return out
-
-
-def dev_all_keys_default(name):
-    """Key sharing (lasair's pre-#54 devnet mode) is ON only where lasair runs."""
-    return "lasair" in genesis.parse_clients(profile(name)["clients"])
 
 
 # ---- adapters: one compose service per validator ---------------------------------
@@ -154,18 +149,29 @@ def svc_javajam(n, p, ctx):
     return s
 
 
+# Validator INDEX as dev account INDEX with only its own key (DEV_VALIDATOR, lasair#54),
+# or with LASAIR_DEV_ALL_KEYS=1 in lasair's devnet mode (OWN, default INDEX: every dev
+# secret). lasair's mesh-entrypoint.sh turns either into lasair's flags.
+LASAIR_ENTRYPOINT = [
+    "bash", "-c",
+    'if [ "$${LASAIR_DEV_ALL_KEYS:-0}" = 1 ]; then export OWN="$${OWN:-$$INDEX}"\n'
+    'else unset OWN; export DEV_VALIDATOR="$$INDEX"; fi\n'
+    "exec /usr/local/bin/mesh-entrypoint.sh\n"]
+
+
 def svc_lasair(n, p, ctx):
-    s = {"image": "${LASAIR_IMAGE:-%s}" % profiles.LASAIR_IMAGE}
+    s = {"image": "${LASAIR_IMAGE:-%s}" % profiles.LASAIR_IMAGE, "entrypoint": LASAIR_ENTRYPOINT}
     s.update(_node_common(n))
-    env = {"SPEC": "/shared/spec.json", "OWN": str(n["index"]), "IDENTITY": str(100 + n["index"]),
-           "PORT": str(n["port"]), "INTERVAL": "1",
-           # chain-paced when every validator is lasair; wall-clock next to PolkaJam/JavaJAM
+    env = {"SPEC": "/shared/spec.json", "INDEX": str(n["index"]), "IDENTITY": str(100 + n["index"]),
+           "PORT": str(n["port"]),
+           # chain-paced when every validator is lasair, at JAM's 6 s a slot (lasair6 says
+           # why); wall-clock next to other clients, polling every second
            "WALL": "0" if ctx["all_lasair"] else "1",
+           "INTERVAL": "6" if ctx["all_lasair"] else "1",
            "LASAIR_FINALITY": "${LASAIR_FINALITY:-grandpa}",
-           # key sharing (docs/NETS.md): unset = sign guarantees as every lasair index;
-           # LASAIR_GUARANTOR_OWN= (empty; ./dex sets it for LASAIR_DEV_ALL_KEYS=0) = own only
-           "GUARANTOR_OWN": "${LASAIR_GUARANTOR_OWN-%s}" % ctx["lasair_set"],
-           "LASAIR_DEV_ALL_KEYS": "${LASAIR_DEV_ALL_KEYS:-1}"}
+           "LASAIR_DEV_ALL_KEYS": "${LASAIR_DEV_ALL_KEYS:-0}",
+           # devnet mode only: sign guarantees as any lasair index of the layout
+           "GUARANTOR_OWN": ctx["lasair_set"]}
     if p.get("dex"):
         env.update(SERVICE="/work/jamswap-service.jam", SERVICE_ID="100")
     s["environment"] = env
@@ -192,8 +198,8 @@ def dex_backend(name):
     """How a net's DEX reaches the chain (None: the net has no DEX).
 
     jamnp  the layout has a lasair node: lasair's CE-133 builder and CE-129 reader
-           bridges to it, the service seeded into genesis (lasair has no JIP-2 server or
-           Bootstrap service yet: lasair#68, #69);
+           bridges to it, the service seeded into genesis, so lasair guarantees every
+           work-package (co-signed over CE-134/135 by the core's other validators);
     jip2   otherwise: one node's JIP-2 RPC, the service deployed at startup through the
            chain's Bootstrap service (offchain/deploy.py), no lasair image anywhere."""
     p = profile(name)
@@ -206,38 +212,101 @@ def dex_url(p):
     return "http://localhost:%d" % (8200 + p["net"])
 
 
+def dex_url_of(name):
+    """The net's DEX UI on the host ("" if it has none): a generated DEX net's :8200+net,
+    else the hand-written profile's dex_url."""
+    p = profile(name)
+    if generated(name):
+        return dex_url(p) if p.get("dex") else ""
+    return p.get("dex_url", "")
+
+
+def soakable(name):
+    """`./dex soak` needs the dex, its load generator and netwatch: every generated DEX
+    net has them, and a hand-written net whose profile says so (lasair6)."""
+    return bool(dex_backend(name)) if generated(name) else bool(profile(name).get("soak"))
+
+
 def netwatch_port(p):
     return 9300 + p["net"]
 
 
+def reader_services(ns):
+    """One lasair-reader per lasair node: HTTP /read (CE-129, proven reads) and, on the
+    same port, the JIP-2 node RPC over a WebSocket (lasair#68). The first lasair node's
+    is `reader` (the dex reads through it), every other lasair node i's `reader<i>`."""
+    lm = [n for n in ns if n["client"] == "lasair"]
+    return {n["service"]: ("reader" if n is lm[0] else "reader%d" % n["index"]) for n in lm}
+
+
+def watch_url(n, readers):
+    """How netwatch reads node n: JIP-2 on its own RPC, or on its lasair-reader."""
+    return "ws://%s:19990" % readers[n["service"]] if n["service"] in readers else _jip2_url(n)
+
+
+def _loadgen(dex_build, offchain):
+    return {"build": dex_build,
+            "depends_on": ["dex"],
+            "command": ["python3", "loadgen.py"],
+            "environment": {"DEX_URL": "http://dex:8080", "PROFILE": "${PROFILE:-trading}",
+                            "RATE": "${RATE:-12}", "SEALED_RATIO": "${SEALED_RATIO:-0.2}",
+                            "PYTHONUNBUFFERED": "1"},
+            "volumes": [offchain],
+            "networks": {"net": {}}, "restart": "unless-stopped"}
+
+
+def _netwatch(p, ns, urls, depends):
+    return {"build": {"context": CTX, "dockerfile": "monitor/Dockerfile"},
+            "depends_on": depends,
+            "environment": {
+                "NETWATCH_NODES": " ".join("%s,%s,%s" % (n["service"], n["client"], urls[n["service"]])
+                                           for n in ns if n["service"] in urls),
+                "NETWATCH_VALIDATORS": ",".join(n["service"] for n in ns)},
+            "ports": ["127.0.0.1:%d:9106" % netwatch_port(p)],
+            "networks": {"net": {}}, "restart": "unless-stopped"}
+
+
 def dex_services_jamnp(p, ns):
-    """builder -> every lasair node's CE-133 endpoint (its port + 1); reader -> the
-    first lasair node over CE-129; dex on :8200+net. lasair's bridges: see #10-#12."""
+    """builder -> every lasair node's CE-133 endpoint (its port + 1); a reader per lasair
+    node (reader_services); dex on :8200+net through the first lasair node's reader; the
+    load generator; netwatch over every node's JIP-2, a lasair node's through its reader
+    (A1-A3; `./dex soak` drives it)."""
     lm = [n for n in ns if n["client"] == "lasair"]
     first = lm[0]
-    return {
-        "builder": _bridge("jamnp-builder", {
-            "LASAIR_GUARANTOR_HOST": ",".join(n["ip"] for n in lm),
-            "LASAIR_GUARANTOR_PORT": ",".join(str(n["port"] + 1) for n in lm),
-            "LASAIR_NODE_RPC": "", "LASAIR_BUILDER_HTTP_PORT": "19980"}),
-        "reader": _bridge("lasair-reader", {
-            "LASAIR_NODE_HOST": first["ip"], "LASAIR_NODE_PORT": str(first["port"]),
-            "LASAIR_READER_HTTP_PORT": "19990"}),
+    readers = reader_services(ns)
+    dex_build = {"context": CTX, "dockerfile": "offchain/Dockerfile"}
+    offchain = "%s/offchain:/app:ro" % CTX
+    out = {"builder": _bridge("jamnp-builder", {
+        "LASAIR_GUARANTOR_HOST": ",".join(n["ip"] for n in lm),
+        "LASAIR_GUARANTOR_PORT": ",".join(str(n["port"] + 1) for n in lm),
+        "LASAIR_BUILDER_HTTP_PORT": "19980"})}
+    for n in lm:
+        out[readers[n["service"]]] = _bridge("lasair-reader", {
+            "LASAIR_NODE_HOST": n["ip"], "LASAIR_NODE_PORT": str(n["port"]),
+            "LASAIR_CHAIN_SPEC": "/shared/spec.json", "LASAIR_READER_HTTP_PORT": "19990"})
+    out.update({
         "dex": {
             "build": {"context": CTX, "dockerfile": "offchain/Dockerfile"},
             "depends_on": ["builder", "reader"],
             "environment": {"SERVICE_ID": "100", "BUILDER_URL": "http://builder:19980",
-                            "READER_URL": "http://reader:19990",
+                            "READER_URL": "http://%s:19990" % readers[first["service"]],
                             "NODE_METRICS_URL": "http://%s:9615/metrics" % first["service"],
+                            # as on lasair6: a round the chain never included is released
+                            # after 180 s; small rounds settle fast
+                            "ROUND_GATE_SECS": "180", "MAX_ROUND_ORDERS": "48",
                             "PORT": "8080", "PYTHONUNBUFFERED": "1",
                             "ORDER_EVENTS_FILE": "/shared/order_events.jsonl"},
-            "volumes": ["%s/offchain:/app:ro" % CTX,
+            "volumes": [offchain,
                         "%s/service/jamswap-service.jam:/work/jamswap-service.jam:ro" % CTX,
                         "shared:/shared"],
             "working_dir": "/app", "command": ["python3", "server.py"],
             "ports": ["%d:8080" % (8200 + p["net"])],
             "networks": {"net": {}}, "restart": "unless-stopped"},
-    }
+        "loadgen": _loadgen(dex_build, offchain),
+        "netwatch": _netwatch(p, ns, {n["service"]: watch_url(n, readers) for n in ns},
+                              sorted(readers.values())),
+    })
+    return out
 
 
 def _jip2_url(n):
@@ -296,24 +365,9 @@ def dex_services_jip2(p, ns, ctx):
             "working_dir": "/app", "command": ["python3", "server.py"],
             "ports": ["%d:8080" % (8200 + p["net"])],
             "networks": {"net": {}}, "restart": "unless-stopped"},
-        "loadgen": {
-            "build": dex_build,
-            "depends_on": ["dex"],
-            "command": ["python3", "loadgen.py"],
-            "environment": {"DEX_URL": "http://dex:8080", "PROFILE": "${PROFILE:-trading}",
-                            "RATE": "${RATE:-12}", "SEALED_RATIO": "${SEALED_RATIO:-0.2}",
-                            "PYTHONUNBUFFERED": "1"},
-            "volumes": [offchain],
-            "networks": {"net": {}}, "restart": "unless-stopped"},
-        "netwatch": {
-            "build": {"context": CTX, "dockerfile": "monitor/Dockerfile"},
-            "depends_on": {"spec-init": {"condition": "service_completed_successfully"}},
-            "environment": {
-                "NETWATCH_NODES": " ".join("%s,%s,%s" % (n["service"], n["client"], _jip2_url(n))
-                                           for n in rpc_nodes),
-                "NETWATCH_VALIDATORS": ",".join(n["service"] for n in ns)},
-            "ports": ["127.0.0.1:%d:9106" % netwatch_port(p)],
-            "networks": {"net": {}}, "restart": "unless-stopped"},
+        "loadgen": _loadgen(dex_build, offchain),
+        "netwatch": _netwatch(p, ns, {n["service"]: _jip2_url(n) for n in rpc_nodes},
+                              {"spec-init": {"condition": "service_completed_successfully"}}),
     }
 
 
@@ -365,15 +419,27 @@ def header(name):
         "",
         p["about"] + ".",
         "",
-        "  ./dex up NET=%s        start it (JavaJAM runs natively on macOS)" % name,
+        "  ./dex up NET=%s        start it%s" % (name, " (JavaJAM runs natively on macOS)"
+                                                    if any(n["client"] == "javajam" for n in ns) else ""),
         "  ./dex heads NET=%s     one head + finality across every node's RPC" % name,
         "  ./dex down NET=%s      tear down, wipe the chain" % name,
     ]
-    if dex_backend(name) == "jip2":
-        gw = gateway(p)
+    if dex_backend(name):
         lines += [
             "  ./dex load NET=%s      start the load generator (up leaves it stopped)" % name,
             "  ./dex soak NET=%s 600  A1-A4: load + netwatch, then parity + soak verdict" % name,
+        ]
+    if dex_backend(name) == "jamnp":
+        lines += [
+            "",
+            "DEX %s (lasair's bridges, SERVICE_ID 100 in genesis): jamnp-builder hands" % dex_url(p),
+            "each work-package to a lasair guarantor (CE-133), `reader` serves its reads.",
+            "Every lasair node has a lasair-reader serving JIP-2; netwatch reads each node",
+            "through it or its own RPC: 127.0.0.1:%d (/metrics, /verdict)." % netwatch_port(p),
+        ]
+    if dex_backend(name) == "jip2":
+        gw = gateway(p)
+        lines += [
             "",
             "DEX %s (CHAIN_BACKEND=jip2, no SERVICE_ID) on the JIP-2 RPC of `rpc`," % dex_url(p),
             "an ordinary PolkaJam node (udp %d, RPC 127.0.0.1:%d): at startup it deploys" % (
@@ -392,16 +458,13 @@ def header(name):
             n["index"], n["client"], n["service"], n["port"], n["rpc"] or "-  (logs)", where))
     lines += [
         "",
-        "Keys: validator i is standard dev account i and only its own node signs as it,",
+        "Keys: validator i is standard dev account i and only its own node signs as it.",
     ]
-    if dev_all_keys_default(name):
+    if "lasair" in (n["client"] for n in ns):
         lines += [
-            "EXCEPT lasair (LASAIR_DEV_ALL_KEYS=1 by default until lasair#62): every lasair",
-            "node signs guarantees as any lasair index and, with lasair <= 2.x, assures for",
-            "every dev account. LASAIR_DEV_ALL_KEYS=0 narrows guarantees to its own index.",
+            "lasair runs DEV_VALIDATOR=i; LASAIR_DEV_ALL_KEYS=1 switches its nodes to lasair's",
+            "devnet mode (OWN=i: every dev secret, guarantees as any lasair index).",
         ]
-    else:
-        lines.append("with no exception: no lasair node, no shared keys.")
     return "".join("# %s\n" % l if l else "#\n" for l in lines)
 
 
@@ -487,11 +550,8 @@ def main(argv):
         print("NET_GENERATED=%d" % generated(name))
         print("NET_CLIENTS=%s" % _sh(",".join(n["client"] for n in ns)))
         print("NET_LASAIR_SET=%s" % _sh(",".join(str(n["index"]) for n in ns if n["client"] == "lasair")))
-        print("NET_DEV_ALL_KEYS_DEFAULT=%d" % dev_all_keys_default(name))
-        print("NET_DEX_URL=%s" % _sh(
-            dex_url(p) if generated(name) and p.get("dex") else
-            {"lasair6": "http://localhost:8081", "mixed": "http://localhost:8090"}.get(name, "")))
-        # generated nets only: jip2 = the DEX with its loadgen and netwatch (./dex load, soak)
+        print("NET_DEX_URL=%s" % _sh(dex_url_of(name)))
+        # generated nets only: jip2 | jamnp = the DEX with its loadgen and netwatch
         print("NET_DEX_BACKEND=%s" % _sh(dex_backend(name) or "" if generated(name) else ""))
         print("NET_FINALITY=%s" % _sh(p.get("finality", "")))
         print("NET_JAVAJAM=%s" % _sh(" ".join("%d:%d:%d" % (n["index"], n["port"], n["rpc"])

@@ -3,7 +3,7 @@
 #
 # 4 PolkaJam : 2 pbnjam.
 #
-#   ./dex up NET=pj-pbnjam-42        start it (JavaJAM runs natively on macOS)
+#   ./dex up NET=pj-pbnjam-42        start it
 #   ./dex heads NET=pj-pbnjam-42     one head + finality across every node's RPC
 #   ./dex down NET=pj-pbnjam-42      tear down, wipe the chain
 #
@@ -15,8 +15,7 @@
 #   4  pbnjam    pb4      41304        42304
 #   5  pbnjam    pb5      41305        42305
 #
-# Keys: validator i is standard dev account i and only its own node signs as it,
-# with no exception: no lasair node, no shared keys.
+# Keys: validator i is standard dev account i and only its own node signs as it.
 
 services:
   spec-init:

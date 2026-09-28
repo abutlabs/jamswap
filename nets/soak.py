@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """The epic's shared acceptance (A1-A4, jamswap#22) as one command, on a running net
-whose DEX runs on JIP-2 (the dex, loadgen and netwatch services nets/netgen.py adds):
+with the dex, loadgen and netwatch services (every generated DEX net, and lasair6):
 
     python3 nets/soak.py NET [--secs 600] [--drain 180] [--out DIR]
     ./dex soak NET=<name> [SECS]
 
-  1. waits for the DEX API and reads the service id the dex deployed (its deploy state);
+  1. waits for the DEX API and reads its service id: the dex's SERVICE_ID (seeded into
+     genesis on a lasair net), else the one it deployed (its deploy state);
   2. starts the load generator, and `netwatch poll` over every node for SECS + DRAIN
      seconds, with --require-finality on a GRANDPA net: A1 one head, A2 finality;
   3. after SECS stops the load, so the last rounds settle within DRAIN;
@@ -126,8 +127,8 @@ def main(argv=None):
                     help="seconds to wait for the DEX API (900)")
     a = ap.parse_args(argv)
 
-    if not netgen.generated(a.net) or netgen.dex_backend(a.net) != "jip2":
-        ap.error("%s has no JIP-2 DEX stack (dex, loadgen, netwatch); see nets/profiles.py" % a.net)
+    if not netgen.soakable(a.net):
+        ap.error("%s has no DEX stack (dex, loadgen, netwatch); see nets/profiles.py" % a.net)
     p = netgen.profile(a.net)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     out = a.out or os.path.join(os.environ.get("JAMSWAP_CACHE") or
@@ -138,13 +139,17 @@ def main(argv=None):
     done = {"net": a.net, "secs": a.secs, "drain": a.drain, "started": stamp}
     s.log("soak %s: %d s load + %d s drain -> %s" % (a.net, a.secs, a.drain, out))
 
-    url = netgen.dex_url(p)
+    url = netgen.dex_url_of(a.net)
     fin = wait_dex(url, a.ready_timeout)
     s.log("dex %s answers: %s" % (url, json.dumps(fin)))
     sid = a.service
     if sid is None:
-        st = s.dc("exec", "-T", "dex", "cat", "/shared/jamswap_deploy.json", timeout=30)
-        sid = int(json.loads(st.stdout)["service_id"])
+        env = s.dc("exec", "-T", "dex", "printenv", "SERVICE_ID", timeout=30, check=False)
+        if env.stdout.strip():
+            sid = int(env.stdout.strip())
+        else:
+            st = s.dc("exec", "-T", "dex", "cat", "/shared/jamswap_deploy.json", timeout=30)
+            sid = int(json.loads(st.stdout)["service_id"])
     done["service"] = sid
     s.log("service %d" % sid)
 

@@ -4,6 +4,7 @@
 """
 import json
 import os
+import subprocess
 import sys
 import unittest
 
@@ -113,15 +114,30 @@ class Netgen(unittest.TestCase):
             self.assertEqual(init["build"]["target"], "with-lasair" if has else "polkajam", n)
             if not has:
                 self.assertNotIn("lasair", json.dumps(doc).replace("jamswap-polkajam", ""), n)
-                self.assertFalse(netgen.dev_all_keys_default(n))
 
-    def test_lasair_nodes_share_keys_only_among_lasair_indices(self):
-        doc = netgen.compose("lasair-pj-javajam")
-        for svc in ("lm0", "lm1"):
-            env = doc["services"][svc]["environment"]
-            self.assertEqual(env["GUARANTOR_OWN"], "${LASAIR_GUARANTOR_OWN-0,1}")
-            self.assertEqual(env["WALL"], "1")          # wall-clock next to PolkaJam/JavaJAM
-        self.assertTrue(netgen.dev_all_keys_default("lasair-pj-javajam"))
+    def test_each_lasair_node_holds_only_its_own_key(self):
+        doc = netgen.compose("lasair-pj")["services"]
+        for i in (0, 1, 2):
+            s = doc["lm%d" % i]
+            env = s["environment"]
+            self.assertEqual(env["INDEX"], str(i))
+            self.assertNotIn("OWN", env)                 # no devnet mode unless asked for
+            self.assertEqual(env["LASAIR_DEV_ALL_KEYS"], "${LASAIR_DEV_ALL_KEYS:-0}")
+            self.assertEqual(env["GUARANTOR_OWN"], "0,1,2")   # devnet mode only: lasair indices
+            self.assertEqual(env["WALL"], "1")          # wall-clock next to PolkaJam
+            self.assertEqual(s["entrypoint"], netgen.LASAIR_ENTRYPOINT)
+
+    def test_the_lasair_entrypoint_picks_one_key_unless_asked(self):
+        # run the wrapper's script with a stub mesh-entrypoint: compose turns $$ into $
+        script = netgen.LASAIR_ENTRYPOINT[2].replace("$$", "$").replace(
+            "exec /usr/local/bin/mesh-entrypoint.sh", 'echo "OWN=${OWN:-} DEV_VALIDATOR=${DEV_VALIDATOR:-}"')
+        def run(**env):
+            return subprocess.run(["bash", "-c", script], env=dict(env, PATH=os.environ["PATH"]),
+                                  capture_output=True, text=True, check=True).stdout.strip()
+        self.assertEqual(run(INDEX="4"), "OWN= DEV_VALIDATOR=4")
+        self.assertEqual(run(INDEX="4", LASAIR_DEV_ALL_KEYS="0", OWN="1,2"), "OWN= DEV_VALIDATOR=4")
+        self.assertEqual(run(INDEX="4", LASAIR_DEV_ALL_KEYS="1"), "OWN=4 DEV_VALIDATOR=")
+        self.assertEqual(run(INDEX="4", LASAIR_DEV_ALL_KEYS="1", OWN="1,2"), "OWN=1,2 DEV_VALIDATOR=")
 
     def test_adapters(self):
         doc = netgen.compose("nolasair")["services"]
@@ -138,7 +154,7 @@ class Netgen(unittest.TestCase):
         self.assertIn("@sha256:", jj["image"])
 
     def test_dex_backend_follows_the_layout(self):
-        self.assertEqual(netgen.dex_backend("lasair-pj-javajam"), "jamnp")   # lasair's bridges
+        self.assertEqual(netgen.dex_backend("lasair-pj"), "jamnp")   # lasair's bridges
         self.assertEqual(netgen.dex_backend("pj6"), "jip2")
         self.assertIsNone(netgen.dex_backend("pj-javajam"))
 
@@ -182,12 +198,40 @@ class Netgen(unittest.TestCase):
         finally:
             del profiles.PROFILES["_t"]
 
-    def test_the_lasair_dex_stack_is_unchanged(self):
-        doc = netgen.compose("lasair-pj-javajam")["services"]
+    def test_the_lasair_dex_stack(self):
+        doc = netgen.compose("lasair-pj")["services"]
         self.assertEqual(doc["dex"]["depends_on"], ["builder", "reader"])
-        self.assertEqual(doc["dex"]["environment"]["SERVICE_ID"], "100")
+        env = doc["dex"]["environment"]
+        self.assertEqual((env["SERVICE_ID"], env["READER_URL"]), ("100", "http://reader:19990"))
         self.assertEqual(doc["spec-init"]["environment"]["SERVICE"], "/work/jamswap-service.jam")
-        self.assertNotIn("loadgen", doc)
+        # the builder hands packages to lasair guarantors only (each node's port + 1)
+        b = doc["builder"]["environment"]
+        self.assertEqual(b["LASAIR_GUARANTOR_HOST"], "10.231.6.10,10.231.6.11,10.231.6.12")
+        self.assertEqual(b["LASAIR_GUARANTOR_PORT"], "41601,41602,41603")
+        # a reader per lasair node: `reader` (the dex's) follows lm0
+        for svc, i in (("reader", 0), ("reader1", 1), ("reader2", 2)):
+            e = doc[svc]["environment"]
+            self.assertEqual((e["LASAIR_NODE_HOST"], e["LASAIR_NODE_PORT"]),
+                             ("10.231.6.%d" % (10 + i), str(41600 + i)))
+        self.assertNotIn("reader3", doc)
+        self.assertEqual(doc["loadgen"]["environment"]["DEX_URL"], "http://dex:8080")
+        nw = doc["netwatch"]["environment"]
+        self.assertEqual(nw["NETWATCH_NODES"].split(), [
+            "lm0,lasair,ws://reader:19990", "lm1,lasair,ws://reader1:19990",
+            "lm2,lasair,ws://reader2:19990", "pj3,polkajam,ws://pj3:42603",
+            "pj4,polkajam,ws://pj4:42604", "pj5,polkajam,ws://pj5:42605"])
+        self.assertEqual(nw["NETWATCH_VALIDATORS"], "lm0,lm1,lm2,pj3,pj4,pj5")
+        self.assertEqual(doc["netwatch"]["depends_on"], ["reader", "reader1", "reader2"])
+
+    def test_soakable_nets(self):
+        self.assertTrue(netgen.soakable("lasair6"))
+        self.assertTrue(netgen.soakable("lasair-pj"))
+        self.assertTrue(netgen.soakable("pj6"))
+        self.assertFalse(netgen.soakable("mixed"))
+        self.assertFalse(netgen.soakable("pj-javajam"))
+        self.assertEqual(netgen.dex_url_of("lasair6"), "http://localhost:8081")
+        self.assertEqual(netgen.dex_url_of("lasair-pj"), "http://localhost:8206")
+        self.assertEqual(netgen.dex_url_of("pj-pbnjam"), "")
 
     @unittest.skipIf(yaml is None, "PyYAML not installed")
     def test_yaml_round_trip(self):

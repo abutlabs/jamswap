@@ -2,7 +2,8 @@
 
 A profile is either
   - a hand-written compose file kept as is (`compose`): lasair6, the DEX net, and
-    mixed, the original 3:3 lasair + PolkaJam net; or
+    mixed, the original 3:3 lasair + PolkaJam net (dex_url: its DEX UI; soak: the file
+    carries the dex, loadgen and netwatch that `./dex soak` drives); or
   - a per-index client layout (`clients`), from which nets/netgen.py generates
     nets/compose/<name>.yml (every node, the genesis minter, ports, keys).
 
@@ -12,10 +13,10 @@ Layout fields:
             41000 + 100*net + i, RPC port 42000 + 100*net + i (both on the host too)
   finality  PolkaJam/JavaJAM --finality-mode (grandpa | dummy); lasair nodes run
             LASAIR_FINALITY (grandpa, the jam-np PR #6 draft wire, by default)
-  dex       add the DEX (on :8200+net; nets/netgen.py dex_backend). With a lasair node
-            in the layout: lasair's builder and reader bridges, the service in genesis.
-            Without: the dex on a node's JIP-2 RPC, deploying the service at startup,
-            plus a load generator and netwatch over every node (`./dex soak`).
+  dex       add the DEX (on :8200+net; nets/netgen.py dex_backend), its load generator
+            and netwatch over every node (`./dex soak`). With a lasair node in the
+            layout: lasair's builder and reader bridges, the service in genesis.
+            Without: the dex on a node's JIP-2 RPC, deploying the service at startup.
   issue     the jamswap issue the net is for
 """
 
@@ -24,10 +25,11 @@ PROFILES = {
     "lasair6": dict(
         compose="docker-compose.lasair6.yml", project="lasair6",
         clients="lasair,lasair,lasair,lasair,lasair,lasair", issue="#12",
+        finality="grandpa", dex_url="http://localhost:8081", soak=True,
         about="6x lasair, GRANDPA: a DEX net (lasair's bridges; the ./dex up default)"),
     "mixed": dict(
         compose="docker-compose.mixed.yml", project="jamswap",
-        clients="pj,pj,pj,lasair,lasair,lasair", issue="#2",
+        clients="pj,pj,pj,lasair,lasair,lasair", issue="#2", dex_url="http://localhost:8090",
         about="3 PolkaJam : 3 lasair, dummy finality; consensus research"),
     # ---- generated (nets/compose/<name>.yml) -------------------------------------
     "pj6": dict(
@@ -45,10 +47,10 @@ PROFILES = {
     "pj-javajam-42": dict(
         clients="pj,pj,pj,pj,javajam,javajam", net=5, finality="grandpa", issue="#18",
         about="4 PolkaJam : 2 JavaJAM, both GRANDPA"),
-    "lasair-pj-javajam": dict(
-        clients="lasair,lasair,pj,pj,javajam,javajam", net=6, finality="grandpa",
-        dex=True, issue="#20",
-        about="2 lasair : 2 PolkaJam : 2 JavaJAM + the DEX"),
+    "lasair-pj": dict(
+        clients="lasair,lasair,lasair,pj,pj,pj", net=6, finality="grandpa", dex=True,
+        issue="#20",
+        about="3 lasair : 3 PolkaJam, GRANDPA, one key each + the DEX (lasair guarantees)"),
     "nolasair": dict(
         clients="pj,pj,javajam,javajam,pbnjam,pbnjam", net=7, finality="grandpa",
         issue="#21", about="2 PolkaJam : 2 JavaJAM : 2 pbnjam, the control with no lasair"),
@@ -58,7 +60,7 @@ DEFAULT = "lasair6"
 
 # ---- per-client images (pinned) -------------------------------------------------
 PJ_RELEASE = "nightly-2026-09-22"            # mixed/Dockerfile.polkajam pins its sha256
-LASAIR_IMAGE = "ghcr.io/abutlabs/lasair:2.0.0"
+LASAIR_IMAGE = "ghcr.io/abutlabs/lasair:2.1.0"
 # docker.io/shimonchick/pbnjam-node:main-54226be (2026-09-25; linux/amd64 + arm64)
 PBNJAM_IMAGE = ("docker.io/shimonchick/pbnjam-node:main-54226be"
                 "@sha256:ceb5f651164d754280c4aa88f0cf3203f0f6115cb30eb1a3dd72788224aba1aa")

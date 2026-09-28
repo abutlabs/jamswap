@@ -26,8 +26,8 @@
 #   ./dex soak NET=pj6 [SECS]  # A1-A4 (docs/NETS.md): load + netwatch for SECS (600),
 #                              # then state parity and the soak verdict; exit 0 iff all pass
 #
-# Keys: LASAIR_DEV_ALL_KEYS=1 (default on nets with lasair, until lasair#62) lets each
-# lasair node sign guarantees as every lasair index; =0 narrows it to its own index.
+# Keys: every validator holds only its own key. LASAIR_DEV_ALL_KEYS=1 puts the lasair
+# nodes in lasair's devnet mode instead (each derives every dev secret).
 # JAVAJAM_RUNNER=native|docker (default native on macOS, whose Docker can't run it).
 #
 set -euo pipefail
@@ -45,13 +45,11 @@ COMPOSE=(docker compose -p "$NET_PROJECT" -f "$NET_FILE")
 URL=$NET_DEX_URL                     # the net's DEX UI, if it has one
 STATE="${JAMSWAP_CACHE:-$HOME/.cache/jamswap}/nets/$NET_PROJECT"   # native nodes, host IP
 
-# ---- key sharing (docs/NETS.md "Keys per client") ----------------------------------
-LASAIR_DEV_ALL_KEYS="${LASAIR_DEV_ALL_KEYS:-$NET_DEV_ALL_KEYS_DEFAULT}"
-if [ -z "$NET_LASAIR_SET" ]; then
-  LASAIR_DEV_ALL_KEYS=0                        # no lasair node: nothing to share
-elif [ "$LASAIR_DEV_ALL_KEYS" = 0 ]; then
-  export LASAIR_GUARANTOR_OWN=""               # each lasair node guarantees as itself only
-fi
+# ---- keys (docs/NETS.md "Keys per client") -----------------------------------------
+# 0 (default): every lasair node holds only its own key (DEV_VALIDATOR=i). 1: lasair's
+# devnet mode (OWN=i: every dev secret, guarantees signed as any lasair index).
+LASAIR_DEV_ALL_KEYS="${LASAIR_DEV_ALL_KEYS:-0}"
+[ -n "$NET_LASAIR_SET" ] || LASAIR_DEV_ALL_KEYS=0     # no lasair node: nothing to share
 export LASAIR_DEV_ALL_KEYS
 
 # ---- JavaJAM: native process (macOS) or container (Linux) --------------------------
@@ -140,7 +138,7 @@ case "$cmd" in
       fi
       "${COMPOSE[@]}" up -d
       # manual trading by default, as on lasair6
-      if [ "$NET_DEX_BACKEND" = jip2 ]; then "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true; fi
+      if [ -n "$NET_DEX_BACKEND" ]; then "${COMPOSE[@]}" stop loadgen >/dev/null 2>&1 || true; fi
       echo "✓ $NET up: validators (index order) = $NET_CLIENTS"
       if [ "$JJ_NATIVE" = 1 ]; then echo "  JavaJAM: native processes; every validator addressed at host $HOST_IP"
       elif [ -n "$NET_JAVAJAM" ]; then echo "  JavaJAM: containers ($JAVAJAM_IMAGE)"; fi
@@ -148,15 +146,16 @@ case "$cmd" in
       echo "  one head + finality: ./dex heads NET=$NET"
       if [ -n "$URL" ]; then
         # the API opens once the service is deployed (jip2), the markets are listed, the
-        # dev accounts are funded and the treasury's reserve has landed: a minute or two
+        # dev accounts are funded and the treasury's reserve has landed: a minute or two;
+        # then fills are durable once the net finalizes (available: true)
         echo "DEX starting ($([ "$NET_DEX_BACKEND" = jip2 ] && echo "runtime deploy + setup" || echo "genesis service"))…"
         for _ in $(seq 1 120); do
-          _finality | grep -q available && break
+          [ "$(_available)" = True ] && break
           sleep 5
           printf '.'
         done
         echo
-        if _finality | grep -q available; then
+        if [ "$(_available)" = True ]; then
           echo "✓ DEX ready → $URL   (loadgen is OFF; './dex load NET=$NET' to drive it)"
         else
           echo "DEX not answering at $URL after 10 min: './dex logs NET=$NET dex'"

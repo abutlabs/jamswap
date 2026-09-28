@@ -3,7 +3,7 @@
 #
 # 5 PolkaJam : 1 pbnjam; PolkaJam's 5-of-6 GRANDPA quorum alone.
 #
-#   ./dex up NET=pj-pbnjam        start it (JavaJAM runs natively on macOS)
+#   ./dex up NET=pj-pbnjam        start it
 #   ./dex heads NET=pj-pbnjam     one head + finality across every node's RPC
 #   ./dex down NET=pj-pbnjam      tear down, wipe the chain
 #
@@ -15,8 +15,7 @@
 #   4  polkajam  pj4      41204        42204
 #   5  pbnjam    pb5      41205        42205
 #
-# Keys: validator i is standard dev account i and only its own node signs as it,
-# with no exception: no lasair node, no shared keys.
+# Keys: validator i is standard dev account i and only its own node signs as it.
 
 services:
   spec-init:

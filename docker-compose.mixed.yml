@@ -28,15 +28,24 @@ x-polkajam: &polkajam
     context: .
     dockerfile: mixed/Dockerfile.polkajam
     args:
-      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
+      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.0}
       PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-09-22}
   image: jamswap-pj-mixed:local
   restart: unless-stopped
   volumes: [ "shared:/shared" ]
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.0}
   restart: unless-stopped
+  # validator INDEX holds only its own key (DEV_VALIDATOR, lasair#54), or, with
+  # LASAIR_DEV_ALL_KEYS=1, runs lasair's devnet mode (OWN, default INDEX: every dev secret)
+  entrypoint:
+    - bash
+    - -c
+    - |
+      if [ "$${LASAIR_DEV_ALL_KEYS:-0}" = 1 ]; then export OWN="$${OWN:-$$INDEX}"
+      else unset OWN; export DEV_VALIDATOR="$$INDEX"; fi
+      exec /usr/local/bin/mesh-entrypoint.sh
   volumes:
     - "shared:/shared"
     - "./service/jamswap-service.jam:/work/jamswap-service.jam:ro"
@@ -79,7 +88,7 @@ services:
     environment: { ROLE: validator, INDEX: "2", SHARED: /shared }
     networks: { mixnet: { ipv4_address: 172.28.0.12 } }
 
-  # 3) lasair validators (indices 3,4,5). Each reads /shared/peers_<OWN>.txt (written
+  # 3) lasair validators (indices 3,4,5). Each reads /shared/peers_<INDEX>.txt (written
   #    by spec-init with every peer's runtime peer_id) and applies the JAMNP-S
   #    Preferred Initiator: one side of each pair dials, so links never churn. The
   #    PEERS env below is the id-less fallback used only if that file is missing.
@@ -88,18 +97,14 @@ services:
     depends_on: { spec-init: { condition: service_completed_successfully } }
     environment:
       SPEC: /shared/spec.json
-      OWN: "3"
-      # ALL THREE lm nodes are guarantors the builder fans CE-133 out to. A
-      # guarantee needs >=2 validators assigned to one core; each lm node authors
-      # only as its own index but legitimately derives all lasair dev-account
-      # seeds, so it signs guarantees as the full lasair set {3,4,5} — with C=2
-      # cores and 3 lasair validators, >=2 always share a core (pigeonhole).
-      # Whichever lm node authors on the WINNING branch reports the package, and
-      # ANY later lm-authored block assures every report pending in the state it
-      # extends (assure-any-pending) — so the availability dance completes at the
-      # combined lasair authoring rate (~1/2 on the equal split), not one node's 1/6.
-      GUARANTOR_OWN: "${LASAIR_GUARANTOR_OWN-3,4,5}"   # LASAIR_DEV_ALL_KEYS switch (docs/NETS.md)
-      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-1}"
+      INDEX: "3"
+      # ALL THREE lm nodes are guarantors the builder fans CE-133 out to. Each holds
+      # only its own key and co-guarantees with the core's other validators over
+      # CE-134/135 (lasair#60). LASAIR_DEV_ALL_KEYS=1 (docs/NETS.md) is lasair's devnet
+      # mode instead: every node derives all dev secrets and signs guarantees as any
+      # lasair index {3,4,5}.
+      GUARANTOR_OWN: "3,4,5"                          # devnet mode only
+      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
       IDENTITY: "103"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"
@@ -113,9 +118,9 @@ services:
     depends_on: { spec-init: { condition: service_completed_successfully } }
     environment:
       SPEC: /shared/spec.json
-      OWN: "4"
-      GUARANTOR_OWN: "${LASAIR_GUARANTOR_OWN-3,4,5}"   # LASAIR_DEV_ALL_KEYS switch (docs/NETS.md)
-      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-1}"
+      INDEX: "4"
+      GUARANTOR_OWN: "3,4,5"                          # devnet mode only
+      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
       IDENTITY: "104"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"
@@ -129,9 +134,9 @@ services:
     depends_on: { spec-init: { condition: service_completed_successfully } }
     environment:
       SPEC: /shared/spec.json
-      OWN: "5"
-      GUARANTOR_OWN: "${LASAIR_GUARANTOR_OWN-3,4,5}"   # LASAIR_DEV_ALL_KEYS switch (docs/NETS.md)
-      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-1}"
+      INDEX: "5"
+      GUARANTOR_OWN: "3,4,5"                          # devnet mode only
+      LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
       IDENTITY: "105"
       SERVICE: /work/jamswap-service.jam
       SERVICE_ID: "100"
@@ -168,7 +173,7 @@ services:
   #    builder endpoint (guaranteeing on its own slots). The ALPN embeds the
   #    per-genesis hash, so the bridges read it from /shared/genesis_hex.
   builder:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -182,13 +187,12 @@ services:
       # whichever lm node next authors on the winning branch reports the package
       LASAIR_GUARANTOR_HOST: 172.28.0.13,172.28.0.14,172.28.0.15
       LASAIR_GUARANTOR_PORT: "40064,40065,40066"
-      LASAIR_NODE_RPC: ""
       LASAIR_BUILDER_HTTP_PORT: "19980"
     networks: { mixnet: {} }
     restart: unless-stopped
 
   reader:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.0.0}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.0}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]

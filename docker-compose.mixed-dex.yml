@@ -39,7 +39,8 @@
 services:
   lm3:
     environment:
-      OWN: "1,2,3,4,5"          # guarantor authors the whole lasair-dominant chain
+      LASAIR_DEV_ALL_KEYS: "1"  # lasair's devnet mode (--dev-all-keys), so that it
+      OWN: "1,2,3,4,5"          # authors the whole lasair-dominant chain
       GUARANTOR_OWN: "1,2,3,4,5" # ... and signs assurances as any assigned validator
   lm4: { profiles: ["equal-split-only"] }
   lm5: { profiles: ["equal-split-only"] }
