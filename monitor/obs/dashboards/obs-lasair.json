@@ -1009,6 +1009,138 @@
     "w": 12,
     "h": 8
    }
+  },
+  {
+   "type": "timeseries",
+   "title": "Package anchor age on arrival (slots) \u00b7 window = 8",
+   "description": "How old a work-package's anchor block already was when it reached this guarantor. A guarantee must land while the anchor is among the last 8 blocks (48 s at 6 s slots), so every slot used before arrival is time the refine and the block no longer have.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "histogram_quantile(0.5, sum by (node, le) (rate(lasair_ce133_anchor_age_slots_bucket{net=\"$net\",run_id=\"$run_id\"}[10m])))",
+     "legendFormat": "{{node}} p50",
+     "refId": "A",
+     "range": true
+    },
+    {
+     "expr": "histogram_quantile(0.9, sum by (node, le) (rate(lasair_ce133_anchor_age_slots_bucket{net=\"$net\",run_id=\"$run_id\"}[10m])))",
+     "legendFormat": "{{node}} p90",
+     "refId": "B",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      },
+      "thresholdsStyle": {
+       "mode": "dashed"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "decimals": 1,
+     "min": 0,
+     "thresholds": {
+      "mode": "absolute",
+      "steps": [
+       {
+        "color": "transparent",
+        "value": null
+       },
+       {
+        "color": "red",
+        "value": 8
+       }
+      ]
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 16,
+   "gridPos": {
+    "x": 0,
+    "y": 31,
+    "w": 12,
+    "h": 8
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Packages expired (anchor too old), per 10 min",
+   "description": "Packages this guarantor accepted but could not report before their anchor left the window: the builder has to resubmit, and a DEX round waits. Should stay at 0.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "expr": "increase(lasair_ce133_expired_total{net=\"$net\",run_id=\"$run_id\"}[10m])",
+     "legendFormat": "{{node}}",
+     "refId": "A",
+     "range": true
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "custom": {
+      "lineWidth": 2,
+      "fillOpacity": 0,
+      "showPoints": "never",
+      "spanNulls": false,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "color": {
+      "mode": "palette-classic"
+     },
+     "decimals": 0,
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 17,
+   "gridPos": {
+    "x": 12,
+    "y": 31,
+    "w": 12,
+    "h": 8
+   }
   }
  ]
 }

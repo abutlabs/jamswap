@@ -338,6 +338,20 @@ def lasair():
                "rate(lasair_guarantor_refine_seconds_count{%s}[5m])" % (SEL, SEL), "{{node}}")],
              "Mean refine time over 5 minutes: rate of the sum over rate of the count.",
              unit="s"), 12, 8)
+    L.add(ts("Package anchor age on arrival (slots) · window = 8",
+             [("histogram_quantile(0.5, sum by (node, le) (rate(lasair_ce133_anchor_age_slots_bucket{%s}[10m])))" % SEL,
+               "{{node}} p50"),
+              ("histogram_quantile(0.9, sum by (node, le) (rate(lasair_ce133_anchor_age_slots_bucket{%s}[10m])))" % SEL,
+               "{{node}} p90")],
+             "How old a work-package's anchor block already was when it reached this guarantor. "
+             "A guarantee must land while the anchor is among the last 8 blocks (48 s at 6 s "
+             "slots), so every slot used before arrival is time the refine and the block no "
+             "longer have.", threshold=8, decimals=1), 12, 8)
+    L.add(ts("Packages expired (anchor too old), per 10 min",
+             [("increase(lasair_ce133_expired_total{%s}[10m])" % SEL, "{{node}}")],
+             "Packages this guarantor accepted but could not report before their anchor left the "
+             "window: the builder has to resubmit, and a DEX round waits. Should stay at 0.",
+             decimals=0), 12, 8)
     return dashboard("obs-lasair", "lasair validator duties", L)
 
 
