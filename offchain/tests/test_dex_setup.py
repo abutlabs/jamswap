@@ -201,19 +201,55 @@ class OnePayloadAtATime(unittest.TestCase):
 
 
 class ServerStartup(unittest.TestCase):
-    """server.ensure_markets lists only the markets not on chain yet."""
-    def test_ensure_markets(self):
+    """server.ensure_markets lists the markets not on chain yet and waits until they are."""
+    def run_ensure(self, api_list, kv, timeout=300):
         import server
-        listed = []
+        t, sleeps = [0.0], []
+        def sleep(d):
+            sleeps.append(d)
+            t[0] += d
         saved = server.CHAIN, server.api_list
-        server.CHAIN = KvChain({b"mkt" + u32(2): u32(2) + u32(0)})
-        server.api_list = listed.append
+        server.CHAIN, server.api_list = KvChain(kv), api_list
         try:
-            server.ensure_markets()
+            ok = server.ensure_markets(timeout=timeout, sleep=sleep, clock=lambda: t[0])
         finally:
             server.CHAIN, server.api_list = saved
-        self.assertEqual([b["market"] for b in listed], [1, 3])
+        return ok, sleeps
+
+    def test_lists_only_the_missing_markets(self):
+        import server
+        kv, listed = {b"mkt" + u32(2): u32(2) + u32(0)}, []
+        def lands(b):                          # the list item lands before the next look
+            listed.append(b["market"])
+            kv[b"mkt" + u32(b["market"])] = u32(b["base"]) + u32(b["quote"])
+        ok, sleeps = self.run_ensure(lands, kv)
+        self.assertTrue(ok)
+        self.assertEqual(listed, [1, 3])
+        self.assertEqual(len(sleeps), 1)
         self.assertIs(server.DEFAULT_MARKETS, dex_setup.DEFAULT_MARKETS)
+
+    def test_a_fresh_net_that_refuses_work_at_first(self):
+        # the guarantors refuse the first two passes; then the items land
+        kv, calls = {}, []
+        def busy_then_lands(b):
+            calls.append(b["market"])
+            if len(calls) <= 6:
+                raise chain.ChainBusy("all guarantors refused (CE-133 queues full)")
+            kv[b"mkt" + u32(b["market"])] = u32(b["base"]) + u32(b["quote"])
+        ok, sleeps = self.run_ensure(busy_then_lands, kv)
+        self.assertTrue(ok)
+        self.assertEqual(calls, [1, 2, 3] * 3)
+        self.assertEqual(len(sleeps), 3)
+
+    def test_an_item_that_never_lands_is_resent_then_given_up(self):
+        import server
+        calls = []
+        ok, sleeps = self.run_ensure(lambda b: calls.append(b["market"]), {}, timeout=130)
+        self.assertFalse(ok)
+        # sent at t=0, resent at t=60 and t=120 (every LIST_RESEND_SECS), never in between
+        self.assertEqual(server.LIST_RESEND_SECS, 60.0)
+        self.assertEqual(calls, [1, 2, 3] * 3)
+        self.assertAlmostEqual(sum(sleeps), 132.0)
 
 
 class ReserveBeforeTrading(unittest.TestCase):

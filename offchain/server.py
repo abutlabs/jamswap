@@ -1973,12 +1973,36 @@ ROUTES_POST = {"/api/deposit": api_deposit, "/api/withdraw": api_withdraw,
 # the markets the UI shows; listed at startup (those not yet listed) so they're tradable.
 # every combination of the three assets: (market_id, base, quote)
 DEFAULT_MARKETS = dex_setup.DEFAULT_MARKETS
-def ensure_markets():
-    for m, base, quote in DEFAULT_MARKETS:
-        try:
-            if not dex_setup.market_listed(CHAIN, m):
-                api_list({"market": m, "base": base, "quote": quote})
-        except Exception as e: print("list failed", m, e)
+LIST_WAIT_SECS = float(os.environ.get("LIST_WAIT_SECS", "300"))
+LIST_RESEND_SECS = 60.0
+def ensure_markets(timeout=None, poll=6.0, sleep=time.sleep, clock=time.monotonic):
+    # List the markets not on chain yet, and wait until they are: every round on a market
+    # that was never listed fails. A net that has just started may refuse the list items
+    # (its guarantors are not taking work yet) or be unable to answer the read (a proving
+    # reader has no block to prove it at while its node is at genesis), so each is retried,
+    # and resent if it has not landed after LIST_RESEND_SECS. The API opens after this, or
+    # after `timeout` with the markets still missing named.
+    timeout = LIST_WAIT_SECS if timeout is None else timeout
+    deadline, sent = clock() + timeout, {}
+    while True:
+        missing = []
+        for m, base, quote in DEFAULT_MARKETS:
+            try:
+                if dex_setup.market_listed(CHAIN, m):
+                    continue
+                missing.append(m)
+                if m not in sent or clock() - sent[m] >= LIST_RESEND_SECS:
+                    api_list({"market": m, "base": base, "quote": quote})
+                    sent[m] = clock()
+            except Exception as e:
+                missing += [] if m in missing else [m]
+                print("list failed", m, e)
+        if not missing:
+            return True
+        if clock() >= deadline:
+            print(f"markets {missing} still not listed after {timeout:g} s: their rounds will fail")
+            return False
+        sleep(poll)
 
 def ensure_reserve():
     # deploy with a JAMKB reserve sized to the genesis footprint (obligation + a small buffer),

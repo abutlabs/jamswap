@@ -176,12 +176,14 @@ class JamnpChain(Chain):
         return url
 
     def ready(self):
-        # the reader has learned a head, so CE-129 reads will be served
+        # the reader can serve a read: it has learned a head, and (a reader that proves its
+        # reads, lasair#70) a block it can prove state at, `best_hex`: the head's parent,
+        # none while the node is still at genesis, where every read is refused
         try:
             r = _http_json(self._need(self.reader_url, "READER_URL") + "/healthz")
         except (OSError, ValueError):
             return False
-        return bool(r.get("head_hex"))
+        return bool(r.get("head_hex")) and bool(r.get("best_hex", True))
 
     def read(self, key, at="best"):
         if at != "best":

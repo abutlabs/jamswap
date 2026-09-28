@@ -37,6 +37,7 @@ class FakeBridge:
         self.store = {}              # key hex -> value hex
         self.accept = True
         self.head_hex = "ab" * 32
+        self.best_hex = None         # set: /healthz carries best_hex (a proving reader, lasair#70)
         self.read_error = None       # set: /read answers like lasair-reader when it can't read
         self.metrics = ("# HELP lasair_block_height best block height\n"
                         "lasair_block_height 120\nlasair_finalized_height 118\n"
@@ -73,7 +74,10 @@ class FakeBridge:
                     self._reply({"found": bool(v), "service": int(q["service"][0]),
                                  "head_hex": bridge.head_hex, "value_hex": v})
                 elif u.path == "/healthz":
-                    self._reply({"status": "ok", "head_hex": bridge.head_hex})
+                    h = {"status": "ok", "head_hex": bridge.head_hex}
+                    if bridge.best_hex is not None:
+                        h["best_hex"] = bridge.best_hex
+                    self._reply(h)
                 elif u.path == "/metrics":
                     self._reply(bridge.metrics.encode(), "text/plain")
                 else:
@@ -266,6 +270,14 @@ class JamnpIsUnchanged(unittest.TestCase):
         self.assertFalse(self.c.ready())
         self.bridge.stop()
         self.assertFalse(self.c.ready())
+
+    def test_a_proving_reader_is_ready_once_it_can_prove_a_block(self):
+        # lasair#70: reads are proven at the head's parent (best_hex); at genesis there is
+        # none and every read is refused, so the dex must not set up markets yet
+        self.bridge.best_hex = ""
+        self.assertFalse(self.c.ready())
+        self.bridge.best_hex = "cd" * 32
+        self.assertTrue(self.c.ready())
 
     def test_what_the_bridges_cannot_do(self):
         for call in (lambda: self.c.read(b"k", at="final"), lambda: self.c.read(b"k", at=b"\0" * 32),
