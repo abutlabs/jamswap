@@ -20,7 +20,7 @@ with the dex, loadgen and netwatch services (every generated DEX net, and lasair
 
 Run it on a freshly started net (`./dex up`): the verdict judges the dex's whole order
 event log. Everything lands in DIR (default ~/.cache/jamswap/soak/<net>-<UTC time>):
-poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl, verdict.txt,
+poll.txt, chain.jsonl, parity.txt, parity.json, order_events.jsonl, dex.log, loadgen.log, verdict.txt,
 verdict.json, loadgen.txt, soak.log, and DONE (written last: each step's result). Exit 0
 iff the poll, the parity probe, the soak verdict and the offered load all pass.
 """
@@ -194,6 +194,10 @@ def main(argv=None):
     s.dc("cp", "netwatch:" + parity_tmp, s.path("parity.json"), timeout=60, check=False)
 
     s.dc("cp", "dex:/shared/order_events.jsonl", s.path("order_events.jsonl"), timeout=60)
+    # the dex's and the load generator's own logs: an op the dex refused says why only
+    # there ("op buy failed: ..."), and a net torn down afterwards takes them with it
+    for svc in ("dex", "loadgen"):
+        s.run_to("%s.log" % svc, s.compose + ["logs", "--no-color", svc], timeout=120)
     verdict = [sys.executable, os.path.join(REPO, "offchain", "soak_verdict.py"),
                s.path("order_events.jsonl"), "--target", a.target, "--chain", s.path("chain.jsonl")]
     if os.path.exists(s.path("parity.json")):
