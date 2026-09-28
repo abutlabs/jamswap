@@ -16,7 +16,7 @@ the signature preflight when installed.
   CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 CHAIN_SPEC=spec.json \
       python3 offchain/server.py      # no SERVICE_ID: deploy (or reuse) it, then set it up
 """
-import hashlib, json, os, secrets, struct, subprocess, threading, time
+import hashlib, json, os, re, secrets, struct, subprocess, threading, time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import chain                       # the one client-neutral interface to the chain
@@ -234,6 +234,12 @@ def order_bytes(a, oid, side, p, q): return struct.pack("<IIBII", a, oid, side, 
 TAG_NAMES = {0: "match", 1: "deposit", 2: "commit", 3: "reveal", 4: "cancel", 5: "withdraw",
              6: "list", 7: "register", 8: "treasury", 9: "enc_setup", 10: "enc_commit",
              11: "enc_round", 12: "round", 13: "carry_commit", 14: "carry_enc_commit"}
+def refusal_reason(e):
+    """A refusal's reason as a bounded label: the message's first clause, numbers masked
+    ("open-order limit reached (N per market)"), so each reason is one series."""
+    text = re.split(r" — |: |; ", str(e), maxsplit=1)[0]
+    return re.sub(r"\d[\d.,]*", "N", text)[:60] or "unknown"
+
 def submit(payload, check=None, detail=""):
     # Relay one work-item payload to the chain (CHAIN.submit). Every relay is recorded in
     # the pending ledger (by its tag byte); ops whose caller supplies a settle predicate are
@@ -255,7 +261,12 @@ def submit(payload, check=None, detail=""):
         except Exception:
             pass
     try:
-        return CHAIN.submit(payload)
+        receipt = CHAIN.submit(payload)
+        if isinstance(receipt, dict):
+            for k in ("build_seconds", "send_seconds"):
+                if k in receipt:
+                    metrics.observe("jamswap_submit_" + k, {"op": op}, receipt[k])
+        return receipt
     except ChainBusy as e:
         metrics.refused(tid)           # it can never settle; the caller backs off
         raise ChainBusy(f"{op}: {e}") from None
@@ -1245,6 +1256,8 @@ def _finalize_round(m, fr):
         # the prune landed with the round: the expired resting order is off the book now
         order_expiry.pop((m, a, oid), None)
         order_telemetry.terminal(m, a, oid, "expired")
+    metrics.observe("jamswap_round_stage_seconds", {"market": str(m), "stage": "settled"},
+                    time.time() - fr["t"])
     print(f"round m{m}: settled on-chain — receipted {len(sealed) + len(public)} order(s), carried {len(carried)}")
 
 def _round_dead(m, fr):
@@ -1270,6 +1283,8 @@ def _abandon(m, fr, why, now):
     newer ones they would be overtaken and stranded by the rising seq floor. Orders a
     landed released round claimed stay out (they settled there). The round is kept as a
     zombie so a late landing is still finalized (see _resolve_zombies)."""
+    metrics.observe("jamswap_round_stage_seconds", {"market": str(m), "stage": "abandoned"},
+                    now - fr["t"])
     lost = fr.get("claimed") or {}
     orders = [o for o in fr["sealed"] + fr["public"] if _okey(o) not in lost]
     with _lock:
@@ -1401,6 +1416,8 @@ def _resolve_inflight(m, fr, now):
         fr.pop("dead_since", None)
         if fr.get("ok_since") is None:
             fr["ok_since"] = now                  # first sighting on-chain: start the hold
+            metrics.observe("jamswap_round_stage_seconds", {"market": str(m), "stage": "landed"},
+                            now - fr["t"])
         elif _confirmed(fr, now) and not _rival_landed(m, fr):
             _inflight.pop(m, None)                # survived the hold window: durable
             try: _finalize_round(m, fr)
@@ -2447,6 +2464,7 @@ class H(BaseHTTPRequestHandler):
                 # a legitimate refusal from a server that actually broke (500).
                 self._send(400, json.dumps({"error": str(e)}).encode())
                 metrics.inc("jamswap_api_requests_total", {"route": path, "code": 400})
+                metrics.inc("jamswap_api_refused_total", {"route": path, "reason": refusal_reason(e)})
             except Exception as e:
                 self._send(500, json.dumps({"error": str(e)}).encode())
                 metrics.inc("jamswap_api_requests_total", {"route": path, "code": 500})

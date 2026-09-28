@@ -538,6 +538,7 @@ class Jip2Chain(Chain):
         order (at most max_items)."""
         self._sid()                            # configuration errors stay ChainError
         payloads = list(payloads)
+        t0 = time.monotonic()
         try:
             package, ctx = self.work_package_items(payloads)
         except (ChainBusy, ChainUnsupported):
@@ -545,6 +546,7 @@ class Jip2Chain(Chain):
         except ChainError as e:
             raise ChainBusy(f"not sent: {e}") from e
         package_hash = workpackage.blake2b256(package)
+        t1 = time.monotonic()             # the context's reads done: the anchor is chosen
         refused = []
         for k in range(len(self.cores)):
             core = self.cores[(self._next_core + k) % len(self.cores)]
@@ -559,6 +561,10 @@ class Jip2Chain(Chain):
                 raise ChainError(f"jip2 submitWorkPackage: outcome unknown: {e}") from e
             self._next_core = (self._next_core + k + 1) % len(self.cores)
             return {"accepted": True, "package_hash": package_hash.hex(), "core": core,
+                    # seconds spent building the package (its reads) and sending it: the
+                    # anchor's window runs from the build, so both count against it
+                    "build_seconds": round(t1 - t0, 3),
+                    "send_seconds": round(time.monotonic() - t1, 3),
                     "anchor": ctx.anchor.hex(), "anchor_slot": ctx.anchor_slot,
                     "lookup_anchor": ctx.lookup_anchor.hex(),
                     "lookup_anchor_slot": ctx.lookup_anchor_slot, "refused": refused}

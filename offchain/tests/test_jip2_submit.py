@@ -125,6 +125,9 @@ class Submission(unittest.TestCase):
             PARENT, 999, ROOTS[PARENT], BEEFY[PARENT], GRANDPARENT, 998, ROOTS[GRANDPARENT], ()))
         # one item: the service's code hash as the chain holds it, the largest gas limits
         self.assertEqual(p.items, (wp.WorkItem(SID, CODE_HASH, b"\x07register-me", G_R - 1, G_A - 1),))
+        # the timings are measured, not fixed: present and non-negative
+        for k in ("build_seconds", "send_seconds"):
+            self.assertGreaterEqual(receipt.pop(k), 0)
         self.assertEqual(receipt, {
             "accepted": True, "package_hash": H(package).hex(), "core": 0,
             "anchor": PARENT.hex(), "anchor_slot": 999, "lookup_anchor": GRANDPARENT.hex(),
