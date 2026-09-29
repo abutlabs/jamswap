@@ -118,6 +118,7 @@ whether the DEX runs there: [`docs/NETS.md`](docs/NETS.md).
 - **[lasair](https://github.com/abutlabs/lasair)** — an independent OCaml JAM client;
   runs multi-node testnets, finalizes under the draft GRANDPA spec, interoperates
   with PolkaJam on one chain.
-- **[zk-jam-service](https://github.com/abutlabs/zk-jam-service)** — anonymous,
-  sybil-resistant voting; a real zero-knowledge proof verified in Refine.
 - **[jamswap](https://github.com/abutlabs/jamswap)** — this: the order-book DEX.
+- **[observability](https://github.com/abutlabs/observability)** — metrics, logs and
+  dashboards for JAM networks with any mix of clients; its course,
+  [Learning Observability](https://abutlabs.github.io/observability/), teaches it.
