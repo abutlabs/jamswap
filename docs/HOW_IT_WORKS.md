@@ -4,27 +4,32 @@
 > what Jamswap is, how it works, how it hides your orders, what it costs, and where it
 > runs.
 
-## What is it? (and why it couldn't exist before)
+## What is it? (and where it sits among on-chain order books)
 
-Almost every exchange you can name is one of two kinds:
+Most decentralized exchanges don't run an order book. They use a **pricing formula** (an
+automated market maker, AMM), because matching orders on a chain is expensive: on most
+chains every validator re-executes every transaction.
 
-- **A centralized exchange (CEX)** — Coinbase, Binance. Fast, real order books, but you
-  hand them your money and trust them not to lose or misuse it.
-- **A decentralized exchange (DEX)** — Uniswap and friends. You keep your funds, but
-  they *don't* use a real order book. They use a **pricing formula** (an "AMM") instead.
+Some exchanges do run real order books on-chain, and how they pay for it is the useful
+part:
 
-Why does no DEX use a real order book? **Because running a matching engine on a
-blockchain was too expensive.** Matching thousands of buy and sell orders is heavy
-computation, and blockchains charge for every step — so DEXs settled for the cheap
-formula-based approximation, which costs traders in worse prices and "slippage".
+- **A chain of their own.** Hyperliquid built a layer-1 blockchain for trading: the order
+  book is part of its protocol, every validator runs the matching engine, and blocks come
+  in well under a second. dYdX (v4) is an app-chain whose validators match orders held in
+  memory. Injective, and years earlier BitShares and Stellar, built order books into their
+  chains too.
+- **A fast general-purpose chain.** Serum (later OpenBook) and Phoenix run order books as
+  programs on Solana, within its per-transaction compute limits.
 
-**JAM changes the economics.** JAM has a special phase called **Refine** designed for
-heavy, parallel, deterministic computation. Crucially, it is *not* re-run by every
-validator — a small group assigned to the core computes each batch, randomly selected
-auditors re-execute it, and a provably wrong result costs the signers their stake.
-That's why it's cheap, and it's exactly the shape of a matching engine. So Jamswap runs a **genuine order-book
-matching engine** on-chain — CEX-grade matching, DEX-grade self-custody. It's the
-cleanest demonstration of something **only JAM can do**.
+**What JAM changes.** JAM has a phase called **Refine** for heavy, parallel,
+deterministic computation that is *not* re-run by every validator: the few validators
+assigned to a core compute each batch, randomly selected auditors re-execute it, and a
+provably wrong result costs the signers their stake. So Jamswap runs a genuine order-book
+matching engine as an **ordinary JAM service**: no chain of its own, no validator set to
+recruit and secure, the same security as every other service on JAM, and the heavy
+per-batch work (matching, signature checks, decrypting sealed orders) paid by one core's
+validators and its auditors rather than by the whole network. And it clears in **batch
+auctions** rather than a continuous book, a different market design (below).
 
 ---
 
@@ -152,11 +157,11 @@ byte-identical on both clients at the finalized head. Which net is which:
 
 ---
 
-## Why it's a JAM flagship
+## Why it matters for JAM
 
-- It's the **cleanest demonstration of what JAM uniquely enables**: real on-chain order
-  books exist only because JAM removes the compute limit that forced every other DEX
-  into formula-based pricing.
+- It shows what **Refine** is for: a real order-book matching engine running as an
+  ordinary service on JAM's shared security, without an app-chain of its own (the route
+  Hyperliquid and dYdX took).
 - The **batch auction is MEV-resistant by construction** — no intra-round speed race —
   and orders can be **sealed until the batch closes**.
 - It is **client-neutral**: the same service runs on lasair and on stock PolkaJam, and

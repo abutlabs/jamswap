@@ -7,7 +7,7 @@
 Jamswap is a decentralized exchange built on [JAM](https://jam.web3.foundation). It
 trades like a centralized exchange — a live order book and a genuine matching engine —
 with no company in the middle. It is an ordinary JAM service, not tied to one client:
-the same service runs on lasair and on stock PolkaJam. Why that's new, and how it works:
+the same service runs on lasair and on stock PolkaJam. How it works, and how it compares with other on-chain order books:
 [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md).
 
 **Build JAM together.** jamswap runs on nets of any mix of clients. Bring your client

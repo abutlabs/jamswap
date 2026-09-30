@@ -13,11 +13,12 @@
 
 ## 0. One-paragraph thesis
 
-Every on-chain exchange uses an AMM (a closed-form pricing formula) instead of a
-real order book **because no blockchain could run a matching engine** — matching
-thousands of orders is a real algorithm, and on-chain compute couldn't afford it.
-AMMs are a *workaround for a compute limit*, and they pay for it with impermanent
-loss, capital inefficiency, and being MEV piñatas. JAM removes the limit: its
+Most on-chain exchanges use an AMM (a closed-form pricing formula) instead of a
+real order book, because matching thousands of orders is a real algorithm and on
+most chains every validator pays for it. The exchanges that do run on-chain order
+books paid for them with a chain of their own (Hyperliquid, dYdX v4, Injective) or
+by living inside a fast chain's compute limits (Serum/OpenBook, Phoenix on Solana).
+JAM offers a third way: its
 **Refine** phase is heavy, parallel, deterministic, *audited* (trustless)
 compute. So we can run an actual **matching engine** trustlessly and settle fills
 on-chain — a CEX-grade order book with DEX-grade self-custody. We clear as
@@ -36,9 +37,9 @@ where matching runs in JAM's Refine and settlement in Accumulate. Orders are
 encrypted until the batch seals, so nobody — not even the node running the match —
 can front-run within a round.
 
-**The one-sentence pitch:** *the first exchange with a CEX's matching engine and a
-DEX's custody, because JAM is the first chain that can actually run the matching
-engine.*
+**The one-sentence pitch:** *an exchange with a CEX's matching engine and a DEX's
+custody, running as an ordinary JAM service: no chain of its own, matching audited in
+Refine, batch auctions instead of a latency race.*
 
 **Differentiation map:**
 
@@ -498,9 +499,9 @@ calendar promise.
 
 ## 9. Why this is worth doing (the honest version)
 
-- It's the **cleanest demonstration of what JAM uniquely enables** — point at AMMs,
-  say "those exist only because of the limit JAM removes," and the whole value prop
-  is legible in one sentence.
+- It is a **clear demonstration of what Refine is for**: an order book that other
+  projects needed a chain of their own to run (Hyperliquid, dYdX), running as one
+  service among many on shared security.
 - It **dogfoods lasair** harder than any fuzzer can — a real service surfaces real
   client bugs and real perf needs.
 - Owning the client is a rare, genuine edge — in knowledge, measurement, and the
