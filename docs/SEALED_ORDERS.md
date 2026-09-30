@@ -106,7 +106,8 @@ steal or alter).
 - **The trust:** you trust the committee to be **live** (an honest majority helps
   decrypt). You do **not** trust them for correctness — the proofs force honest
   decryption. The committee uses **fresh keys**, never validator consensus keys (a JAM
-  service can't hold a secret — see [`LASAIR_INTERNALS.md`](LASAIR_INTERNALS.md)), and
+  service can't hold a secret: refine's inputs are all chain-public, GP 0.8.0's refine
+  invocation), and
   runs **off-protocol** as a sidecar.
 - **What it still leaks:** once decrypted at clearing, the order is public — same as
   commit–reveal. It hides the order *until* the round it clears in, not *forever*.

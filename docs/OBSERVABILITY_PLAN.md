@@ -17,7 +17,7 @@ was unusable. Diagnosis:
   and settled — Alice's pubkey got handle 2 a few minutes later. The chain was
   simply in the launch warm-up (AURA→ticket transition + DEX bootstrap items
   contending for the C=2 cores), where settlement latency spikes; the doc's
-  steady-state caveat in `MIXED_CHAIN_DEX_SETTLEMENT.md` describes exactly this.
+  known steady-state caveat of mixed-chain settlement describes exactly this.
 - **The real gap is visibility.** The UI polls the handle once and gives up
   with a toast; the operator has no way to see "your register is queued on 3
   nodes, guaranteed at slot S, waiting for an assurance". Nothing measures

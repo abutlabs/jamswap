@@ -74,8 +74,7 @@ wrong, fix the *oracle* and say so; if the system is wrong, fix the *system*.
   unassured"): the guarantee→assure→accumulate dance completes only ~half the time
   under sustained load, and the dex round-gate amplifies each miss. When the fuzzer's
   LIVENESS wall is this and not a dex bug, the fix is in
-  `submodules/lasair/bin/lasair_client.ml` (the `aext` assurance-inclusion path, ~1082)
-  and the U=5 window — assure every pending report on every authored block across all
+  lasair's assurance-inclusion path and the U=5 window — assure every pending report on every authored block across all
   six guarantors. Write a reproducing lasair unit test *before* touching that path;
   availability code is where a plausible wrong edit silently corrupts the chain.
 - **Never leave the tree red silently.** If you must stop mid-fix, say exactly where

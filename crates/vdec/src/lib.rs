@@ -3,7 +3,7 @@
 //! Verifiable threshold decryption for JAM services.
 //!
 //! A JAM service can never hold a secret (refine is a pure, publicly re-executed
-//! function — see jamswap/docs/LASAIR_INTERNALS.md Q5). So confidential orders are
+//! function of chain-public inputs: GP 0.8.0, the refine invocation). So confidential orders are
 //! encrypted to an OFF-protocol committee key, and at batch close the committee
 //! decrypts and hands refine a *proof* that it decrypted correctly. refine verifies
 //! the proof and derives the plaintext ITSELF — it never sees a key, and a malicious
