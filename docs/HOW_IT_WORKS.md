@@ -21,15 +21,34 @@ part:
 - **A fast general-purpose chain.** Serum (later OpenBook) and Phoenix run order books as
   programs on Solana, within its per-transaction compute limits.
 
-**What JAM changes.** JAM has a phase called **Refine** for heavy, parallel,
-deterministic computation that is *not* re-run by every validator: the few validators
-assigned to a core compute each batch, randomly selected auditors re-execute it, and a
-provably wrong result costs the signers their stake. So Jamswap runs a genuine order-book
-matching engine as an **ordinary JAM service**: no chain of its own, no validator set to
-recruit and secure, the same security as every other service on JAM, and the heavy
-per-batch work (matching, signature checks, decrypting sealed orders) paid by one core's
-validators and its auditors rather than by the whole network. And it clears in **batch
-auctions** rather than a continuous book, a different market design (below).
+**What JAM changes.** Those exchanges use *replicated execution*: every validator runs
+the matching engine on every order. That works for matching alone, which is cheap per
+order. JAM splits the work in two. **Refine** (in-core) is heavy, stateless computation run
+by the few validators assigned to a core, re-executed by randomly selected auditors, with a
+provably wrong result costing the signers their stake; so it carries the security of the
+whole validator set while only a few execute it. **Accumulate** (on-chain) is the small,
+stateful part every validator runs. The model is Polkadot's parachain validation,
+generalised: any service can use cores, not only a whole parachain.
+
+That matters for an exchange when the per-trade work is **verifiable and heavy**, which is
+what jamswap does beyond matching:
+
+- **Signed orders:** Refine checks every public order's ed25519 signature, about 5.29M gas each
+  under GP 0.8.0, so one core clears about 945 public orders per 6-second batch
+  ([`THROUGHPUT.md`](THROUGHPUT.md)), and more markets use more cores.
+- **Sealed orders:** in encrypt-until-batch mode (opt-in; the committee is simulated
+  today) Refine verifies a proof that each order was decrypted correctly and derives the
+  plaintext itself ([`SEALED_ORDERS.md`](SEALED_ORDERS.md)).
+- **Zero-knowledge batches:** a research spike settles a whole batch with one proof of
+  about 260M gas, flat in the number of orders; not yet wired in.
+
+A chain that replicates its order book pays for all of that on every validator. On JAM,
+one core's validators and its auditors pay for it, and jamswap is one service among many,
+not a chain of its own. The price is that Refine is stateless: it cannot read the live
+book, so each round carries the resting book in byte for byte, and Accumulate, which can
+read state, rejects the round unless the carried book's hash matches the one on-chain.
+And jamswap clears in **batch auctions** rather than a continuous book, a different
+market design (below).
 
 ---
 
@@ -159,9 +178,10 @@ byte-identical on both clients at the finalized head. Which net is which:
 
 ## Why it matters for JAM
 
-- It shows what **Refine** is for: a real order-book matching engine running as an
-  ordinary service on JAM's shared security, without an app-chain of its own (the route
-  Hyperliquid and dYdX took).
+- It shows what **Refine** is for: verifiable work on every trade (signed, sealed, and
+  eventually proven in zero knowledge) that a replicated order-book chain would pay for on
+  every validator, done by one core and its auditors, in a service among many rather than
+  an app-chain of its own (the route Hyperliquid and dYdX took).
 - The **batch auction is MEV-resistant by construction** — no intra-round speed race —
   and orders can be **sealed until the batch closes**.
 - It is **client-neutral**: the same service runs on lasair and on stock PolkaJam, and

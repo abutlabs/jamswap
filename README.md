@@ -7,7 +7,15 @@
 Jamswap is a decentralized exchange built on [JAM](https://jam.web3.foundation). It
 trades like a centralized exchange — a live order book and a genuine matching engine —
 with no company in the middle. It is an ordinary JAM service, not tied to one client:
-the same service runs on lasair and on stock PolkaJam. How it works, and how it compares with other on-chain order books:
+the same service runs on lasair and on stock PolkaJam.
+
+Other exchanges match orders on-chain too (Hyperliquid and dYdX each run a chain of their
+own for it). What JAM adds is room for **verifiable work on every trade**: jamswap checks
+every public order's signature in Refine, can decrypt sealed orders there with proofs of correct
+decryption, and could settle a batch with one zero-knowledge proof. A chain that
+replicates its order book pays for that work on every validator; on JAM one core's
+validators and its auditors pay for it, and jamswap is one service among many rather than
+a chain of its own. How it works, and how it compares with other on-chain order books:
 [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md).
 
 **Build JAM together.** jamswap runs on nets of any mix of clients. Bring your client

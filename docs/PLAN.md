@@ -37,9 +37,10 @@ where matching runs in JAM's Refine and settlement in Accumulate. Orders are
 encrypted until the batch seals, so nobody — not even the node running the match —
 can front-run within a round.
 
-**The one-sentence pitch:** *an exchange with a CEX's matching engine and a DEX's
-custody, running as an ordinary JAM service: no chain of its own, matching audited in
-Refine, batch auctions instead of a latency race.*
+**The one-sentence pitch:** *jamswap does verifiable work on every trade (signed,
+sealed, eventually proven in zero knowledge) that a replicated order-book chain would
+have to pay for on every validator, and it does it as one JAM service among many, not a
+chain of its own.*
 
 **Differentiation map:**
 
