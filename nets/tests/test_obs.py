@@ -47,8 +47,8 @@ class Labels(unittest.TestCase):
         # PolkaJam exports no metrics: its own JIP-2 RPC, and lasair's through its reader
         jip2 = {s: (v["jip2"], v.get("jip2.node")) for s, v in lb.items() if v.get("jip2")}
         self.assertEqual(jip2, {"pj3": ("42603", None), "pj4": ("42604", None), "pj5": ("42605", None),
-                                "reader": ("19990", "lm0"), "reader1": ("19990", "lm1"),
-                                "reader2": ("19990", "lm2")})
+                                "reader": ("19800", "lm0"), "reader1": ("19800", "lm1"),
+                                "reader2": ("19800", "lm2")})
         self.assertEqual(lb["pj3"]["client"], "polkajam")
 
     def test_pj6_gateway_node_is_polled(self):

@@ -35,7 +35,7 @@ services:
       target: "with-lasair"
       args:
         PJ_RELEASE: "${PJ_RELEASE:-nightly-2026-09-22}"
-        MESH_IMAGE: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+        MESH_IMAGE: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     image: "jamswap-polkajam:${PJ_RELEASE:-nightly-2026-09-22}-lasair"
     restart: "no"
     volumes:
@@ -61,7 +61,7 @@ services:
       org.abutlabs.obs.client: "jamswap"
       org.abutlabs.obs.logs: "true"
   lm0:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     entrypoint:
       - "bash"
       - "-c"
@@ -87,6 +87,7 @@ services:
       LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
       DATA_DIR: "${LASAIR_DATA_DIR:-}"
       GUARANTOR_OWN: "0,1,2"
+      LASAIR_TELEMETRY: "${OBS_JIP3:-}"
       SERVICE: "/work/jamswap-service.jam"
       SERVICE_ID: "100"
     volumes:
@@ -103,7 +104,7 @@ services:
       org.abutlabs.obs.scrape: "true"
       org.abutlabs.obs.port: "9615"
   lm1:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     entrypoint:
       - "bash"
       - "-c"
@@ -129,6 +130,7 @@ services:
       LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
       DATA_DIR: "${LASAIR_DATA_DIR:-}"
       GUARANTOR_OWN: "0,1,2"
+      LASAIR_TELEMETRY: "${OBS_JIP3:-}"
       SERVICE: "/work/jamswap-service.jam"
       SERVICE_ID: "100"
     volumes:
@@ -145,7 +147,7 @@ services:
       org.abutlabs.obs.scrape: "true"
       org.abutlabs.obs.port: "9615"
   lm2:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     entrypoint:
       - "bash"
       - "-c"
@@ -171,6 +173,7 @@ services:
       LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
       DATA_DIR: "${LASAIR_DATA_DIR:-}"
       GUARANTOR_OWN: "0,1,2"
+      LASAIR_TELEMETRY: "${OBS_JIP3:-}"
       SERVICE: "/work/jamswap-service.jam"
       SERVICE_ID: "100"
     volumes:
@@ -274,7 +277,7 @@ services:
       org.abutlabs.obs.logs: "true"
       org.abutlabs.obs.jip2: "42605"
   builder:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"
@@ -304,7 +307,7 @@ services:
       org.abutlabs.obs.scrape: "true"
       org.abutlabs.obs.port: "19980"
   reader:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"
@@ -322,7 +325,7 @@ services:
       LASAIR_NODE_HOST: "10.231.6.10"
       LASAIR_NODE_PORT: "41600"
       LASAIR_CHAIN_SPEC: "/shared/spec.json"
-      LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_READER_HTTP_PORT: "19800"
       LASAIR_RPC_GUARANTORS: "10.231.6.10:41601,10.231.6.11:41602,10.231.6.12:41603"
     networks:
       net: {}
@@ -333,11 +336,11 @@ services:
       org.abutlabs.obs.job: "reader"
       org.abutlabs.obs.client: "lasair"
       org.abutlabs.obs.logs: "true"
-      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2: "19800"
       org.abutlabs.obs.jip2.node: "lm0"
       org.abutlabs.obs.jip2.client: "lasair"
   reader1:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"
@@ -355,7 +358,7 @@ services:
       LASAIR_NODE_HOST: "10.231.6.11"
       LASAIR_NODE_PORT: "41601"
       LASAIR_CHAIN_SPEC: "/shared/spec.json"
-      LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_READER_HTTP_PORT: "19800"
       LASAIR_RPC_GUARANTORS: "10.231.6.10:41601,10.231.6.11:41602,10.231.6.12:41603"
     networks:
       net: {}
@@ -366,11 +369,11 @@ services:
       org.abutlabs.obs.job: "reader"
       org.abutlabs.obs.client: "lasair"
       org.abutlabs.obs.logs: "true"
-      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2: "19800"
       org.abutlabs.obs.jip2.node: "lm1"
       org.abutlabs.obs.jip2.client: "lasair"
   reader2:
-    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}"
+    image: "${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}"
     depends_on:
       spec-init:
         condition: "service_completed_successfully"
@@ -388,7 +391,7 @@ services:
       LASAIR_NODE_HOST: "10.231.6.12"
       LASAIR_NODE_PORT: "41602"
       LASAIR_CHAIN_SPEC: "/shared/spec.json"
-      LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_READER_HTTP_PORT: "19800"
       LASAIR_RPC_GUARANTORS: "10.231.6.10:41601,10.231.6.11:41602,10.231.6.12:41603"
     networks:
       net: {}
@@ -399,7 +402,7 @@ services:
       org.abutlabs.obs.job: "reader"
       org.abutlabs.obs.client: "lasair"
       org.abutlabs.obs.logs: "true"
-      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2: "19800"
       org.abutlabs.obs.jip2.node: "lm2"
       org.abutlabs.obs.jip2.client: "lasair"
   dex:
@@ -410,12 +413,12 @@ services:
       - "reader"
     environment:
       CHAIN_BACKEND: "${LASAIR_DEX_BACKEND:-jip2}"
-      CHAIN_RPC: "ws://reader:19990"
+      CHAIN_RPC: "ws://reader:19800"
       CHAIN_SPEC: "/shared/spec.json"
       SERVICE_ID: "100"
       RESERVE_TOPUP: "1"
       BUILDER_URL: "http://builder:19980"
-      READER_URL: "http://reader:19990"
+      READER_URL: "http://reader:19800"
       NODE_METRICS_URL: "http://lm0:9615/metrics"
       ROUND_GATE_SECS: "180"
       MAX_ROUND_ORDERS: "48"
@@ -480,7 +483,7 @@ services:
       - "reader1"
       - "reader2"
     environment:
-      NETWATCH_NODES: "lm0,lasair,ws://reader:19990 lm1,lasair,ws://reader1:19990 lm2,lasair,ws://reader2:19990 pj3,polkajam,ws://pj3:42603 pj4,polkajam,ws://pj4:42604 pj5,polkajam,ws://pj5:42605"
+      NETWATCH_NODES: "lm0,lasair,ws://reader:19800 lm1,lasair,ws://reader1:19800 lm2,lasair,ws://reader2:19800 pj3,polkajam,ws://pj3:42603 pj4,polkajam,ws://pj4:42604 pj5,polkajam,ws://pj5:42605"
       NETWATCH_VALIDATORS: "lm0,lm1,lm2,pj3,pj4,pj5"
     ports:
       - "127.0.0.1:9306:9106"

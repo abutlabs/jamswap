@@ -36,14 +36,14 @@ x-polkajam: &polkajam
     context: .
     dockerfile: mixed/Dockerfile.polkajam
     args:
-      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+      MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
       PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-09-22}
   image: jamswap-pj-mixed:local
   restart: unless-stopped
   volumes: [ "shared:/shared" ]
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
   restart: unless-stopped
   labels:
     <<: *obs
@@ -195,7 +195,7 @@ services:
   #    builder endpoint (guaranteeing on its own slots). The ALPN embeds the
   #    per-genesis hash, so the bridges read it from /shared/genesis_hex.
   builder:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -220,7 +220,7 @@ services:
     restart: unless-stopped
 
   reader:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -233,7 +233,7 @@ services:
     environment:
       LASAIR_NODE_HOST: 172.28.0.13        # any lasair node serves CE-129
       LASAIR_NODE_PORT: "40063"
-      LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_READER_HTTP_PORT: "19800"
     networks: { mixnet: {} }
     restart: unless-stopped
 
@@ -251,7 +251,7 @@ services:
     environment:
       SERVICE_ID: "100"
       BUILDER_URL: http://builder:19980
-      READER_URL: http://reader:19990
+      READER_URL: http://reader:19800
       PORT: "8080"
       PYTHONUNBUFFERED: "1"
     volumes:

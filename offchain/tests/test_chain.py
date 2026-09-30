@@ -156,10 +156,10 @@ def fresh_server(backend):
 class Selection(unittest.TestCase):
     def test_default_is_jamnp_with_todays_env(self):
         c = chain.from_env({"SERVICE_ID": "100", "BUILDER_URL": "http://builder:19980/",
-                            "READER_URL": "http://reader:19990", "NODE_METRICS_URL": " http://lm0:9615/metrics "})
+                            "READER_URL": "http://reader:19800", "NODE_METRICS_URL": " http://lm0:9615/metrics "})
         self.assertIsInstance(c, chain.JamnpChain)
         self.assertEqual((c.service_id, c.builder_url, c.reader_url, c.metrics_url),
-                         (100, "http://builder:19980", "http://reader:19990", "http://lm0:9615/metrics"))
+                         (100, "http://builder:19980", "http://reader:19800", "http://lm0:9615/metrics"))
         self.assertTrue(c.submits)
 
     def test_jip2_with_default_and_explicit_rpc(self):

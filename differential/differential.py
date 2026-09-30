@@ -12,7 +12,7 @@ DEX's chain adapter (offchain/chain.py):
 
     # lasair lane — inside the lasair6 network, service seeded at genesis (SERVICE_ID);
     # the adapter's jamnp backend (CE-133 builder + CE-129 reader bridges)
-    BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 SERVICE_ID=100 \
+    BUILDER_URL=http://builder:19980 READER_URL=http://reader:19800 SERVICE_ID=100 \
         python3 differential.py lasair > lasair.json
 
     # pj lane — inside the pj image, against a fresh polkajam-testnet: deploy through the

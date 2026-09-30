@@ -206,12 +206,12 @@ class Netgen(unittest.TestCase):
         self.assertEqual(doc["dex"]["depends_on"], ["reader"])
         env = doc["dex"]["environment"]
         self.assertEqual((env["CHAIN_BACKEND"], env["CHAIN_RPC"], env["CHAIN_SPEC"]),
-                         ("${LASAIR_DEX_BACKEND:-jip2}", "ws://reader:19990", "/shared/spec.json"))
+                         ("${LASAIR_DEX_BACKEND:-jip2}", "ws://reader:19800", "/shared/spec.json"))
         self.assertEqual((env["SERVICE_ID"], env["RESERVE_TOPUP"]), ("100", "1"))
         self.assertEqual(doc["spec-init"]["environment"]["SERVICE"], "/work/jamswap-service.jam")
         # LASAIR_DEX_BACKEND=jamnp: lasair's HTTP bridges, still wired
         self.assertEqual((env["BUILDER_URL"], env["READER_URL"], env["NODE_METRICS_URL"]),
-                         ("http://builder:19980", "http://reader:19990", "http://lm0:9615/metrics"))
+                         ("http://builder:19980", "http://reader:19800", "http://lm0:9615/metrics"))
         b = doc["builder"]["environment"]
         self.assertEqual(b["LASAIR_GUARANTOR_HOST"], "10.231.6.10,10.231.6.11,10.231.6.12")
         self.assertEqual(b["LASAIR_GUARANTOR_PORT"], "41601,41602,41603")
@@ -227,8 +227,8 @@ class Netgen(unittest.TestCase):
         self.assertEqual(doc["loadgen"]["environment"]["DEX_URL"], "http://dex:8080")
         nw = doc["netwatch"]["environment"]
         self.assertEqual(nw["NETWATCH_NODES"].split(), [
-            "lm0,lasair,ws://reader:19990", "lm1,lasair,ws://reader1:19990",
-            "lm2,lasair,ws://reader2:19990", "pj3,polkajam,ws://pj3:42603",
+            "lm0,lasair,ws://reader:19800", "lm1,lasair,ws://reader1:19800",
+            "lm2,lasair,ws://reader2:19800", "pj3,polkajam,ws://pj3:42603",
             "pj4,polkajam,ws://pj4:42604", "pj5,polkajam,ws://pj5:42605"])
         self.assertEqual(nw["NETWATCH_VALIDATORS"], "lm0,lm1,lm2,pj3,pj4,pj5")
         self.assertEqual(doc["netwatch"]["depends_on"], ["reader", "reader1", "reader2"])
@@ -241,7 +241,7 @@ class Netgen(unittest.TestCase):
             doc = yaml.safe_load(f)["services"]
         env = doc["dex"]["environment"]
         self.assertEqual((env["CHAIN_BACKEND"], env["CHAIN_RPC"], env["SERVICE_ID"], env["RESERVE_TOPUP"]),
-                         ("${LASAIR_DEX_BACKEND:-jip2}", "ws://reader:19990", "100", "1"))
+                         ("${LASAIR_DEX_BACKEND:-jip2}", "ws://reader:19800", "100", "1"))
         self.assertEqual(doc["reader"]["environment"]["LASAIR_RPC_GUARANTORS"],
                          ",".join("172.29.0.%d:%d" % (10 + i, 40061 + i) for i in range(6)))
 

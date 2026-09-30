@@ -176,7 +176,10 @@ def svc_lasair(n, p, ctx):
            # finality leave memory, lasair#57/#49). Unset: memory only, as before
            "DATA_DIR": "${LASAIR_DATA_DIR:-}",
            # devnet mode only: sign guarantees as any lasair index of the layout
-           "GUARANTOR_OWN": ctx["lasair_set"]}
+           "GUARANTOR_OWN": ctx["lasair_set"],
+           # JIP-3 telemetry to the observability stack's receiver (lasair >= 2.1.3);
+           # empty without the stack, as for the PolkaJam nodes' TELEMETRY
+           "LASAIR_TELEMETRY": "${OBS_JIP3:-}"}
     if p.get("dex"):
         env.update(SERVICE="/work/jamswap-service.jam", SERVICE_ID="100")
     s["environment"] = env
@@ -251,7 +254,7 @@ def reader_services(ns):
 
 def watch_url(n, readers):
     """How netwatch reads node n: JIP-2 on its own RPC, or on its lasair-reader."""
-    return "ws://%s:19990" % readers[n["service"]] if n["service"] in readers else _jip2_url(n)
+    return "ws://%s:19800" % readers[n["service"]] if n["service"] in readers else _jip2_url(n)
 
 
 def _loadgen(dex_build, offchain):
@@ -295,7 +298,7 @@ def dex_services_reader(p, ns):
     for n in lm:
         out[readers[n["service"]]] = _bridge("lasair-reader", {
             "LASAIR_NODE_HOST": n["ip"], "LASAIR_NODE_PORT": str(n["port"]),
-            "LASAIR_CHAIN_SPEC": "/shared/spec.json", "LASAIR_READER_HTTP_PORT": "19990",
+            "LASAIR_CHAIN_SPEC": "/shared/spec.json", "LASAIR_READER_HTTP_PORT": "19800",
             "LASAIR_RPC_GUARANTORS": guarantors})
     reader = readers[first["service"]]
     out.update({
@@ -303,13 +306,13 @@ def dex_services_reader(p, ns):
             "build": {"context": CTX, "dockerfile": "offchain/Dockerfile"},
             "depends_on": [reader],
             "environment": {"CHAIN_BACKEND": "${LASAIR_DEX_BACKEND:-jip2}",
-                            "CHAIN_RPC": "ws://%s:19990" % reader,
+                            "CHAIN_RPC": "ws://%s:19800" % reader,
                             "CHAIN_SPEC": "/shared/spec.json", "SERVICE_ID": "100",
                             # the footprint is readable over JIP-2: keep the JAMKB reserve
                             "RESERVE_TOPUP": "1",
                             # LASAIR_DEX_BACKEND=jamnp: lasair's HTTP bridges
                             "BUILDER_URL": "http://builder:19980",
-                            "READER_URL": "http://%s:19990" % reader,
+                            "READER_URL": "http://%s:19800" % reader,
                             "NODE_METRICS_URL": "http://%s:9615/metrics" % first["service"],
                             # as on lasair6: a round the chain never included is released
                             # after 180 s; small rounds settle fast
@@ -427,7 +430,7 @@ def label_services(name, services, ns):
         if n:
             spec["labels"] = obs_labels(name, n["client"], jip2=n.get("rpc"))
         elif svc in readers:
-            spec["labels"] = obs_labels(name, "reader", jip2=19990, jip2_node=readers[svc])
+            spec["labels"] = obs_labels(name, "reader", jip2=19800, jip2_node=readers[svc])
         elif svc == "rpc":
             spec["labels"] = obs_labels(name, "polkajam", jip2=gateway(profile(name))["rpc"])
         elif svc in OBS_KINDS:

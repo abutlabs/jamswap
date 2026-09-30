@@ -62,7 +62,7 @@ A fresh service per case:
         python3 offchain/test_enc_round.py
 
     # lasair: the CE-133 builder and CE-129 reader bridges and the node's metrics
-    CHAIN_BACKEND=jamnp BUILDER_URL=http://127.0.0.1:19980 READER_URL=http://127.0.0.1:19990 \\
+    CHAIN_BACKEND=jamnp BUILDER_URL=http://127.0.0.1:19980 READER_URL=http://127.0.0.1:19800 \\
         NODE_METRICS_URL=http://127.0.0.1:9615/metrics SERVICE_ID=100 \\
         python3 offchain/test_enc_round.py
 

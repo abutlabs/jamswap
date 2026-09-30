@@ -68,7 +68,7 @@ CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 CHAIN_SPEC=dev-spec.json \
 #       --service-id 100 --metrics-port 9615 --spec-out spec.json
 # plus lasair_reader and jamnp_builder pointed at it (LASAIR_JAMNP_GENESIS_HEX = the
 # blake2b-256 of the spec's genesis_header)
-CHAIN_BACKEND=jamnp BUILDER_URL=http://127.0.0.1:19980 READER_URL=http://127.0.0.1:19990 \
+CHAIN_BACKEND=jamnp BUILDER_URL=http://127.0.0.1:19980 READER_URL=http://127.0.0.1:19800 \
     NODE_METRICS_URL=http://127.0.0.1:9615/metrics SERVICE_ID=100 python3 offchain/test_enc_round.py
 ```
 

@@ -182,8 +182,8 @@ class Nodes(unittest.TestCase):
         n = nw.parse_node("pj0, polkajam, ws://pj0:19800")
         self.assertEqual((n.name, n.client, n.url, n.reader, n.kind),
                          ("pj0", "polkajam", "ws://pj0:19800", None, "jip2"))
-        n = nw.parse_node("lm0,lasair,http://lm0:9615/metrics,http://reader:19990/")
-        self.assertEqual((n.kind, n.reader), ("metrics", "http://reader:19990"))
+        n = nw.parse_node("lm0,lasair,http://lm0:9615/metrics,http://reader:19800/")
+        self.assertEqual((n.kind, n.reader), ("metrics", "http://reader:19800"))
         for bad in ("pj0,ws://x", "a,b,ftp://x", ",c,ws://x", "a,b,ws://x,ws://y", "a,b,c,d,e"):
             with self.assertRaises(ValueError, msg=bad):
                 nw.parse_node(bad)
@@ -197,8 +197,8 @@ class Nodes(unittest.TestCase):
         n, = nw.nodes_from_env({"CHAIN_BACKEND": "jip2", "CHAIN_RPC": "ws://pj:19800"})
         self.assertEqual((n.url, n.kind, n.client), ("ws://pj:19800", "jip2", "jip2"))
         n, = nw.nodes_from_env({"NODE_METRICS_URL": "http://lm0:9615/metrics",
-                                "READER_URL": "http://reader:19990/"})
-        self.assertEqual((n.kind, n.client, n.reader), ("metrics", "lasair", "http://reader:19990"))
+                                "READER_URL": "http://reader:19800/"})
+        self.assertEqual((n.kind, n.client, n.reader), ("metrics", "lasair", "http://reader:19800"))
         self.assertEqual(nw.nodes_from_env({}), [])
 
     def test_validators(self):

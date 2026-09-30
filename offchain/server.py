@@ -9,7 +9,7 @@ Every chain access goes through `chain.py` (one client-neutral interface; the ba
 chosen by CHAIN_BACKEND, see there). Stdlib only (http.server, struct), plus PyNaCl for
 the signature preflight when installed.
 
-  SERVICE_ID=100 BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 \
+  SERVICE_ID=100 BUILDER_URL=http://builder:19980 READER_URL=http://reader:19800 \
       PORT=8080 python3 offchain/server.py                       # jamnp (default)
   SERVICE_ID=<id> CHAIN_BACKEND=jip2 CHAIN_RPC=ws://localhost:19800 CHAIN_SPEC=spec.json \
       python3 offchain/server.py                                 # JIP-2 node RPC

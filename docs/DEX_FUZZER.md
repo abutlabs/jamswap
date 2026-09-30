@@ -124,7 +124,7 @@ the first divergence. Progress persists, so a later run resumes deeper. **Verifi
 run** on a fresh net (`--max-pairs 8`):
 
 ```
-dex_fuzz: seed=1000 deepest_so_far=0 pairs  dex=http://localhost:8080  reader=http://reader:19990
+dex_fuzz: seed=1000 deepest_so_far=0 pairs  dex=http://localhost:8080  reader=http://reader:19800
 
 ── level 1: 1 pairs / 2 orders, expected volume 16 DOT ──
   placed 2/2 (refused 0: 0×400 cap, 0×500 fault, 0×other); waiting to clear...

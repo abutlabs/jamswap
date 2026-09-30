@@ -70,7 +70,7 @@ services:
       <<: *genesis
       LASAIR_NODE_HOST: chain
       LASAIR_NODE_PORT: "40010"
-      LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_READER_HTTP_PORT: "19800"
     depends_on: [chain]
     restart: unless-stopped
 
@@ -82,7 +82,7 @@ services:
     environment:
       SERVICE_ID: "100"               # the genesis-seeded id (matches chain --service-id)
       BUILDER_URL: http://builder:19980
-      READER_URL: http://reader:19990
+      READER_URL: http://reader:19800
       PORT: "8080"
       PYTHONUNBUFFERED: "1"
       # ENC_MODE: "1"                 # opt in to the rung-2 encrypt-until-batch committee

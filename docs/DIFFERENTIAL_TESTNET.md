@@ -35,7 +35,7 @@ lanes submit and read through the DEX's chain adapter (`offchain/chain.py`).
 
 ```sh
 # lasair lane, inside the lasair6 network
-BUILDER_URL=http://builder:19980 READER_URL=http://reader:19990 SERVICE_ID=100 \
+BUILDER_URL=http://builder:19980 READER_URL=http://reader:19800 SERVICE_ID=100 \
     python3 differential.py lasair > lasair.json
 # pj lane (the image's default command starts polkajam-testnet, then runs it)
 python3 differential.py pj > pj.json

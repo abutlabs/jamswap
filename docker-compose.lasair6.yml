@@ -35,7 +35,7 @@ x-obs: &obs
   org.abutlabs.obs.logs: "true"
 
 x-mesh: &mesh
-  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+  image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
   restart: unless-stopped
   labels:
     <<: *obs
@@ -68,6 +68,9 @@ x-mesh-env: &mesh-env
   SERVICE_ID: "100"
   GUARANTOR_OWN: "0,1,2,3,4,5"          # devnet mode only (LASAIR_DEV_ALL_KEYS=1)
   LASAIR_DEV_ALL_KEYS: "${LASAIR_DEV_ALL_KEYS:-0}"
+  # JIP-3 telemetry to the observability stack's receiver (lasair >= 2.1.3; `./dex up`
+  # sets OBS_JIP3 when the stack is up, empty otherwise): the Block life row
+  LASAIR_TELEMETRY: "${OBS_JIP3:-}"
   # LASAIR_DATA_DIR=/data: durable storage (lasair >= 2.1.1; blocks below finality leave
   # memory, lasair#57/#49). Unset: memory only
   DATA_DIR: "${LASAIR_DATA_DIR:-}"
@@ -100,7 +103,7 @@ services:
       context: .
       dockerfile: mixed/Dockerfile.polkajam
       args:
-        MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+        MESH_IMAGE: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
         PJ_RELEASE: ${PJ_RELEASE:-nightly-2026-09-22}
     image: jamswap-pj-mixed:local
     restart: "no"
@@ -158,7 +161,7 @@ services:
   # nonce once and refuses a copied carry-commit, jamswap#7/#5).
   # LASAIR_BUILDER_FANOUT=all restores the fan-out.
   builder:
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -188,7 +191,7 @@ services:
   # reader1..reader5 follow lm1..lm5, so netwatch reads every node by hash (./dex soak:
   # one head, finality, state parity).
   reader: &reader
-    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.2}
+    image: ${LASAIR_IMAGE:-ghcr.io/abutlabs/lasair:2.1.3}
     depends_on: { spec-init: { condition: service_completed_successfully } }
     volumes: [ "shared:/shared" ]
     entrypoint: ["bash", "-c"]
@@ -202,14 +205,14 @@ services:
       <<: *obs
       org.abutlabs.obs.job: reader
       org.abutlabs.obs.client: lasair
-      org.abutlabs.obs.jip2: "19990"
+      org.abutlabs.obs.jip2: "19800"
       org.abutlabs.obs.jip2.node: lm0
       org.abutlabs.obs.jip2.client: lasair
     environment: &reader-env
       LASAIR_NODE_HOST: 172.29.0.10
       LASAIR_NODE_PORT: "40060"
       LASAIR_CHAIN_SPEC: /shared/spec.json
-      LASAIR_READER_HTTP_PORT: "19990"
+      LASAIR_READER_HTTP_PORT: "19800"
       LASAIR_RPC_GUARANTORS: "172.29.0.10:40061,172.29.0.11:40062,172.29.0.12:40063,172.29.0.13:40064,172.29.0.14:40065,172.29.0.15:40066"
     networks: { lasnet: {} }
     restart: unless-stopped
@@ -248,9 +251,9 @@ services:
       org.abutlabs.obs.port: "9106"
     environment:
       NETWATCH_NODES: >-
-        lm0,lasair,ws://reader:19990 lm1,lasair,ws://reader1:19990
-        lm2,lasair,ws://reader2:19990 lm3,lasair,ws://reader3:19990
-        lm4,lasair,ws://reader4:19990 lm5,lasair,ws://reader5:19990
+        lm0,lasair,ws://reader:19800 lm1,lasair,ws://reader1:19800
+        lm2,lasair,ws://reader2:19800 lm3,lasair,ws://reader3:19800
+        lm4,lasair,ws://reader4:19800 lm5,lasair,ws://reader5:19800
       NETWATCH_VALIDATORS: lm0,lm1,lm2,lm3,lm4,lm5
     ports: ["127.0.0.1:9300:9106"]
     networks: { lasnet: {} }
@@ -273,7 +276,7 @@ services:
       # lasair's guarantors (CE-133). The service stays seeded into genesis at 100: a
       # lasair guarantor refines only the service it hosts.
       CHAIN_BACKEND: ${LASAIR_DEX_BACKEND:-jip2}
-      CHAIN_RPC: ws://reader:19990
+      CHAIN_RPC: ws://reader:19800
       CHAIN_SPEC: /shared/spec.json   # the authorizer in the cores' pools
       SERVICE_ID: "100"
       # the footprint is readable over JIP-2, so JAMKB backpressure is live: keep the
@@ -282,7 +285,7 @@ services:
       # LASAIR_DEX_BACKEND=jamnp (a lasair image older than 2.1.0): the builder and reader
       # bridges over HTTP, heads and finality from lm0's Prometheus gauges
       BUILDER_URL: http://builder:19980
-      READER_URL: http://reader:19990
+      READER_URL: http://reader:19800
       NODE_METRICS_URL: http://lm0:9615/metrics
       PORT: "8080"
       PYTHONUNBUFFERED: "1"
