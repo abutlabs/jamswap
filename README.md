@@ -18,7 +18,7 @@ validators and its auditors pay for it, and jamswap is one service among many ra
 a chain of its own. How it works, and how it compares with other on-chain order books:
 [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md).
 
-**Build JAM together.** jamswap runs on nets of any mix of clients. Bring your client
+**Build on a mixed testnet.** jamswap runs on nets of any mix of clients. Bring your client
 (check your node with `python3 offchain/jip2_check.py ws://<node>:19800`) or your service
 (built for GP 0.8.0 with `tools/jam080`, deployed at runtime over JIP-2):
 [`docs/COLLABORATE.md`](docs/COLLABORATE.md).
@@ -139,4 +139,6 @@ whether the DEX runs there: [`docs/NETS.md`](docs/NETS.md).
   [Learning Observability](https://abutlabs.github.io/jam-learning/observability/),
   teaches it on a `lasair6` net you start yourself.
 
-Both courses live on [jam-learning](https://abutlabs.github.io/jam-learning/).
+Both courses, and a step-by-step guide to
+[building a JAM service on a mixed testnet](https://abutlabs.github.io/jam-learning/mixed-testnet/),
+live on [jam-learning](https://abutlabs.github.io/jam-learning/).

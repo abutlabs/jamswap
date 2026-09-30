@@ -1,9 +1,11 @@
-# Build JAM together: bring your client, bring your service
+# Mixed testnets: bring your client, bring your service
 
 jamswap is an order-book DEX that runs as a JAM service, and a harness that runs it on test
 nets of any mix of JAM clients. It is meant to be shared: the more clients it runs on and
 the more services run beside it, the more every client team learns about interop before
-mainnet does. This page is how to join in.
+mainnet does. This page is how to join in; the step-by-step version, with every command
+and what it prints, is on jam-learning:
+[Build a mixed-testnet JAM service](https://abutlabs.github.io/jam-learning/mixed-testnet/).
 
 ## Where it runs today
 
