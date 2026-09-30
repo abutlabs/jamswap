@@ -142,12 +142,13 @@ bought per-byte (**JAMKB** — JAM's proposed token pricing validator RAM at 1 J
 Jamswap is one JAM service (`service/jamswap-service.jam`, GP 0.8.0), written to the
 Graypaper and not to any client, plus an off-chain builder. The builder reaches the
 chain through one interface ([`offchain/chain.py`](../offchain/chain.py)): the JIP-2
-node RPC that any client can serve, or lasair's JAMNP-S bridges, since lasair has no
-JIP-2 server yet. Today the DEX runs on two nets: six lasair validators (`lasair6`) and
-six stock PolkaJam validators with no lasair anywhere (`pj6`), where it deploys itself
-through the chain's Bootstrap service. Run on both clients, the same scenario leaves
-byte-identical service state ([`DIFFERENTIAL_TESTNET.md`](DIFFERENTIAL_TESTNET.md)).
-Which net is which: [`NETS.md`](NETS.md).
+node RPC, which lasair (through `lasair-reader`) and PolkaJam both serve. Today the DEX
+runs on three nets: six lasair validators (`lasair6`); six stock PolkaJam validators
+with no lasair anywhere (`pj6`), where it deploys itself through the chain's Bootstrap
+service; and three of each on one chain (`lasair-pj`), where the service state is
+byte-identical on both clients at the finalized head. Which net is which:
+[`NETS.md`](NETS.md). Bring your own client or service:
+[`COLLABORATE.md`](COLLABORATE.md).
 
 ---
 

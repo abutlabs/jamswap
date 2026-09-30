@@ -23,8 +23,9 @@ Backends (CHAIN_BACKEND):
                    them: BUILDER_URL (POST /submit -> a work-package over CE-133) and
                    READER_URL (GET /read -> a CE-129 state request at the head the bridge
                    follows). Heads and finality come from the node's Prometheus gauges at
-                   NODE_METRICS_URL, when set. The bridges and the gauge names are lasair's
-                   (lasair has no JIP-2 server yet); this backend retires once it does.
+                   NODE_METRICS_URL, when set. The bridges and the gauge names are lasair's,
+                   from before lasair served JIP-2 (lasair-reader, lasair >= 2.1). Every net
+                   now sets jip2; this stays the default only for setups that set nothing.
   jip2             JIP-2 node RPC (JSON-RPC over WebSocket) at CHAIN_RPC, default
                    ws://localhost:19800: bestBlock, finalizedBlock, serviceValue,
                    serviceData, parameters. Submission builds a GP 0.8.0 work-package

@@ -10,6 +10,11 @@ with no company in the middle. It is an ordinary JAM service, not tied to one cl
 the same service runs on lasair and on stock PolkaJam. Why that's new, and how it works:
 [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md).
 
+**Build JAM together.** jamswap runs on nets of any mix of clients. Bring your client
+(check your node with `python3 offchain/jip2_check.py ws://<node>:19800`) or your service
+(built for GP 0.8.0 with `tools/jam080`, deployed at runtime over JIP-2):
+[`docs/COLLABORATE.md`](docs/COLLABORATE.md).
+
 ![Jamswap-demo](./docs/demo.gif)
 
 ## Run it
@@ -54,7 +59,7 @@ The stack is its own repository, [abutlabs/observability](https://github.com/abu
 ([`monitor/README.md`](monitor/README.md) says how jamswap plugs in).
 
 Both nets are GP 0.8.0 and run on amd64 and arm64. lasair6 pulls the published
-`ghcr.io/abutlabs/lasair:2.1.2`; pj6 builds a PolkaJam image from the public release
+`ghcr.io/abutlabs/lasair:2.1.3`; pj6 builds a PolkaJam image from the public release
 (`nightly-2026-09-22`, sha256-pinned), fetched on your machine and never committed here.
 
 ### How the DEX reaches the chain
