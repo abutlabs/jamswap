@@ -132,7 +132,7 @@ mix of lasair, PolkaJam, JavaJAM and pbnjam, one command each.
 > **On PolkaJam and compliance.** PolkaJam is used **black-box**: its binary is fetched
 > from the public [`paritytech/polkajam-releases`](https://github.com/paritytech/polkajam-releases)
 > at image-build time on *your* machine and is never committed or redistributed. See
-> [`mixed/`](../mixed) and lasair's [`docs/MIXED_CLIENT_NETWORK.md`](https://github.com/abutlabs/lasair/blob/main/docs/MIXED_CLIENT_NETWORK.md).
+> [`mixed/`](../mixed) and lasair's `docs/MIXED_CLIENT_NETWORK.md` (lasair's source is not public yet).
 
 ## Options
 

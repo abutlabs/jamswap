@@ -18,7 +18,7 @@ the same service runs on lasair and on stock PolkaJam. Why that's new, and how i
 ./dex up           # six lasair validators + the DEX → http://localhost:8081 (~5 min first boot)
 ```
 
-That starts `lasair6`: six [lasair](https://github.com/abutlabs/lasair) validators
+That starts `lasair6`: six [lasair](https://abutlabs.github.io/jam-learning/lasair/) validators
 finalizing under GRANDPA (the draft JAM finality wire protocol), the DEX and the
 trading UI. To run the same DEX on six stock PolkaJam validators, with no lasair
 anywhere:
@@ -115,10 +115,15 @@ whether the DEX runs there: [`docs/NETS.md`](docs/NETS.md).
 
 ## The abutlabs JAM suite
 
-- **[lasair](https://github.com/abutlabs/lasair)** — an independent OCaml JAM client;
-  runs multi-node testnets, finalizes under the draft GRANDPA spec, interoperates
-  with PolkaJam on one chain.
+- **lasair** — an independent OCaml JAM client; runs multi-node testnets, finalizes
+  under the draft GRANDPA spec, interoperates with PolkaJam on one chain. Its images are
+  public (`ghcr.io/abutlabs/lasair`); its source is not yet, and its course,
+  [Learning Lasair](https://abutlabs.github.io/jam-learning/lasair/), quotes the code it
+  discusses.
 - **[jamswap](https://github.com/abutlabs/jamswap)** — this: the order-book DEX.
 - **[observability](https://github.com/abutlabs/observability)** — metrics, logs and
   dashboards for JAM networks with any mix of clients; its course,
-  [Learning Observability](https://abutlabs.github.io/observability/), teaches it.
+  [Learning Observability](https://abutlabs.github.io/jam-learning/observability/),
+  teaches it on a `lasair6` net you start yourself.
+
+Both courses live on [jam-learning](https://abutlabs.github.io/jam-learning/).
