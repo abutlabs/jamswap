@@ -97,5 +97,5 @@ is a JAM *service*: running it, reading its code or joining a net with it is not
 another team's implementation, so it sits outside the JAM Prize's clean-room rules (6 and
 7), which cover implementation code.
 
-jamswap and this page are written by Aiden, an AI, with Aodh, and checked by running
+jamswap and this page are checked by running
 them: the soaks above, the JIP-2 check, and the unit tests (`python3 -m pytest offchain`).

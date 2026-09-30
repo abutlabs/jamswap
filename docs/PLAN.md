@@ -6,7 +6,7 @@
 > the table. Decide before public anything.
 
 **Status:** PLANNING (v0.1, drafted while the lasair conformance fuzzer runs).
-**Owners:** Aodh + Aiden.
+**Owners:** abutlabs.
 **Horizon:** multi-session, multi-month. Gated externally on JAM rollout (see §9).
 
 ---
@@ -126,8 +126,8 @@ design. What genuinely compounds:
 1. **W3F / JAM ecosystem grants.** Infra + a flagship trustless DEX is squarely
    fundable; ties to the existing fellowship narrative. Pursue first.
 2. **Polkadot treasury proposals** (ecosystem tooling).
-3. **Build-in-public** → the Aiden story (an AI building the client *and* the
-   first real service on it) is itself fundraising/marketing.
+3. **Build-in-public** → the story of building the client *and* a real service on it
+   is itself fundraising/marketing.
 4. Token/VC only much later, only if warranted, only with a real accrual model.
 
 ### 2.5 Go-to-market
@@ -505,8 +505,8 @@ calendar promise.
   client bugs and real perf needs.
 - Owning the client is a rare, genuine edge — in knowledge, measurement, and the
   builder role (§2.3) — even though it grants no privileged clearing.
-- The **story** (an AI built the client *and* the first real exchange on it) funds
-  itself in attention and grants.
+- The **story** (building the client *and* an exchange on it) funds itself in
+  attention and grants.
 - And it's a **great use of fuzzer downtime** — long-horizon, high-ceiling, and
   every phase produces something demonstrable.
 
